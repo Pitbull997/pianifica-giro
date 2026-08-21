@@ -249,7 +249,8 @@ if st.session_state.pagina_attiva == "giro":
                     st.markdown(f"[🚘 **NAVIGA ORA**](https://www.google.com/maps/dir/?api=1&destination={dest})")
 
         else:
-            st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
+            # Rigenera posizioni univoche pulite (1, 2, 3...) per evitare conflitti nella SelectboxColumn
+            st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, tot_clienti + 1)]
             opzioni_posizioni = [str(i) for i in range(1, tot_clienti + 1)]
             
             edited_df = st.data_editor(
@@ -257,6 +258,8 @@ if st.session_state.pagina_attiva == "giro":
                 column_config={
                     "POSIZIONE": st.column_config.SelectboxColumn(
                         "Pos.",
+                        help="Seleziona la nuova posizione",
+                        width="small",
                         options=opzioni_posizioni,
                         required=True,
                     ),
@@ -266,7 +269,8 @@ if st.session_state.pagina_attiva == "giro":
                     "VIA": st.column_config.TextColumn("Via", disabled=True),
                     "ORA": st.column_config.TextColumn("Ora"),
                 },
-                num_rows="dynamic",
+                hide_index=True,
+                num_rows="fixed",
                 use_container_width=True,
                 key="giro_editor_switch"
             )
