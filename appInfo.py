@@ -216,7 +216,7 @@ if st.session_state.pagina_attiva == "giro":
         vista = st.radio("Modalità vista:", ["📱 Lista Schede (Mobile)", "✏️ Tabella Modificabile"], horizontal=True)
 
         if vista == "📱 Lista Schede (Mobile)":
-            st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
+            st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
             
             for idx, row in st.session_state.giro_corrente.iterrows():
                 # Scheda dati cliente
@@ -228,22 +228,22 @@ if st.session_state.pagina_attiva == "giro":
                 </div>
                 """, unsafe_allow_html=True)
 
-                # Controlli sottostanti: Selettore Blu Industriale Posizione e Navigatore
+                # Controlli sottostanti
                 col_c1, col_c2 = st.columns([1, 1])
                 with col_c1:
                     nuova_pos = st.selectbox(
                         "Sposta a pos:",
-                        options=list(range(1, tot_clienti + 1)),
+                        options=[str(i) for i in range(1, tot_clienti + 1)],
                         index=idx,
                         key=f"pos_{idx}_{row['CLIENTE']}"
                     )
-                    if nuova_pos - 1 != idx:
+                    if int(nuova_pos) - 1 != idx:
                         giro_dict = st.session_state.giro_corrente.to_dict('records')
                         cliente_spostato = giro_dict.pop(idx)
-                        giro_dict.insert(nuova_pos - 1, cliente_spostato)
+                        giro_dict.insert(int(nuova_pos) - 1, cliente_spostato)
                         
                         st.session_state.giro_corrente = pd.DataFrame(giro_dict)
-                        st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
+                        st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
                         st.rerun()
 
                 with col_c2:
@@ -252,19 +252,17 @@ if st.session_state.pagina_attiva == "giro":
                     st.markdown(f"[🚘 **NAVIGA ORA**](https://www.google.com/maps/dir/?api=1&destination={dest})")
 
         else:
-            # Assicuriamo la numerazione sequenziale pulita prima dell'editing
-            st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
+            # Allineiamo i dati come stringhe per la selectbox della tabella
+            st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
+            opzioni_posizioni = [str(i) for i in range(1, tot_clienti + 1)]
             
             edited_df = st.data_editor(
                 st.session_state.giro_corrente,
                 column_config={
-                    "POSIZIONE": st.column_config.NumberColumn(
-                        "Pos.", 
-                        min_value=1, 
-                        max_value=tot_clienti, 
-                        step=1, 
-                        format="%d",
-                        disabled=False
+                    "POSIZIONE": st.column_config.SelectColumn(
+                        "Pos.",
+                        options=opzioni_posizioni,
+                        required=True,
                     ),
                     "Q.ta": st.column_config.NumberColumn("Q.tà", min_value=0, step=1, format="%d"),
                     "CLIENTE": st.column_config.TextColumn("Cliente", disabled=True),
@@ -277,10 +275,11 @@ if st.session_state.pagina_attiva == "giro":
                 key="giro_editor_switch"
             )
             
-            # Se rileva un cambio d'ordine nella colonna POSIZIONE della tabella
             if not edited_df.equals(st.session_state.giro_corrente):
-                st.session_state.giro_corrente = edited_df.sort_values(by="POSIZIONE").reset_index(drop=True)
-                st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
+                # Convertiamo temporaneamente in intero per riordinare correttamente
+                edited_df['POSIZIONE_INT'] = edited_df['POSIZIONE'].astype(int)
+                st.session_state.giro_corrente = edited_df.sort_values(by="POSIZIONE_INT").drop(columns=['POSIZIONE_INT']).reset_index(drop=True)
+                st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
                 st.rerun()
 
         st.markdown("---")
