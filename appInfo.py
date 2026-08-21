@@ -11,11 +11,11 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# CSS Avanzato per UI Mobile, Dark Mode & Selettori Blu Industriale
+# CSS Avanzato - Forzatura Dark Mode & Fix UI Mobile (Android/iOS)
 st.markdown("""
 <style>
-    /* Sfondo generale scuro */
-    .stApp {
+    /* Force Dark Theme Generale */
+    .stApp, body, html {
         background-color: #121212 !important;
         color: #FFFFFF !important;
     }
@@ -32,27 +32,71 @@ st.markdown("""
         font-weight: bold !important;
     }
 
-    /* Pulsante Attivo (Azzurro/Blu Intenso) */
-    .btn-active button {
-        background-color: #2563EB !important;
-        color: #FFFFFF !important;
-        border: 2px solid #60A5FA !important;
-        border-radius: 12px !important;
-        height: 52px !important;
-        font-weight: bold !important;
-        font-size: 14px !important;
-        box-shadow: 0 4px 10px rgba(37, 99, 235, 0.4) !important;
-    }
-
-    /* Pulsante Non Attivo (Grigio Scuro ben visibile) */
-    .btn-inactive button {
+    /* FIX PULSANTI IN ALTO PER MOBILE */
+    div[data-testid="stButton"] > button {
         background-color: #1E293B !important;
-        color: #CBD5E1 !important;
+        color: #FFFFFF !important;
         border: 1px solid #475569 !important;
         border-radius: 12px !important;
         height: 52px !important;
         font-weight: bold !important;
-        font-size: 14px !important;
+        font-size: 15px !important;
+        width: 100% !important;
+        -webkit-appearance: none !important;
+    }
+
+    /* Pulsante Attivo (Azzurro/Blu Intenso) */
+    .btn-active div[data-testid="stButton"] > button {
+        background-color: #2563EB !important;
+        color: #FFFFFF !important;
+        border: 2px solid #60A5FA !important;
+        box-shadow: 0 4px 10px rgba(37, 99, 235, 0.4) !important;
+    }
+
+    /* Pulsante Non Attivo (Grigio Scuro) */
+    .btn-inactive div[data-testid="stButton"] > button {
+        background-color: #1E293B !important;
+        color: #94A3B8 !important;
+        border: 1px solid #334155 !important;
+    }
+
+    /* FIX MENU A TENDINA (SELECTBOX) SU MOBILE */
+    div[data-baseweb="select"] {
+        background-color: #1E293B !important;
+        border-radius: 8px !important;
+    }
+
+    div[data-baseweb="select"] > div {
+        background-color: #1E293B !important;
+        color: #FFFFFF !important;
+        border: 1px solid #3B82F6 !important;
+        border-radius: 8px !important;
+    }
+
+    div[data-baseweb="select"] div[role="button"],
+    div[data-baseweb="select"] span {
+        color: #FFFFFF !important;
+        font-weight: bold !important;
+    }
+
+    div[data-baseweb="select"] svg {
+        fill: #60A5FA !important;
+    }
+
+    ul[data-baseweb="menu"] {
+        background-color: #1E293B !important;
+        border: 1px solid #3B82F6 !important;
+    }
+
+    li[data-baseweb="option"] {
+        background-color: #1E293B !important;
+        color: #FFFFFF !important;
+    }
+
+    li[data-baseweb="option"]:hover,
+    li[data-baseweb="option"][aria-selected="true"] {
+        background-color: #2563EB !important;
+        color: #FFFFFF !important;
     }
 
     /* Card fermata stile Timeline */
@@ -66,71 +110,16 @@ st.markdown("""
         border-right: 1px solid #334155;
         border-bottom: 1px solid #334155;
     }
-    .stop-title {
-        font-size: 17px;
-        font-weight: bold;
-        color: #FFFFFF;
-        margin-bottom: 4px;
-    }
-    .stop-address {
-        font-size: 14px;
-        color: #E2E8F0;
-        margin-bottom: 6px;
-    }
-    .stop-meta {
-        font-size: 13px;
-        color: #60A5FA;
-        font-weight: 600;
-    }
-
-    /* SELETTORI BLU INDUSTRIALE (SELECTBOX / DROPDOWN) */
-    div[data-baseweb="select"] > div {
-        background-color: #1E3A8A !important;
-        color: #FFFFFF !important;
-        border: 2px solid #2563EB !important;
-        border-radius: 8px !important;
-        font-weight: bold !important;
-    }
-    
-    div[data-baseweb="select"] span {
-        color: #FFFFFF !important;
-    }
-
-    div[data-baseweb="select"] svg {
-        fill: #93C5FD !important;
-    }
-
-    div[data-baseweb="select"] > div:focus-within,
-    div[data-baseweb="select"] > div:active {
-        background-color: #1D4ED8 !important;
-        border-color: #60A5FA !important;
-        box-shadow: 0 0 8px rgba(96, 165, 250, 0.6) !important;
-    }
-
-    ul[data-baseweb="menu"] {
-        background-color: #1E3A8A !important;
-        border: 1px solid #3B82F6 !important;
-    }
-    
-    li[data-baseweb="option"] {
-        color: #FFFFFF !important;
-        background-color: #1E3A8A !important;
-        font-weight: 600 !important;
-    }
-    
-    li[data-baseweb="option"]:hover,
-    li[data-baseweb="option"][aria-selected="true"] {
-        background-color: #3B82F6 !important;
-        color: #FFFFFF !important;
-    }
+    .stop-title { font-size: 17px; font-weight: bold; color: #FFFFFF; margin-bottom: 4px; }
+    .stop-address { font-size: 14px; color: #E2E8F0; margin-bottom: 6px; }
+    .stop-meta { font-size: 13px; color: #60A5FA; font-weight: 600; }
 
     .stSelectbox label {
         color: #93C5FD !important;
-        font-size: 12px !important;
+        font-size: 13px !important;
         font-weight: bold !important;
     }
 
-    /* Modifica stile expander */
     div[data-testid="stExpander"] {
         background-color: #1E1E1E !important;
         border-radius: 10px !important;
@@ -218,11 +207,13 @@ if st.session_state.pagina_attiva == "giro":
         if vista == "📱 Lista Schede (Mobile)":
             st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
             
-            for idx, row in st.session_state.giro_corrente.iterrows():
-                # Scheda dati cliente
+            for idx in range(len(st.session_state.giro_corrente)):
+                row = st.session_state.giro_corrente.iloc[idx]
+                
+                # Card dati cliente
                 st.markdown(f"""
                 <div class="stop-card">
-                    <div class="stop-title">{int(idx + 1)}. {row['CLIENTE']}</div>
+                    <div class="stop-title">{idx + 1}. {row['CLIENTE']}</div>
                     <div class="stop-address">📍 {row['VIA']}, {row['COMUNE']}</div>
                     <div class="stop-meta">🕒 Ora: {row['ORA']} | 📦 Q.tà: {row['Q.ta']} pz</div>
                 </div>
@@ -233,17 +224,23 @@ if st.session_state.pagina_attiva == "giro":
                 with col_c1:
                     nuova_pos = st.selectbox(
                         "Sposta a pos:",
-                        options=[str(i) for i in range(1, tot_clienti + 1)],
+                        options=[i for i in range(1, tot_clienti + 1)],
                         index=idx,
-                        key=f"pos_{idx}_{row['CLIENTE']}"
+                        key=f"select_pos_{row['CLIENTE']}_{idx}"
                     )
-                    if int(nuova_pos) - 1 != idx:
-                        giro_dict = st.session_state.giro_corrente.to_dict('records')
-                        cliente_spostato = giro_dict.pop(idx)
-                        giro_dict.insert(int(nuova_pos) - 1, cliente_spostato)
+                    
+                    if nuova_pos - 1 != idx:
+                        df_temp = st.session_state.giro_corrente.copy()
+                        riga = df_temp.iloc[idx]
                         
-                        st.session_state.giro_corrente = pd.DataFrame(giro_dict)
-                        st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
+                        df_temp = df_temp.drop(df_temp.index[idx])
+                        top = df_temp.iloc[:nuova_pos - 1]
+                        bottom = df_temp.iloc[nuova_pos - 1:]
+                        
+                        df_nuovo = pd.concat([top, pd.DataFrame([riga]), bottom], ignore_index=True)
+                        df_nuovo['POSIZIONE'] = [str(i) for i in range(1, len(df_nuovo) + 1)]
+                        
+                        st.session_state.giro_corrente = df_nuovo
                         st.rerun()
 
                 with col_c2:
