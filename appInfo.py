@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import urllib.parse
+import os
 
 # Configurazione Pagina
 st.set_page_config(
@@ -40,9 +41,34 @@ def pulisci_orario(valore):
         return val_str[:5]
     return val_str
 
-# Inizializzazione Database Clienti permanente
-if 'db_clienti' not in st.session_state:
-    st.session_state.db_clienti = pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'])
+# Caricamento automatico da file 'database.xlsx' o 'database.csv' o 'database' presente su GitHub
+def carica_db_predefinito():
+    nomi_file_possibili = ["database.xlsx", "database.csv", "database"]
+    
+    for file_path in nomi_file_possibili:
+        if os.path.exists(file_path):
+            try:
+                if file_path.endswith('.csv'):
+                    df = pd.read_csv(file_path)
+                else:
+                    df = pd.read_excel(file_path)
+                
+                df.columns = df.columns.str.strip().str.upper()
+                df['POSIZIONE'] = pd.to_numeric(df['POSIZIONE'], errors='coerce').fillna(0).astype(int)
+                df['QTA_DEFAULT'] = pd.to_numeric(df['QTA_DEFAULT'], errors='coerce').fillna(0).astype(int)
+                df['CLIENTE'] = df['CLIENTE'].astype(str)
+                df['COMUNE'] = df['COMUNE'].astype(str)
+                df['VIA'] = df['VIA'].astype(str)
+                df['ORA'] = df['ORA'].apply(pulisci_orario)
+                return df.sort_values(by="POSIZIONE").reset_index(drop=True)
+            except Exception as e:
+                st.error(f"Errore nella lettura del file {file_path}: {e}")
+                
+    return pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'])
+
+# Inizializzazione Database Clienti permanente in sessione
+if 'db_clienti' not in st.session_state or st.session_state.db_clienti.empty:
+    st.session_state.db_clienti = carica_db_predefinito()
 
 # Inizializzazione Giro Corrente
 if 'giro_corrente' not in st.session_state:
@@ -169,34 +195,34 @@ if page == "Pianificazione Giro":
 elif page == "Database Clienti":
     st.markdown("<div class='main-header'>DATABASE CLIENTI ANAGRAFICA</div>", unsafe_allow_html=True)
 
-    st.subheader("📤 Carica Database da File (Excel / CSV)")
-    uploaded_file = st.file_uploader("Seleziona un file Excel (.xlsx) o CSV con l'anagrafica dei clienti", type=["xlsx", "csv"])
-    
-    if uploaded_file is not None:
-        try:
-            if uploaded_file.name.endswith('.csv'):
-                df_caricato = pd.read_csv(uploaded_file)
-            else:
-                df_caricato = pd.read_excel(uploaded_file)
-            
-            df_caricato.columns = df_caricato.columns.str.strip().str.upper()
-            colonne_richieste = {'POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'}
-            
-            if colonne_richieste.issubset(df_caricato.columns):
-                df_caricato['POSIZIONE'] = pd.to_numeric(df_caricato['POSIZIONE'], errors='coerce').fillna(0).astype(int)
-                df_caricato['QTA_DEFAULT'] = pd.to_numeric(df_caricato['QTA_DEFAULT'], errors='coerce').fillna(0).astype(int)
-                df_caricato['CLIENTE'] = df_caricato['CLIENTE'].astype(str)
-                df_caricato['COMUNE'] = df_caricato['COMUNE'].astype(str)
-                df_caricato['VIA'] = df_caricato['VIA'].astype(str)
-                df_caricato['ORA'] = df_caricato['ORA'].apply(pulisci_orario)
+    # SEZIONE CARICAMENTO/AGGIORNAMENTO FILE EXCEL
+    with st.expander("📤 Carica o Aggiorna File Excel Manualmente"):
+        uploaded_file = st.file_uploader("Seleziona un file Excel (.xlsx) o CSV con l'anagrafica dei clienti", type=["xlsx", "csv"])
+        
+        if uploaded_file is not None:
+            try:
+                if uploaded_file.name.endswith('.csv'):
+                    df_caricato = pd.read_csv(uploaded_file)
+                else:
+                    df_caricato = pd.read_excel(uploaded_file)
                 
-                # Salva in st.session_state per farlo durare per tutta la sessione
-                st.session_state.db_clienti = df_caricato.sort_values(by="POSIZIONE").reset_index(drop=True)
-                st.success(f"Database caricato con successo! Trovati {len(st.session_state.db_clienti)} clienti.")
-            else:
-                st.error(f"Mancano delle colonne! Il file deve contenere: {', '.join(colonne_richieste)}")
-        except Exception as e:
-            st.error(f"Errore nel caricamento del file: {e}")
+                df_caricato.columns = df_caricato.columns.str.strip().str.upper()
+                colonne_richieste = {'POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'}
+                
+                if colonne_richieste.issubset(df_caricato.columns):
+                    df_caricato['POSIZIONE'] = pd.to_numeric(df_caricato['POSIZIONE'], errors='coerce').fillna(0).astype(int)
+                    df_caricato['QTA_DEFAULT'] = pd.to_numeric(df_caricato['QTA_DEFAULT'], errors='coerce').fillna(0).astype(int)
+                    df_caricato['CLIENTE'] = df_caricato['CLIENTE'].astype(str)
+                    df_caricato['COMUNE'] = df_caricato['COMUNE'].astype(str)
+                    df_caricato['VIA'] = df_caricato['VIA'].astype(str)
+                    df_caricato['ORA'] = df_caricato['ORA'].apply(pulisci_orario)
+                    
+                    st.session_state.db_clienti = df_caricato.sort_values(by="POSIZIONE").reset_index(drop=True)
+                    st.success(f"Database aggiornato temporaneamente per questa sessione! Trovati {len(st.session_state.db_clienti)} clienti.")
+                else:
+                    st.error(f"Mancano delle colonne! Il file deve contenere: {', '.join(colonne_richieste)}")
+            except Exception as e:
+                st.error(f"Errore nel caricamento del file: {e}")
 
     st.markdown("---")
 
@@ -248,4 +274,4 @@ elif page == "Database Clienti":
             else:
                 st.warning("Seleziona almeno un cliente.")
     else:
-        st.info("Carica prima il tuo file Excel per vedere l'anagrafica completa dei clienti.")
+        st.warning("Nessun database clienti trovato. Assicurati che il file 'database' o 'database.xlsx' sia stato caricato su GitHub nella cartella principale.")
