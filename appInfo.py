@@ -154,7 +154,7 @@ def carica_db_predefinito():
             try:
                 df = pd.read_csv(file_path) if file_path.endswith('.csv') else pd.read_excel(file_path)
                 df.columns = df.columns.str.strip().str.upper()
-                df['POSIZIONE'] = pd.to_numeric(df['POSIZIONE'], errors='coerce').fillna(0).astype(float)
+                df['POSIZIONE'] = pd.to_numeric(df['POSIZIONE'], errors='coerce').fillna(0).astype(int)
                 df['QTA_DEFAULT'] = pd.to_numeric(df['QTA_DEFAULT'], errors='coerce').fillna(0).astype(int)
                 df['CLIENTE'] = df['CLIENTE'].astype(str)
                 df['COMUNE'] = df['COMUNE'].astype(str)
@@ -237,7 +237,6 @@ if st.session_state.pagina_attiva == "giro":
                         index=idx,
                         key=f"pos_{idx}_{row['CLIENTE']}"
                     )
-                    # Gestione sicura dello spostamento via lista Python
                     if nuova_pos - 1 != idx:
                         giro_dict = st.session_state.giro_corrente.to_dict('records')
                         cliente_spostato = giro_dict.pop(idx)
@@ -253,10 +252,20 @@ if st.session_state.pagina_attiva == "giro":
                     st.markdown(f"[🚘 **NAVIGA ORA**](https://www.google.com/maps/dir/?api=1&destination={dest})")
 
         else:
+            # Assicuriamo la numerazione sequenziale pulita prima dell'editing
+            st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
+            
             edited_df = st.data_editor(
                 st.session_state.giro_corrente,
                 column_config={
-                    "POSIZIONE": st.column_config.NumberColumn("Pos.", min_value=1, format="%d"),
+                    "POSIZIONE": st.column_config.NumberColumn(
+                        "Pos.", 
+                        min_value=1, 
+                        max_value=tot_clienti, 
+                        step=1, 
+                        format="%d",
+                        disabled=False
+                    ),
                     "Q.ta": st.column_config.NumberColumn("Q.tà", min_value=0, step=1, format="%d"),
                     "CLIENTE": st.column_config.TextColumn("Cliente", disabled=True),
                     "COMUNE": st.column_config.TextColumn("Comune", disabled=True),
@@ -267,7 +276,12 @@ if st.session_state.pagina_attiva == "giro":
                 use_container_width=True,
                 key="giro_editor_switch"
             )
-            st.session_state.giro_corrente = edited_df.sort_values(by="POSIZIONE").reset_index(drop=True)
+            
+            # Se rileva un cambio d'ordine nella colonna POSIZIONE della tabella
+            if not edited_df.equals(st.session_state.giro_corrente):
+                st.session_state.giro_corrente = edited_df.sort_values(by="POSIZIONE").reset_index(drop=True)
+                st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
+                st.rerun()
 
         st.markdown("---")
 
