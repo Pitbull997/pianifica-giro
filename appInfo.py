@@ -40,12 +40,9 @@ def pulisci_orario(valore):
         return val_str[:5]
     return val_str
 
-# Inizializzazione Database Clienti con campo POSIZIONE
+# Inizializzazione Database Clienti permanente
 if 'db_clienti' not in st.session_state:
-    st.session_state.db_clienti = pd.DataFrame([
-        {"POSIZIONE": 1, "ZONA": 100, "CLIENTE": "DOLCIARIA ACQUAVIVA", "COMUNE": "BURAGO DI MOLGORA", "VIA": "Via Enrico Fermi 10", "ORA": "01:00", "QTA_DEFAULT": 0},
-        {"POSIZIONE": 2, "ZONA": 101, "CLIENTE": "IL LATO DOLCE", "COMUNE": "SESTO SAN GIOVANNI", "VIA": "Via Fratelli Di Dio 15", "ORA": "05:30", "QTA_DEFAULT": 0},
-    ])
+    st.session_state.db_clienti = pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'])
 
 # Inizializzazione Giro Corrente
 if 'giro_corrente' not in st.session_state:
@@ -53,12 +50,11 @@ if 'giro_corrente' not in st.session_state:
 
 # Sidebar Menu
 st.sidebar.title("📌 Menu")
-page = st.sidebar.radio("Seleziona Schermata", ["Pianificazione Giro", "Database Clienti"])
+page = st.sidebar.radio("Seleziona Schermata", ["Database Clienti", "Pianificazione Giro"])
 
 if page == "Pianificazione Giro":
     st.markdown("<div class='main-header'>PIANIFICAZIONE GIRO CONSEGNE</div>", unsafe_allow_html=True)
     
-    # Conversione e pulizia dati
     if not st.session_state.giro_corrente.empty:
         st.session_state.giro_corrente['POSIZIONE'] = pd.to_numeric(st.session_state.giro_corrente['POSIZIONE'], errors='coerce').fillna(0).astype(int)
         st.session_state.giro_corrente['Q.ta'] = pd.to_numeric(st.session_state.giro_corrente['Q.ta'], errors='coerce').fillna(0).astype(int)
@@ -173,7 +169,6 @@ if page == "Pianificazione Giro":
 elif page == "Database Clienti":
     st.markdown("<div class='main-header'>DATABASE CLIENTI ANAGRAFICA</div>", unsafe_allow_html=True)
 
-    # SEZIONE CARICAMENTO FILE EXCEL / CSV
     st.subheader("📤 Carica Database da File (Excel / CSV)")
     uploaded_file = st.file_uploader("Seleziona un file Excel (.xlsx) o CSV con l'anagrafica dei clienti", type=["xlsx", "csv"])
     
@@ -195,90 +190,62 @@ elif page == "Database Clienti":
                 df_caricato['VIA'] = df_caricato['VIA'].astype(str)
                 df_caricato['ORA'] = df_caricato['ORA'].apply(pulisci_orario)
                 
-                # Ordina il DB per Posizione
-                df_caricato = df_caricato.sort_values(by="POSIZIONE").reset_index(drop=True)
-                st.session_state.db_clienti = df_caricato
-                st.success("Database aggiornato con successo dal file!")
+                # Salva in st.session_state per farlo durare per tutta la sessione
+                st.session_state.db_clienti = df_caricato.sort_values(by="POSIZIONE").reset_index(drop=True)
+                st.success(f"Database caricato con successo! Trovati {len(st.session_state.db_clienti)} clienti.")
             else:
-                st.error(f"Il file caricato deve contenere esattamente queste colonne: {', '.join(colonne_richieste)}")
+                st.error(f"Mancano delle colonne! Il file deve contenere: {', '.join(colonne_richieste)}")
         except Exception as e:
             st.error(f"Errore nel caricamento del file: {e}")
 
     st.markdown("---")
 
-    st.subheader("➕ Aggiungi Nuovo Cliente Singolo")
-    with st.form("nuovo_cliente_form"):
-        col_f0, col_f1, col_f2, col_f3 = st.columns(4)
-        pos = col_f0.number_input("Posizione", value=1, step=1)
-        zona = col_f1.number_input("Zona", value=100)
-        cliente = col_f1.text_input("Cliente")
-        comune = col_f2.text_input("Comune")
-        via = col_f2.text_input("Via e Civico")
-        ora = col_f3.text_input("Orario Consegna", value="06:00")
-        qta_def = col_f3.number_input("Quantità Predefinita", value=0)
+    if not st.session_state.db_clienti.empty:
+        st.subheader(f"📁 Anagrafica Caricata ({len(st.session_state.db_clienti)} clienti)")
+        edited_db = st.data_editor(
+            st.session_state.db_clienti,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="db_editor"
+        )
+        st.session_state.db_clienti = edited_db
+
+        st.markdown("---")
+        st.subheader("🚚 Aggiungi Clienti al Giro Consegne")
         
-        if st.form_submit_button("Salva in Anagrafica") and cliente and via:
-            new_row = {"POSIZIONE": int(pos), "ZONA": int(zona), "CLIENTE": str(cliente), "COMUNE": str(comune), "VIA": str(via), "ORA": str(ora), "QTA_DEFAULT": int(qta_def)}
-            st.session_state.db_clienti = pd.concat([st.session_state.db_clienti, pd.DataFrame([new_row])], ignore_index=True)
-            st.session_state.db_clienti = st.session_state.db_clienti.sort_values(by="POSIZIONE").reset_index(drop=True)
-            st.success(f"Cliente {cliente} salvato in Anagrafica!")
+        lista_completa = st.session_state.db_clienti['CLIENTE'].dropna().tolist()
 
-    st.markdown("---")
-    st.subheader("📁 Anagrafica Completa")
-    edited_db = st.data_editor(
-        st.session_state.db_clienti,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="db_editor"
-    )
-    st.session_state.db_clienti = edited_db
+        col_b1, col_b2 = st.columns(2)
+        with col_b1:
+            if st.button("✅ SELEZIONA TUTTI I CLIENTI IN ANAGRAFICA"):
+                st.session_state.clienti_selezionati_m = lista_completa
+                st.rerun()
+        with col_b2:
+            if st.button("❌ DESELEZIONA TUTTI"):
+                st.session_state.clienti_selezionati_m = []
+                st.rerun()
 
-    st.markdown("---")
-    st.subheader("🚚 Aggiungi Clienti al Giro Consegne (Ottimizzato per Mobile)")
-    
-    # Ricerca per filtro rapido da smartphone
-    filtro_ricerca = st.text_input("🔍 Cerca cliente o comune per filtrare la lista:", "")
-
-    df_filtrato = st.session_state.db_clienti.copy()
-    if filtro_ricerca:
-        df_filtrato = df_filtrato[
-            df_filtrato['CLIENTE'].str.contains(filtro_ricerca, case=False, na=False) |
-            df_filtrato['COMUNE'].str.contains(filtro_ricerca, case=False, na=False)
-        ]
-
-    lista_clienti = df_filtrato['CLIENTE'].dropna().tolist()
-
-    col_btn1, col_btn2 = st.columns([1, 1])
-    
-    # Inizializza o gestisce la selezione nel session state
-    if 'clienti_selezionati_m' not in st.session_state:
-        st.session_state.clienti_selezionati_m = []
-
-    with col_btn1:
-        if st.button("✅ SELEZIONA TUTTI QUELLI MOSTRATI"):
-            st.session_state.clienti_selezionati_m = list(set(st.session_state.clienti_selezionati_m + lista_clienti))
-
-    with col_btn2:
-        if st.button("❌ DESELEZIONA TUTTI"):
+        if 'clienti_selezionati_m' not in st.session_state:
             st.session_state.clienti_selezionati_m = []
 
-    clienti_selezionati = st.multiselect(
-        "Seleziona o digita il nome del cliente:",
-        options=st.session_state.db_clienti['CLIENTE'].dropna().tolist(),
-        default=st.session_state.clienti_selezionati_m,
-        key="multiselect_mobile"
-    )
+        clienti_selezionati = st.multiselect(
+            "Seleziona o digita il nome del cliente:",
+            options=lista_completa,
+            default=st.session_state.clienti_selezionati_m,
+            key="multiselect_mobile"
+        )
 
-    if st.button("➕ AGGIUNGI SELEZIONATI AL GIRO"):
-        if clienti_selezionati:
-            clienti_da_agg = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
-            clienti_da_agg['Q.ta'] = clienti_da_agg['QTA_DEFAULT'].astype(int)
-            clienti_da_agg = clienti_da_agg[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
-            
-            st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, clienti_da_agg], ignore_index=True)
-            st.session_state.giro_corrente = st.session_state.giro_corrente.sort_values(by="POSIZIONE").reset_index(drop=True)
-            st.session_state.clienti_selezionati_m = []
-            st.success("Clienti aggiunti con successo!")
-            st.rerun()
-        else:
-            st.warning("Seleziona almeno un cliente prima di premere il pulsante.")
+        if st.button("➕ AGGIUNGI SELEZIONATI AL GIRO"):
+            if clienti_selezionati:
+                clienti_da_agg = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
+                clienti_da_agg['Q.ta'] = clienti_da_agg['QTA_DEFAULT'].astype(int)
+                clienti_da_agg = clienti_da_agg[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
+                
+                st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, clienti_da_agg], ignore_index=True)
+                st.session_state.giro_corrente = st.session_state.giro_corrente.sort_values(by="POSIZIONE").reset_index(drop=True)
+                st.success("Clienti aggiunti al giro del giorno!")
+                st.rerun()
+            else:
+                st.warning("Seleziona almeno un cliente.")
+    else:
+        st.info("Carica prima il tuo file Excel per vedere l'anagrafica completa dei clienti.")
