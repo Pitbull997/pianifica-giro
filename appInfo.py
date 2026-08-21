@@ -223,7 +223,7 @@ if st.session_state.pagina_attiva == "inserisci":
         st.warning("Database clienti vuoto.")
 
 # ==========================================
-# 2. SCHERMATA: MAPS / GIRO ATTIVO CON TENDINA RAPIDA PER OGNI FERMATA
+# 2. SCHERMATA: MAPS / GIRO ATTIVO CON TENDINA E CONFERMA DI SPOSTAMENTO
 # ==========================================
 elif st.session_state.pagina_attiva == "maps":
     st.subheader("🗺️ Giro Consegne Attivo")
@@ -238,11 +238,10 @@ elif st.session_state.pagina_attiva == "maps":
 
         st.markdown("---")
 
-        # Mostra ogni fermata con il suo selettore rapido di posizione integrato di fianco
         for idx in range(tot_clienti):
             row = st.session_state.giro_corrente.iloc[idx]
             
-            # Card grafica della fermata
+            # Card grafica della fermata con il numero progressivo corretto
             st.markdown(f"""
             <div class="stop-card">
                 <div class="stop-title">{idx + 1}. {row['CLIENTE']}</div>
@@ -251,36 +250,40 @@ elif st.session_state.pagina_attiva == "maps":
             </div>
             """, unsafe_allow_html=True)
             
-            # Riga con il link di navigazione e il menu a tendina per spostare la posizione al volo
-            col_nav_singola, col_tendina = st.columns([2, 1])
+            # Riga con link di navigazione, tendina e pulsante di conferma separato
+            col_nav_singola, col_tendina, col_btn_sposta = st.columns([2, 1, 1])
+            
             with col_nav_singola:
                 dest = urllib.parse.quote(f"{row['VIA']}, {row['COMUNE']}")
                 st.markdown(f"[🚘 Naviga singola fermata](https://www.google.com/maps/dir/?api=1&destination={dest})")
             
             with col_tendina:
                 nuova_pos = st.selectbox(
-                    "Sposta in pos.",
+                    "Pos.",
                     options=range(1, tot_clienti + 1),
                     index=idx,
                     key=f"pos_jump_{idx}",
                     label_visibility="collapsed"
                 )
-                # Se l'utente seleziona una posizione diversa da quella attuale, sposta subito la fermata
-                if nuova_pos - 1 != idx:
+            
+            with col_btn_sposta:
+                if st.button("Sposta", key=f"btn_sposta_{idx}", use_container_width=True):
                     idx_attuale = idx
                     idx_nuovo = nuova_pos - 1
                     
-                    righe = st.session_state.giro_corrente.to_dict('records')
-                    elemento_spostato = righe.pop(idx_attuale)
-                    righe.insert(idx_nuovo, elemento_spostato)
-                    
-                    df_aggiornato = pd.DataFrame(righe)
-                    df_aggiornato['POSIZIONE'] = range(1, len(df_aggiornato) + 1)
-                    st.session_state.giro_corrente = df_aggiornato
-                    salva_giro_su_disco(st.session_state.giro_corrente)
-                    st.rerun()
+                    if idx_attuale != idx_nuovo:
+                        righe = st.session_state.giro_corrente.to_dict('records')
+                        elemento_spostato = righe.pop(idx_attuale)
+                        righe.insert(idx_nuovo, elemento_spostato)
+                        
+                        df_aggiornato = pd.DataFrame(righe)
+                        df_aggiornato['POSIZIONE'] = range(1, len(df_aggiornato) + 1)
+                        st.session_state.giro_corrente = df_aggiornato
+                        salva_giro_su_disco(st.session_state.giro_corrente)
+                        st.success(f"Spostato in pos. {nuova_pos}!")
+                        st.rerun()
 
-            st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
+            st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
 
         st.markdown("---")
         addresses = [f"{r['VIA']}, {r['COMUNE']}" for _, r in st.session_state.giro_corrente.iterrows()]
@@ -303,7 +306,7 @@ elif st.session_state.pagina_attiva == "maps":
         st.info("Nessun giro attivo. Clicca su 'Inserisci' in basso per aggiungere i clienti.")
 
 # ==========================================
-# 3. SCHERMATA: CREA GIRO (Svuota o gestione extra)
+# 3. SCHERMATA: CREA GIRO
 # ==========================================
 elif st.session_state.pagina_attiva == "crea_giro":
     st.subheader("📋 Gestione Giro")
