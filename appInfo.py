@@ -31,6 +31,15 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Funzione ausiliaria per pulire il formato dell'ora (es. rimuove '0 days ')
+def pulisci_orario(valore):
+    val_str = str(valore).strip()
+    if 'days' in val_str:
+        val_str = val_str.split()[-1]
+    if len(val_str) >= 5:
+        return val_str[:5]
+    return val_str
+
 # Inizializzazione Database Clienti
 if 'db_clienti' not in st.session_state:
     st.session_state.db_clienti = pd.DataFrame([
@@ -49,13 +58,13 @@ page = st.sidebar.radio("Seleziona Schermata", ["Pianificazione Giro", "Database
 if page == "Pianificazione Giro":
     st.markdown("<div class='main-header'>PIANIFICAZIONE GIRO CONSEGNE</div>", unsafe_allow_html=True)
     
-    # Conversione di sicurezza per la colonna Q.ta
+    # Conversione e pulizia dati di sicurezza
     if not st.session_state.giro_corrente.empty:
         st.session_state.giro_corrente['Q.ta'] = pd.to_numeric(st.session_state.giro_corrente['Q.ta'], errors='coerce').fillna(0).astype(int)
         st.session_state.giro_corrente['CLIENTE'] = st.session_state.giro_corrente['CLIENTE'].astype(str)
         st.session_state.giro_corrente['COMUNE'] = st.session_state.giro_corrente['COMUNE'].astype(str)
         st.session_state.giro_corrente['VIA'] = st.session_state.giro_corrente['VIA'].astype(str)
-        st.session_state.giro_corrente['ORA'] = st.session_state.giro_corrente['ORA'].astype(str)
+        st.session_state.giro_corrente['ORA'] = st.session_state.giro_corrente['ORA'].apply(pulisci_orario)
 
     tot_clienti = len(st.session_state.giro_corrente)
     tot_qta = int(st.session_state.giro_corrente['Q.ta'].sum()) if not st.session_state.giro_corrente.empty else 0
@@ -82,6 +91,30 @@ if page == "Pianificazione Giro":
             key="giro_editor"
         )
         st.session_state.giro_corrente = edited_df
+
+        st.markdown("---")
+        st.subheader("↕️ Riordina Posizione Cliente")
+        
+        col_sel, col_up, col_down = st.columns([3, 1, 1])
+        cliente_sel = col_sel.selectbox("Seleziona cliente da spostare:", options=st.session_state.giro_corrente['CLIENTE'].tolist(), key="sel_sposta")
+        
+        if cliente_sel:
+            idx = st.session_state.giro_corrente[st.session_state.giro_corrente['CLIENTE'] == cliente_sel].index[0]
+            
+            with col_up:
+                if st.button("⬆️ SPOSTA SU") and idx > 0:
+                    df = st.session_state.giro_corrente.copy()
+                    df.iloc[idx - 1], df.iloc[idx] = df.iloc[idx].copy(), df.iloc[idx - 1].copy()
+                    st.session_state.giro_corrente = df.reset_index(drop=True)
+                    st.rerun()
+
+            with col_down:
+                if st.button("⬇️ SPOSTA GIÙ") and idx < len(st.session_state.giro_corrente) - 1:
+                    df = st.session_state.giro_corrente.copy()
+                    df.iloc[idx + 1], df.iloc[idx] = df.iloc[idx].copy(), df.iloc[idx + 1].copy()
+                    st.session_state.giro_corrente = df.reset_index(drop=True)
+                    st.rerun()
+
     else:
         st.info("Il giro è attualmente vuoto. Vai nel 'Database Clienti' per selezionare ed aggiungere i clienti al giro.")
 
@@ -140,17 +173,15 @@ elif page == "Database Clienti":
             else:
                 df_caricato = pd.read_excel(uploaded_file)
             
-            # Normalizzazione nomi colonne (rimuove spazi vuoti e mette in maiuscolo)
             df_caricato.columns = df_caricato.columns.str.strip().str.upper()
-            
             colonne_richieste = {'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'}
+            
             if colonne_richieste.issubset(df_caricato.columns):
-                # Formattazione e pulizia tipi di dato
                 df_caricato['QTA_DEFAULT'] = pd.to_numeric(df_caricato['QTA_DEFAULT'], errors='coerce').fillna(0).astype(int)
                 df_caricato['CLIENTE'] = df_caricato['CLIENTE'].astype(str)
                 df_caricato['COMUNE'] = df_caricato['COMUNE'].astype(str)
                 df_caricato['VIA'] = df_caricato['VIA'].astype(str)
-                df_caricato['ORA'] = df_caricato['ORA'].astype(str)
+                df_caricato['ORA'] = df_caricato['ORA'].apply(pulisci_orario)
                 
                 st.session_state.db_clienti = df_caricato
                 st.success("Database aggiornato con successo dal file!")
