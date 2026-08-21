@@ -49,8 +49,16 @@ page = st.sidebar.radio("Seleziona Schermata", ["Pianificazione Giro", "Database
 if page == "Pianificazione Giro":
     st.markdown("<div class='main-header'>PIANIFICAZIONE GIRO CONSEGNE</div>", unsafe_allow_html=True)
     
+    # Conversione di sicurezza per la colonna Q.ta
+    if not st.session_state.giro_corrente.empty:
+        st.session_state.giro_corrente['Q.ta'] = pd.to_numeric(st.session_state.giro_corrente['Q.ta'], errors='coerce').fillna(0).astype(int)
+        st.session_state.giro_corrente['CLIENTE'] = st.session_state.giro_corrente['CLIENTE'].astype(str)
+        st.session_state.giro_corrente['COMUNE'] = st.session_state.giro_corrente['COMUNE'].astype(str)
+        st.session_state.giro_corrente['VIA'] = st.session_state.giro_corrente['VIA'].astype(str)
+        st.session_state.giro_corrente['ORA'] = st.session_state.giro_corrente['ORA'].astype(str)
+
     tot_clienti = len(st.session_state.giro_corrente)
-    tot_qta = st.session_state.giro_corrente['Q.ta'].sum() if not st.session_state.giro_corrente.empty else 0
+    tot_qta = int(st.session_state.giro_corrente['Q.ta'].sum()) if not st.session_state.giro_corrente.empty else 0
     
     col_stat1, col_stat2, col_stat3 = st.columns([1, 1, 2])
     col_stat1.metric(label="N° Clienti", value=tot_clienti)
@@ -63,7 +71,7 @@ if page == "Pianificazione Giro":
         edited_df = st.data_editor(
             st.session_state.giro_corrente,
             column_config={
-                "Q.ta": st.column_config.NumberColumn("Q.tà", min_value=0, step=1),
+                "Q.ta": st.column_config.NumberColumn("Q.tà", min_value=0, step=1, format="%d"),
                 "CLIENTE": st.column_config.TextColumn("Cliente", disabled=True),
                 "COMUNE": st.column_config.TextColumn("Comune", disabled=True),
                 "VIA": st.column_config.TextColumn("Via / Indirizzo", disabled=True),
@@ -95,7 +103,7 @@ if page == "Pianificazione Giro":
                 st.rerun()
 
     with col3:
-        if st.button("🗺️ APRI SU MAPS"):
+        if st.button("MAPS"):
             if not st.session_state.giro_corrente.empty:
                 addresses = [f"{row['VIA']}, {row['COMUNE']}" for _, row in st.session_state.giro_corrente.iterrows()]
                 if len(addresses) == 1:
@@ -132,9 +140,18 @@ elif page == "Database Clienti":
             else:
                 df_caricato = pd.read_excel(uploaded_file)
             
-            # Verifica colonne minime
+            # Normalizzazione nomi colonne (rimuove spazi vuoti e mette in maiuscolo)
+            df_caricato.columns = df_caricato.columns.str.strip().str.upper()
+            
             colonne_richieste = {'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'}
             if colonne_richieste.issubset(df_caricato.columns):
+                # Formattazione e pulizia tipi di dato
+                df_caricato['QTA_DEFAULT'] = pd.to_numeric(df_caricato['QTA_DEFAULT'], errors='coerce').fillna(0).astype(int)
+                df_caricato['CLIENTE'] = df_caricato['CLIENTE'].astype(str)
+                df_caricato['COMUNE'] = df_caricato['COMUNE'].astype(str)
+                df_caricato['VIA'] = df_caricato['VIA'].astype(str)
+                df_caricato['ORA'] = df_caricato['ORA'].astype(str)
+                
                 st.session_state.db_clienti = df_caricato
                 st.success("Database aggiornato con successo dal file!")
             else:
@@ -155,7 +172,7 @@ elif page == "Database Clienti":
         qta_def = col_f3.number_input("Quantità Predefinita", value=0)
         
         if st.form_submit_button("Salva in Anagrafica") and cliente and via:
-            new_row = {"ZONA": zona, "CLIENTE": cliente, "COMUNE": comune, "VIA": via, "ORA": ora, "QTA_DEFAULT": qta_def}
+            new_row = {"ZONA": int(zona), "CLIENTE": str(cliente), "COMUNE": str(comune), "VIA": str(via), "ORA": str(ora), "QTA_DEFAULT": int(qta_def)}
             st.session_state.db_clienti = pd.concat([st.session_state.db_clienti, pd.DataFrame([new_row])], ignore_index=True)
             st.success(f"Cliente {cliente} salvato in Anagrafica!")
 
@@ -182,10 +199,10 @@ elif page == "Database Clienti":
     if st.button("➕ AGGIUNGI SELEZIONATI AL GIRO"):
         if clienti_selezionati:
             clienti_da_agg = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
-            clienti_da_agg['Q.ta'] = clienti_da_agg['QTA_DEFAULT']
+            clienti_da_agg['Q.ta'] = clienti_da_agg['QTA_DEFAULT'].astype(int)
             clienti_da_agg = clienti_da_agg[['CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
             
             st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, clienti_da_agg], ignore_index=True)
-            st.success(f"{len(clienti_selezionati)} clienti aggiunti al giro corrente!")
+            st.rerun()
         else:
             st.warning("Seleziona almeno un cliente prima di premere il pulsante.")
