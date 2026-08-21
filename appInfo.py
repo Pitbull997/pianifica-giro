@@ -40,7 +40,7 @@ st.markdown("""
         background-color: #1E293B !important;
         color: #FFFFFF !important;
         border: 1px solid #475569 !important;
-        border-radius: 10px !important;
+        border-radius: 8px !important;
         font-weight: bold !important;
         -webkit-appearance: none !important;
     }
@@ -289,39 +289,45 @@ if st.session_state.pagina_attiva == "giro":
                     st.markdown(f"[🚘 **NAVIGA ORA**](https://www.google.com/maps/dir/?api=1&destination={dest})")
 
         else:
-            # Vista Tabella con Frecce Affiancate di Colori Diversi
+            # Vista Tabella: Frecce sulla stessa riga del nome del cliente, allineate a destra
             for idx in range(tot_clienti):
                 row = st.session_state.giro_corrente.iloc[idx]
-                col_btn1, col_btn2, col_info, col_qta = st.columns([0.5, 0.5, 4, 1.2])
                 
-                # Freccia SU (Azzurra)
+                # Riga Superiore: Nome Cliente a sinistra, Frecce affiancate a destra
+                col_title, col_btn1, col_btn2 = st.columns([5, 1, 1])
+                
+                with col_title:
+                    st.markdown(f"<h3 style='margin: 0; padding-top: 4px; font-size: 18px;'>{idx + 1}. {row['CLIENTE']}</h3>", unsafe_allow_html=True)
+
                 with col_btn1:
                     st.markdown('<div class="btn-arrow-up">', unsafe_allow_html=True)
                     if st.button("⬆️", key=f"tbl_up_{idx}", use_container_width=True, disabled=(idx == 0)):
                         sposta_riga(st.session_state.giro_corrente, idx, "up")
                     st.markdown('</div>', unsafe_allow_html=True)
 
-                # Freccia GIÙ (Arancione)
                 with col_btn2:
                     st.markdown('<div class="btn-arrow-down">', unsafe_allow_html=True)
                     if st.button("⬇️", key=f"tbl_dn_{idx}", use_container_width=True, disabled=(idx == tot_clienti - 1)):
                         sposta_riga(st.session_state.giro_corrente, idx, "down")
                     st.markdown('</div>', unsafe_allow_html=True)
 
-                # Nome Cliente e Indirizzo
-                with col_info:
-                    st.markdown(f"**{idx + 1}. {row['CLIENTE']}**")
-                    st.caption(f"📍 {row['VIA']}, {row['COMUNE']}")
+                # Indirizzo sotto al nome
+                st.markdown(f"<div style='color: #A3A3A3; font-size: 14px; margin-top: 4px;'>📍 {row['VIA']}, {row['COMUNE']}</div>", unsafe_allow_html=True)
 
-                # Input Quantità
-                with col_qta:
-                    nuova_qta = st.number_input("Q.tà", min_value=0, value=int(row['Q.ta']), key=f"qta_inp_{idx}", label_visibility="collapsed")
-                    if nuova_qta != int(row['Q.ta']):
-                        st.session_state.giro_corrente.at[idx, 'Q.ta'] = nuova_qta
-                        salva_giro_su_disco(st.session_state.giro_corrente)
-                        st.rerun()
+                # Input Quantità sottostante
+                nuova_qta = st.number_input(
+                    "Q.tà",
+                    min_value=0,
+                    value=int(row['Q.ta']),
+                    key=f"qta_inp_{idx}",
+                    label_visibility="collapsed"
+                )
+                if nuova_qta != int(row['Q.ta']):
+                    st.session_state.giro_corrente.at[idx, 'Q.ta'] = nuova_qta
+                    salva_giro_su_disco(st.session_state.giro_corrente)
+                    st.rerun()
 
-                st.markdown("<hr style='margin: 4px 0; border-color: #262626;'>", unsafe_allow_html=True)
+                st.markdown("<hr style='margin: 12px 0; border-color: #262626;'>", unsafe_allow_html=True)
 
         st.markdown("---")
 
