@@ -3,6 +3,7 @@ import pandas as pd
 import urllib.parse
 import os
 import json
+import base64
 
 # Configurazione Pagina
 st.set_page_config(
@@ -14,103 +15,126 @@ st.set_page_config(
 
 FILE_GIRO_PERSISTENTE = "giro_salvato.json"
 
-# CSS Avanzato - Forzatura Dark Mode & Fix UI Mobile (Android/iOS)
-st.markdown("""
+# Funzione per convertire l'immagine di sfondo in formato leggibile dal CSS
+def get_base64_of_bin_file(bin_file):
+    with open(bin_file, 'rb') as f:
+        data = f.read()
+    return base64.b64encode(data).decode()
+
+# Caricamento dinamico dello sfondo se il file "sfondo.jpg" è presente nella cartella
+bg_css = ""
+if os.path.exists("sfondo.jpg"):
+    bin_str = get_base64_of_bin_file("sfondo.jpg")
+    bg_css = f"""
+    .stApp {{
+        background-image: linear-gradient(rgba(11, 15, 25, 0.88), rgba(11, 15, 25, 0.94)), url("data:image/jpeg;base64,{bin_str}");
+        background-size: cover;
+        background-position: center;
+        background-repeat: no-repeat;
+        background-attachment: fixed;
+    }}
+    """
+
+# CSS Avanzato - Sfondo Grafico Personalizzato & Fix UI Mobile
+st.markdown(f"""
 <style>
-    /* Force Dark Theme Generale */
-    .stApp, body, html {
-        background-color: #121212 !important;
+    {bg_css}
+
+    /* Fallback se manca l'immagine di sfondo */
+    .stApp, body, html {{
+        background-color: #0B0F19 !important;
         color: #FFFFFF !important;
-    }
+    }}
 
     /* Testi e Metric con alto contrasto */
-    [data-testid="stMetricLabel"] {
-        color: #CCCCCC !important;
-        font-size: 14px !important;
+    [data-testid="stMetricLabel"] {{
+        color: #94A3B8 !important;
+        font-size: 13px !important;
         font-weight: 600 !important;
-    }
-    [data-testid="stMetricValue"] {
-        color: #FFFFFF !important;
+    }}
+    [data-testid="stMetricValue"] {{
+        color: #38BDF8 !important;
         font-size: 28px !important;
         font-weight: bold !important;
-    }
+    }}
 
     /* FIX PULSANTI GENERALI */
-    div[data-testid="stButton"] > button {
-        background-color: #1E293B !important;
+    div[data-testid="stButton"] > button {{
+        background-color: rgba(30, 41, 59, 0.9) !important;
         color: #FFFFFF !important;
         border: 1px solid #475569 !important;
         border-radius: 8px !important;
         font-weight: bold !important;
         -webkit-appearance: none !important;
-    }
+    }}
 
     /* Pulsanti Switcher In Alto */
-    .btn-active div[data-testid="stButton"] > button {
-        background-color: #2563EB !important;
+    .btn-active div[data-testid="stButton"] > button {{
+        background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%) !important;
         color: #FFFFFF !important;
         border: 2px solid #60A5FA !important;
         box-shadow: 0 4px 10px rgba(37, 99, 235, 0.4) !important;
         height: 52px !important;
         font-size: 15px !important;
-    }
+    }}
 
-    .btn-inactive div[data-testid="stButton"] > button {
-        background-color: #1E293B !important;
+    .btn-inactive div[data-testid="stButton"] > button {{
+        background-color: rgba(30, 41, 59, 0.85) !important;
         color: #94A3B8 !important;
         border: 1px solid #334155 !important;
         height: 52px !important;
         font-size: 15px !important;
-    }
+    }}
 
     /* Stile Freccia SU (Azzurro) */
-    .btn-arrow-up div[data-testid="stButton"] > button {
-        background-color: #0F172A !important;
+    .btn-arrow-up div[data-testid="stButton"] > button {{
+        background-color: rgba(15, 23, 42, 0.9) !important;
         color: #38BDF8 !important;
         border: 1px solid #0284C7 !important;
         height: 42px !important;
         font-size: 20px !important;
         padding: 0px !important;
         border-radius: 8px !important;
-    }
+    }}
 
     /* Stile Freccia GIÙ (Arancione) */
-    .btn-arrow-down div[data-testid="stButton"] > button {
-        background-color: #0F172A !important;
+    .btn-arrow-down div[data-testid="stButton"] > button {{
+        background-color: rgba(15, 23, 42, 0.9) !important;
         color: #FB923C !important;
         border: 1px solid #EA580C !important;
         height: 42px !important;
         font-size: 20px !important;
         padding: 0px !important;
         border-radius: 8px !important;
-    }
+    }}
 
     /* FIX MENU A TENDINA (SELECTBOX) SU MOBILE */
-    div[data-baseweb="select"] {
-        background-color: #1E293B !important;
+    div[data-baseweb="select"] {{
+        background-color: rgba(30, 41, 59, 0.9) !important;
         border-radius: 8px !important;
-    }
+    }}
 
-    div[data-baseweb="select"] > div {
-        background-color: #1E293B !important;
+    div[data-baseweb="select"] > div {{
+        background-color: rgba(30, 41, 59, 0.9) !important;
         color: #FFFFFF !important;
         border: 1px solid #3B82F6 !important;
         border-radius: 8px !important;
-    }
+    }}
 
     div[data-baseweb="select"] div[role="button"],
-    div[data-baseweb="select"] span {
+    div[data-baseweb="select"] span {{
         color: #FFFFFF !important;
         font-weight: bold !important;
-    }
+    }}
 
-    div[data-baseweb="select"] svg {
+    div[data-baseweb="select"] svg {{
         fill: #60A5FA !important;
-    }
+    }}
 
-    /* Card fermata stile Timeline */
-    .stop-card {
-        background-color: #1E1E1E;
+    /* Card fermata stile Timeline con effetto vetro scuro */
+    .stop-card {{
+        background: rgba(22, 30, 46, 0.9);
+        backdrop-filter: blur(8px);
         border-left: 5px solid #2563EB;
         padding: 12px 14px;
         border-radius: 10px;
@@ -118,22 +142,23 @@ st.markdown("""
         border-top: 1px solid #334155;
         border-right: 1px solid #334155;
         border-bottom: 1px solid #334155;
-    }
-    .stop-title { font-size: 17px; font-weight: bold; color: #FFFFFF; margin-bottom: 4px; }
-    .stop-address { font-size: 14px; color: #E2E8F0; margin-bottom: 6px; }
-    .stop-meta { font-size: 13px; color: #60A5FA; font-weight: 600; }
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }}
+    .stop-title {{ font-size: 17px; font-weight: bold; color: #FFFFFF; margin-bottom: 4px; }}
+    .stop-address {{ font-size: 14px; color: #E2E8F0; margin-bottom: 6px; }}
+    .stop-meta {{ font-size: 13px; color: #60A5FA; font-weight: 600; }}
 
-    .stSelectbox label {
+    .stSelectbox label {{
         color: #93C5FD !important;
         font-size: 13px !important;
         font-weight: bold !important;
-    }
+    }}
 
-    div[data-testid="stExpander"] {
-        background-color: #1E1E1E !important;
+    div[data-testid="stExpander"] {{
+        background-color: rgba(30, 41, 59, 0.9) !important;
         border-radius: 10px !important;
         border: 1px solid #334155 !important;
-    }
+    }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -293,7 +318,6 @@ if st.session_state.pagina_attiva == "giro":
             for idx in range(tot_clienti):
                 row = st.session_state.giro_corrente.iloc[idx]
                 
-                # Riga Superiore: Nome Cliente a sinistra, Frecce affiancate a destra
                 col_title, col_btn1, col_btn2 = st.columns([5, 1, 1])
                 
                 with col_title:
@@ -311,10 +335,8 @@ if st.session_state.pagina_attiva == "giro":
                         sposta_riga(st.session_state.giro_corrente, idx, "down")
                     st.markdown('</div>', unsafe_allow_html=True)
 
-                # Indirizzo sotto al nome
                 st.markdown(f"<div style='color: #A3A3A3; font-size: 14px; margin-top: 4px;'>📍 {row['VIA']}, {row['COMUNE']}</div>", unsafe_allow_html=True)
 
-                # Input Quantità sottostante
                 nuova_qta = st.number_input(
                     "Q.tà",
                     min_value=0,
