@@ -32,7 +32,7 @@ st.markdown("""
         font-weight: bold !important;
     }
 
-    /* FIX PULSANTI GENERALI E FRECCE */
+    /* FIX PULSANTI GENERALI */
     div[data-testid="stButton"] > button {
         background-color: #1E293B !important;
         color: #FFFFFF !important;
@@ -60,14 +60,26 @@ st.markdown("""
         font-size: 15px !important;
     }
 
-    /* Pulsanti Frecce Su/Giù per Tabella */
-    .btn-arrow div[data-testid="stButton"] > button {
-        background-color: #1E293B !important;
+    /* Stile Freccia SU (Azzurro) */
+    .btn-arrow-up div[data-testid="stButton"] > button {
+        background-color: #0F172A !important;
         color: #38BDF8 !important;
-        border: 1px solid #334155 !important;
+        border: 1px solid #0284C7 !important;
         height: 42px !important;
-        font-size: 18px !important;
+        font-size: 20px !important;
         padding: 0px !important;
+        border-radius: 8px !important;
+    }
+
+    /* Stile Freccia GIÙ (Arancione) */
+    .btn-arrow-down div[data-testid="stButton"] > button {
+        background-color: #0F172A !important;
+        color: #FB923C !important;
+        border: 1px solid #EA580C !important;
+        height: 42px !important;
+        font-size: 20px !important;
+        padding: 0px !important;
+        border-radius: 8px !important;
     }
 
     /* FIX MENU A TENDINA (SELECTBOX) SU MOBILE */
@@ -91,22 +103,6 @@ st.markdown("""
 
     div[data-baseweb="select"] svg {
         fill: #60A5FA !important;
-    }
-
-    ul[data-baseweb="menu"] {
-        background-color: #1E293B !important;
-        border: 1px solid #3B82F6 !important;
-    }
-
-    li[data-baseweb="option"] {
-        background-color: #1E293B !important;
-        color: #FFFFFF !important;
-    }
-
-    li[data-baseweb="option"]:hover,
-    li[data-baseweb="option"][aria-selected="true"] {
-        background-color: #2563EB !important;
-        color: #FFFFFF !important;
     }
 
     /* Card fermata stile Timeline */
@@ -164,7 +160,7 @@ def carica_db_predefinito():
                 st.error(f"Errore caricamento {file_path}: {e}")
     return pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'])
 
-# Funzione per scambiare due posizioni nel DataFrame (per la tabella con frecce)
+# Funzione per scambiare due posizioni nel DataFrame
 def sposta_riga(df, idx, direzione):
     df_temp = df.copy()
     target_idx = idx - 1 if direzione == "up" else idx + 1
@@ -239,7 +235,6 @@ if st.session_state.pagina_attiva == "giro":
                 </div>
                 """, unsafe_allow_html=True)
 
-                # Controlli sottostanti: Menu a tendina per selezione diretta della posizione
                 col_c1, col_c2 = st.columns([1, 1])
                 with col_c1:
                     nuova_pos = st.selectbox(
@@ -269,34 +264,38 @@ if st.session_state.pagina_attiva == "giro":
                     st.markdown(f"[🚘 **NAVIGA ORA**](https://www.google.com/maps/dir/?api=1&destination={dest})")
 
         else:
-            # Vista Tabella con Frecce ⬆️ e ⬇️
+            # Vista Tabella con Frecce Affiancate di Colori Diversi
             for idx in range(tot_clienti):
                 row = st.session_state.giro_corrente.iloc[idx]
-                col_t1, col_t2, col_t3, col_t4, col_t5 = st.columns([0.6, 0.6, 3, 2, 1])
+                col_btn1, col_btn2, col_info, col_qta = st.columns([0.5, 0.5, 4, 1.2])
                 
-                with col_t1:
-                    st.markdown('<div class="btn-arrow">', unsafe_allow_html=True)
+                # Freccia SU (Azzurra)
+                with col_btn1:
+                    st.markdown('<div class="btn-arrow-up">', unsafe_allow_html=True)
                     if st.button("⬆️", key=f"tbl_up_{idx}", use_container_width=True, disabled=(idx == 0)):
                         sposta_riga(st.session_state.giro_corrente, idx, "up")
                     st.markdown('</div>', unsafe_allow_html=True)
 
-                with col_t2:
-                    st.markdown('<div class="btn-arrow">', unsafe_allow_html=True)
+                # Freccia GIÙ (Arancione)
+                with col_btn2:
+                    st.markdown('<div class="btn-arrow-down">', unsafe_allow_html=True)
                     if st.button("⬇️", key=f"tbl_dn_{idx}", use_container_width=True, disabled=(idx == tot_clienti - 1)):
                         sposta_riga(st.session_state.giro_corrente, idx, "down")
                     st.markdown('</div>', unsafe_allow_html=True)
 
-                with col_t3:
-                    st.write(f"**{idx + 1}. {row['CLIENTE']}**")
-                
-                with col_t4:
-                    st.caption(f"{row['VIA']}, {row['COMUNE']}")
+                # Nome Cliente e Indirizzo
+                with col_info:
+                    st.markdown(f"**{idx + 1}. {row['CLIENTE']}**")
+                    st.caption(f"📍 {row['VIA']}, {row['COMUNE']}")
 
-                with col_t5:
+                # Input Quantità
+                with col_qta:
                     nuova_qta = st.number_input("Q.tà", min_value=0, value=int(row['Q.ta']), key=f"qta_inp_{idx}", label_visibility="collapsed")
                     if nuova_qta != int(row['Q.ta']):
                         st.session_state.giro_corrente.at[idx, 'Q.ta'] = nuova_qta
                         st.rerun()
+
+                st.markdown("<hr style='margin: 4px 0; border-color: #262626;'>", unsafe_allow_html=True)
 
         st.markdown("---")
 
