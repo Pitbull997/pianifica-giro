@@ -83,11 +83,7 @@ st.markdown("""
         font-weight: 600;
     }
 
-    /* ==========================================
-       SELETTORI BLU INDUSTRIALE (SELECTBOX / DROPDOWN)
-       ========================================== */
-    
-    /* Box del selettore a riposo (Blu Industriale Scuro) */
+    /* SELETTORI BLU INDUSTRIALE (SELECTBOX / DROPDOWN) */
     div[data-baseweb="select"] > div {
         background-color: #1E3A8A !important;
         color: #FFFFFF !important;
@@ -96,17 +92,14 @@ st.markdown("""
         font-weight: bold !important;
     }
     
-    /* Testo interno al selettore */
     div[data-baseweb="select"] span {
         color: #FFFFFF !important;
     }
 
-    /* Icona freccetta del selettore */
     div[data-baseweb="select"] svg {
         fill: #93C5FD !important;
     }
 
-    /* Selettore attivo / cliccato (Blu Industriale Più Chiaro) */
     div[data-baseweb="select"] > div:focus-within,
     div[data-baseweb="select"] > div:active {
         background-color: #1D4ED8 !important;
@@ -114,20 +107,17 @@ st.markdown("""
         box-shadow: 0 0 8px rgba(96, 165, 250, 0.6) !important;
     }
 
-    /* Menu a tendina che si apre (Sfondo Blu Notte) */
     ul[data-baseweb="menu"] {
         background-color: #1E3A8A !important;
         border: 1px solid #3B82F6 !important;
     }
     
-    /* Opzioni del menu non selezionate */
     li[data-baseweb="option"] {
         color: #FFFFFF !important;
         background-color: #1E3A8A !important;
         font-weight: 600 !important;
     }
     
-    /* Opzione evidenziata / selezionata al passaggio (Blu Chiaro) */
     li[data-baseweb="option"]:hover,
     li[data-baseweb="option"][aria-selected="true"] {
         background-color: #3B82F6 !important;
@@ -164,7 +154,7 @@ def carica_db_predefinito():
             try:
                 df = pd.read_csv(file_path) if file_path.endswith('.csv') else pd.read_excel(file_path)
                 df.columns = df.columns.str.strip().str.upper()
-                df['POSIZIONE'] = pd.to_numeric(df['POSIZIONE'], errors='coerce').fillna(0).astype(int)
+                df['POSIZIONE'] = pd.to_numeric(df['POSIZIONE'], errors='coerce').fillna(0).astype(float)
                 df['QTA_DEFAULT'] = pd.to_numeric(df['QTA_DEFAULT'], errors='coerce').fillna(0).astype(int)
                 df['CLIENTE'] = df['CLIENTE'].astype(str)
                 df['COMUNE'] = df['COMUNE'].astype(str)
@@ -232,7 +222,7 @@ if st.session_state.pagina_attiva == "giro":
                 # Scheda dati cliente
                 st.markdown(f"""
                 <div class="stop-card">
-                    <div class="stop-title">{int(row['POSIZIONE'])}. {row['CLIENTE']}</div>
+                    <div class="stop-title">{int(idx + 1)}. {row['CLIENTE']}</div>
                     <div class="stop-address">📍 {row['VIA']}, {row['COMUNE']}</div>
                     <div class="stop-meta">🕒 Ora: {row['ORA']} | 📦 Q.tà: {row['Q.ta']} pz</div>
                 </div>
@@ -244,12 +234,17 @@ if st.session_state.pagina_attiva == "giro":
                     nuova_pos = st.selectbox(
                         "Sposta a pos:",
                         options=list(range(1, tot_clienti + 1)),
-                        index=int(row['POSIZIONE']) - 1,
-                        key=f"pos_{idx}"
+                        index=idx,
+                        key=f"pos_{idx}_{row['CLIENTE']}"
                     )
-                    if nuova_pos != int(row['POSIZIONE']):
-                        st.session_state.giro_corrente.at[idx, 'POSIZIONE'] = nuova_pos - 0.5
-                        st.session_state.giro_corrente = st.session_state.giro_corrente.sort_values(by="POSIZIONE").reset_index(drop=True)
+                    # Gestione sicura dello spostamento via lista Python
+                    if nuova_pos - 1 != idx:
+                        giro_dict = st.session_state.giro_corrente.to_dict('records')
+                        cliente_spostato = giro_dict.pop(idx)
+                        giro_dict.insert(nuova_pos - 1, cliente_spostato)
+                        
+                        st.session_state.giro_corrente = pd.DataFrame(giro_dict)
+                        st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
                         st.rerun()
 
                 with col_c2:
