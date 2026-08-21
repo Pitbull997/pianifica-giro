@@ -213,16 +213,9 @@ if st.session_state.pagina_attiva == "inserisci":
                 st.markdown("<hr style='margin: 8px 0; border-color: #334155;'>", unsafe_allow_html=True)
             
             if st.button("🚀 CREA GIRO FINALE", use_container_width=True):
-                # Crea il dataframe dalla bozza
                 df_nuovo_giro = pd.DataFrame(st.session_state.bozza_inserimenti)
-                
-                # ORDINA AUTOMATICAMENTE IN BASE ALLA POSIZIONE DEL DATABASE
                 df_nuovo_giro = df_nuovo_giro.sort_values(by="POSIZIONE_DB").reset_index(drop=True)
-                
-                # Riassegna la posizione sequenziale pulita per il giro attivo (1, 2, 3...)
                 df_nuovo_giro['POSIZIONE'] = range(1, len(df_nuovo_giro) + 1)
-                
-                # Rimuovi la colonna d'appoggio se non serve e tieni l'ordine pulito
                 df_nuovo_giro = df_nuovo_giro[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                 
                 st.session_state.giro_corrente = df_nuovo_giro
@@ -288,12 +281,46 @@ elif st.session_state.pagina_attiva == "maps":
 # ==========================================
 elif st.session_state.pagina_attiva == "crea_giro":
     st.subheader("📋 Gestione e Ordinamento Giro")
+    
     if not st.session_state.giro_corrente.empty:
-        st.write("Puoi svuotare il giro o invertire la sequenza se necessario:")
+        st.write("### 🔀 Sposta posizione fermata")
+        
+        # Selezione tramite tendina della fermata da spostare e della nuova posizione desiderata
+        num_fermate = len(st.session_state.giro_corrente)
+        lista_nomi_fermate = [f"{i+1}. {row['CLIENTE']}" for i, row in st.session_state.giro_corrente.iterrows()]
+        
+        col_s1, col_s2, col_s3 = st.columns([2, 2, 1])
+        with col_s1:
+            ferm_da_spostare = st.selectbox("Sposta questa fermata:", options=range(num_firmate if 'num_firmate' in locals() else len(st.session_state.giro_corrente)), format_func=lambda x: lista_nomi_fermate[x])
+        with col_s2:
+            nuova_pos = st.selectbox("Alla posizione:", options=range(1, num_fermate + 1), index=0)
+        with col_s3:
+            st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+            if st.button("Sposta", use_container_width=True):
+                # Esegue lo spostamento nell'indice del DataFrame
+                idx_attuale = ferm_da_spostare
+                idx_nuovo = nuova_pos - 1
+                
+                # Riordinamento righe
+                righe = st.session_state.giro_corrente.to_dict('records')
+                elemento_spostato = righe.pop(idx_attuale)
+                righe.insert(idx_nuovo, elemento_spostato)
+                
+                # Ricrea il df e aggiorna le posizioni numeriche progressive
+                df_aggiornato = pd.DataFrame(righe)
+                df_aggiornato['POSIZIONE'] = range(1, len(df_aggiornato) + 1)
+                st.session_state.giro_corrente = df_aggiornato
+                salva_giro_su_disco(st.session_state.giro_corrente)
+                st.success("Posizione aggiornata!")
+                st.rerun()
+
+        st.markdown("---")
+        st.write("Altre azioni rapide:")
         col_c1, col_c2 = st.columns(2)
         with col_c1:
-            if st.button("🔄 Inverti Sequenza", use_container_width=True):
+            if st.button("🔄 Inverti Intero Giro", use_container_width=True):
                 st.session_state.giro_corrente = st.session_state.giro_corrente.iloc[::-1].reset_index(drop=True)
+                st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
                 salva_giro_su_disco(st.session_state.giro_corrente)
                 st.rerun()
         with col_c2:
