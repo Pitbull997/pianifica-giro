@@ -252,14 +252,13 @@ if st.session_state.pagina_attiva == "giro":
                     st.markdown(f"[🚘 **NAVIGA ORA**](https://www.google.com/maps/dir/?api=1&destination={dest})")
 
         else:
-            # Allineiamo i dati come stringhe per la selectbox della tabella
             st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
             opzioni_posizioni = [str(i) for i in range(1, tot_clienti + 1)]
             
             edited_df = st.data_editor(
                 st.session_state.giro_corrente,
                 column_config={
-                    "POSIZIONE": st.column_config.SelectColumn(
+                    "POSIZIONE": st.column_config.SelectboxColumn(
                         "Pos.",
                         options=opzioni_posizioni,
                         required=True,
@@ -276,7 +275,6 @@ if st.session_state.pagina_attiva == "giro":
             )
             
             if not edited_df.equals(st.session_state.giro_corrente):
-                # Convertiamo temporaneamente in intero per riordinare correttamente
                 edited_df['POSIZIONE_INT'] = edited_df['POSIZIONE'].astype(int)
                 st.session_state.giro_corrente = edited_df.sort_values(by="POSIZIONE_INT").drop(columns=['POSIZIONE_INT']).reset_index(drop=True)
                 st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
