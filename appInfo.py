@@ -11,7 +11,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# CSS Avanzato per Fix Colori Pulsanti e Visibilità Testo
+# CSS Avanzato per UI Mobile Perfetta & Alto Contrasto
 st.markdown("""
 <style>
     /* Sfondo generale scuro */
@@ -20,50 +20,59 @@ st.markdown("""
         color: #FFFFFF !important;
     }
 
-    /* Stile forzato per tutti i bottoni di Streamlit */
-    div.stButton > button {
+    /* Testi e Metric con alto contrasto */
+    [data-testid="stMetricLabel"] {
+        color: #CCCCCC !important;
+        font-size: 14px !important;
+        font-weight: 600 !important;
+    }
+    [data-testid="stMetricValue"] {
+        color: #FFFFFF !important;
+        font-size: 28px !important;
+        font-weight: bold !important;
+    }
+
+    /* Pulsante Attivo (Azzurro/Blu Intenso) */
+    .btn-active button {
         background-color: #2563EB !important;
         color: #FFFFFF !important;
-        border: 1px solid #3B82F6 !important;
+        border: 2px solid #60A5FA !important;
         border-radius: 12px !important;
-        height: 50px !important;
+        height: 52px !important;
         font-weight: bold !important;
-        font-size: 15px !important;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3) !important;
+        font-size: 14px !important;
+        box-shadow: 0 4px 10px rgba(37, 99, 235, 0.4) !important;
     }
 
-    /* Hover e focus sui bottoni */
-    div.stButton > button:hover, div.stButton > button:focus, div.stButton > button:active {
-        background-color: #1D4ED8 !important;
-        color: #FFFFFF !important;
-        border-color: #60A5FA !important;
-    }
-
-    /* Stile per pulsante non attivo nello switcher */
+    /* Pulsante Non Attivo (Grigio Scuro ben visibile) */
     .btn-inactive button {
         background-color: #1E293B !important;
-        color: #94A3B8 !important;
-        border: 1px solid #334155 !important;
+        color: #CBD5E1 !important;
+        border: 1px solid #475569 !important;
+        border-radius: 12px !important;
+        height: 52px !important;
+        font-weight: bold !important;
+        font-size: 14px !important;
     }
 
     /* Card fermata stile Timeline */
     .stop-card {
         background-color: #1E1E1E;
-        border-left: 4px solid #2563EB;
-        padding: 12px 16px;
+        border-left: 5px solid #2563EB;
+        padding: 14px 16px;
         border-radius: 10px;
         margin-bottom: 8px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.4);
     }
     .stop-title {
-        font-size: 17px;
+        font-size: 18px;
         font-weight: bold;
         color: #FFFFFF;
-        margin-bottom: 2px;
+        margin-bottom: 4px;
     }
     .stop-address {
         font-size: 14px;
-        color: #A0A0A0;
+        color: #E2E8F0;
         margin-bottom: 6px;
     }
     .stop-meta {
@@ -72,11 +81,19 @@ st.markdown("""
         font-weight: 600;
     }
 
+    /* Alert / Box Info con alto contrasto */
+    .stAlert {
+        background-color: #1E293B !important;
+        color: #F8FAFC !important;
+        border: 1px solid #334155 !important;
+        border-radius: 10px !important;
+    }
+
     /* Modifica stile expander */
     div[data-testid="stExpander"] {
         background-color: #1E1E1E !important;
         border-radius: 10px !important;
-        border: 1px solid #2A2A2A !important;
+        border: 1px solid #334155 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -118,33 +135,27 @@ if 'pagina_attiva' not in st.session_state:
     st.session_state.pagina_attiva = "giro"
 
 # ==========================================
-# SWITCHER PULSANTI IN ALTO (MOBILE READY)
+# SWITCHER PULSANTI IN ALTO (AFFIANCATI)
 # ==========================================
 col_sw1, col_sw2 = st.columns(2)
 
 with col_sw1:
-    if st.session_state.pagina_attiva == "giro":
-        if st.button("📍 GIRO DEL GIORNO", use_container_width=True, key="btn_giro"):
-            pass
-    else:
-        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-        if st.button("📍 GIRO DEL GIORNO", use_container_width=True, key="btn_giro"):
-            st.session_state.pagina_attiva = "giro"
-            st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
+    css_class = "btn-active" if st.session_state.pagina_attiva == "giro" else "btn-inactive"
+    st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
+    if st.button("📍 GIRO DEL GIORNO", use_container_width=True, key="btn_giro"):
+        st.session_state.pagina_attiva = "giro"
+        st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
 with col_sw2:
-    if st.session_state.pagina_attiva == "db":
-        if st.button("📁 DATABASE CLIENTI", use_container_width=True, key="btn_db"):
-            pass
-    else:
-        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-        if st.button("📁 DATABASE CLIENTI", use_container_width=True, key="btn_db"):
-            st.session_state.pagina_attiva = "db"
-            st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
+    css_class = "btn-active" if st.session_state.pagina_attiva == "db" else "btn-inactive"
+    st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
+    if st.button("📁 DATABASE CLIENTI", use_container_width=True, key="btn_db"):
+        st.session_state.pagina_attiva = "db"
+        st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
-st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
+st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
 
 # ==========================================
 # SCHERMATA 1: GIRO CONSEGNE
@@ -207,7 +218,7 @@ if st.session_state.pagina_attiva == "giro":
 
         st.markdown(f'''
             <a href="{maps_url}" target="_blank" style="text-decoration:none;">
-                <button style="width:100%; background-color:#2563EB; color:white; border:none; border-radius:25px; height:50px; font-weight:bold; font-size:16px; box-shadow: 0 4px 10px rgba(37, 99, 235, 0.4);">
+                <button style="width:100%; background-color:#2563EB; color:white; border:none; border-radius:25px; height:52px; font-weight:bold; font-size:16px; box-shadow: 0 4px 10px rgba(37, 99, 235, 0.4);">
                     🗺️ AVVIA PERCORSO COMPLETO
                 </button>
             </a>
@@ -261,7 +272,7 @@ elif st.session_state.pagina_attiva == "db":
                 agg = agg[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                 st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, agg], ignore_index=True)
                 st.session_state.giro_corrente = st.session_state.giro_corrente.sort_values(by="POSIZIONE").reset_index(drop=True)
-                st.success("Aggiunti al giro! Passaggio automatico al giro...")
+                st.success("Aggiunti al giro! Passaggio automatico...")
                 st.session_state.pagina_attiva = "giro"
                 st.rerun()
             else:
