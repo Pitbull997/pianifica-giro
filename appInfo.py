@@ -63,7 +63,8 @@ st.markdown(f"""
         border-left: 5px solid #2563EB;
         padding: 12px 14px;
         border-radius: 10px;
-        margin-top: 10px;
+        margin-top: 5px;
+        margin-bottom: 5px;
         border-top: 1px solid #334155;
         border-right: 1px solid #334155;
         border-bottom: 1px solid #334155;
@@ -72,12 +73,6 @@ st.markdown(f"""
     .stop-title {{ font-size: 17px; font-weight: bold; color: #FFFFFF; margin-bottom: 4px; }}
     .stop-address {{ font-size: 14px; color: #E2E8F0; margin-bottom: 6px; }}
     .stop-meta {{ font-size: 13px; color: #60A5FA; font-weight: 600; }}
-
-    div[data-testid="stExpander"] {{
-        background-color: rgba(30, 41, 59, 0.9) !important;
-        border-radius: 10px !important;
-        border: 1px solid #334155 !important;
-    }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -228,7 +223,7 @@ if st.session_state.pagina_attiva == "inserisci":
         st.warning("Database clienti vuoto.")
 
 # ==========================================
-# 2. SCHERMATA: MAPS / GIRO ATTIVO + MODIFICA RAPIDA
+# 2. SCHERMATA: MAPS / GIRO ATTIVO CON TENDINA RAPIDA PER OGNI FERMATA
 # ==========================================
 elif st.session_state.pagina_attiva == "maps":
     st.subheader("🗺️ Giro Consegne Attivo")
@@ -243,20 +238,36 @@ elif st.session_state.pagina_attiva == "maps":
 
         st.markdown("---")
 
-        # RIQUADRO PER SPOSTARE / INVERTIRE LE FERMATE DIRETTAMENTE QUI
-        with st.expander("⚙️ Modifica ordine fermate (Sposta o Inverti)"):
-            num_fermate = len(st.session_state.giro_corrente)
-            lista_nomi_fermate = [f"{i+1}. {row['CLIENTE']}" for i, row in st.session_state.giro_corrente.iterrows()]
+        # Mostra ogni fermata con il suo selettore rapido di posizione integrato di fianco
+        for idx in range(tot_clienti):
+            row = st.session_state.giro_corrente.iloc[idx]
             
-            col_s1, col_s2, col_s3 = st.columns([2, 2, 1])
-            with col_s1:
-                ferm_da_spostare = st.selectbox("Sposta fermata:", options=range(num_fermate), format_func=lambda x: lista_nomi_fermate[x])
-            with col_s2:
-                nuova_pos = st.selectbox("Alla posizione:", options=range(1, num_fermate + 1), index=0)
-            with col_s3:
-                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-                if st.button("Sposta", use_container_width=True):
-                    idx_attuale = ferm_da_spostare
+            # Card grafica della fermata
+            st.markdown(f"""
+            <div class="stop-card">
+                <div class="stop-title">{idx + 1}. {row['CLIENTE']}</div>
+                <div class="stop-address">📍 {row['VIA']}, {row['COMUNE']}</div>
+                <div class="stop-meta">🕒 Ora: {row['ORA']} | 📦 Q.tà: {row['Q.ta']} pz</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Riga con il link di navigazione e il menu a tendina per spostare la posizione al volo
+            col_nav_singola, col_tendina = st.columns([2, 1])
+            with col_nav_singola:
+                dest = urllib.parse.quote(f"{row['VIA']}, {row['COMUNE']}")
+                st.markdown(f"[🚘 Naviga singola fermata](https://www.google.com/maps/dir/?api=1&destination={dest})")
+            
+            with col_tendina:
+                nuova_pos = st.selectbox(
+                    "Sposta in pos.",
+                    options=range(1, tot_clienti + 1),
+                    index=idx,
+                    key=f"pos_jump_{idx}",
+                    label_visibility="collapsed"
+                )
+                # Se l'utente seleziona una posizione diversa da quella attuale, sposta subito la fermata
+                if nuova_pos - 1 != idx:
+                    idx_attuale = idx
                     idx_nuovo = nuova_pos - 1
                     
                     righe = st.session_state.giro_corrente.to_dict('records')
@@ -267,30 +278,9 @@ elif st.session_state.pagina_attiva == "maps":
                     df_aggiornato['POSIZIONE'] = range(1, len(df_aggiornato) + 1)
                     st.session_state.giro_corrente = df_aggiornato
                     salva_giro_su_disco(st.session_state.giro_corrente)
-                    st.success("Posizione aggiornata!")
                     st.rerun()
 
-            st.markdown("---")
-            if st.button("🔄 Inverti l'intero giro (Inverti Sequenza)", use_container_width=True):
-                st.session_state.giro_corrente = st.session_state.giro_corrente.iloc[::-1].reset_index(drop=True)
-                st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
-                salva_giro_su_disco(st.session_state.giro_corrente)
-                st.rerun()
-
-        st.markdown("---")
-
-        for idx in range(tot_clienti):
-            row = st.session_state.giro_corrente.iloc[idx]
-            st.markdown(f"""
-            <div class="stop-card">
-                <div class="stop-title">{idx + 1}. {row['CLIENTE']}</div>
-                <div class="stop-address">📍 {row['VIA']}, {row['COMUNE']}</div>
-                <div class="stop-meta">🕒 Ora: {row['ORA']} | 📦 Q.tà: {row['Q.ta']} pz</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            dest = urllib.parse.quote(f"{row['VIA']}, {row['COMUNE']}")
-            st.markdown(f"[🚘 Naviga singola fermata](https://www.google.com/maps/dir/?api=1&destination={dest})")
+            st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 
         st.markdown("---")
         addresses = [f"{r['VIA']}, {r['COMUNE']}" for _, r in st.session_state.giro_corrente.iterrows()]
