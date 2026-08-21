@@ -36,14 +36,6 @@ if 'db_clienti' not in st.session_state:
     st.session_state.db_clienti = pd.DataFrame([
         {"ZONA": 100, "CLIENTE": "IL LATO DOLCE", "COMUNE": "SESTO SAN GIOVANNI", "VIA": "Via Fratelli Di Dio 15", "ORA": "05:30", "QTA_DEFAULT": 5},
         {"ZONA": 100, "CLIENTE": "MOUSSA MEDHAT", "COMUNE": "MILANO", "VIA": "Viale Monza 315", "ORA": "05:30", "QTA_DEFAULT": 5},
-        {"ZONA": 100, "CLIENTE": "FORTUNATA", "COMUNE": "MILANO", "VIA": "Aldi viale monza milano", "ORA": "06:30", "QTA_DEFAULT": 2},
-        {"ZONA": 100, "CLIENTE": "ALPI MULTIMEDICA", "COMUNE": "SESTO SAN GIOVANNI", "VIA": "Via Milanese 300", "ORA": "06:00", "QTA_DEFAULT": 6},
-        {"ZONA": 100, "CLIENTE": "EL PROFESOR", "COMUNE": "SESTO SAN GIOVANNI", "VIA": "Piazza Iv Novembre", "ORA": "06:30", "QTA_DEFAULT": 10},
-        {"ZONA": 100, "CLIENTE": "CeC", "COMUNE": "SESTO SAN GIOVANNI", "VIA": "Piazza Petazzi 20", "ORA": "06:30", "QTA_DEFAULT": 7},
-        {"ZONA": 100, "CLIENTE": "PROJECT HL", "COMUNE": "SESTO SAN GIOVANNI", "VIA": "Viale Italia 555", "ORA": "07:00", "QTA_DEFAULT": 7},
-        {"ZONA": 100, "CLIENTE": "IL FORNO MAGICO manzoni", "COMUNE": "PADERNO DUGNANO", "VIA": "Via Monte Sabotino, 34", "ORA": "01:00", "QTA_DEFAULT": 9},
-        {"ZONA": 200, "CLIENTE": "PEQUINI BALLKIZE", "COMUNE": "SESTO SAN GIOVANNI", "VIA": "Via Fogagnolo 165", "ORA": "06:30", "QTA_DEFAULT": 0},
-        {"ZONA": 200, "CLIENTE": "BAR L'ARPA", "COMUNE": "SESTO SAN GIOVANNI", "VIA": "Via Fogagnolo 123", "ORA": "06:30", "QTA_DEFAULT": 0},
     ])
 
 # Inizializzazione Giro Corrente
@@ -129,7 +121,30 @@ if page == "Pianificazione Giro":
 elif page == "Database Clienti":
     st.markdown("<div class='main-header'>DATABASE CLIENTI ANAGRAFICA</div>", unsafe_allow_html=True)
 
-    st.subheader("➕ Aggiungi Nuovo Cliente nel Database")
+    # SEZIONE CARICAMENTO FILE EXCEL / CSV
+    st.subheader("📤 Carica Database da File (Excel / CSV)")
+    uploaded_file = st.file_uploader("Seleziona un file Excel (.xlsx) o CSV con l'anagrafica dei clienti", type=["xlsx", "csv"])
+    
+    if uploaded_file is not None:
+        try:
+            if uploaded_file.name.endswith('.csv'):
+                df_caricato = pd.read_csv(uploaded_file)
+            else:
+                df_caricato = pd.read_excel(uploaded_file)
+            
+            # Verifica colonne minime
+            colonne_richieste = {'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'}
+            if colonne_richieste.issubset(df_caricato.columns):
+                st.session_state.db_clienti = df_caricato
+                st.success("Database aggiornato con successo dal file!")
+            else:
+                st.error(f"Il file caricato deve contenere esattamente queste colonne: {', '.join(colonne_richieste)}")
+        except Exception as e:
+            st.error(f"Errore nel caricamento del file: {e}")
+
+    st.markdown("---")
+
+    st.subheader("➕ Aggiungi Nuovo Cliente Singolo")
     with st.form("nuovo_cliente_form"):
         col_f1, col_f2, col_f3 = st.columns(3)
         zona = col_f1.number_input("Zona", value=100)
