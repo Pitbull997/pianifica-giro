@@ -117,6 +117,15 @@ if page == "Pianificazione Giro":
                     st.session_state.giro_corrente = df.reset_index(drop=True)
                     st.rerun()
 
+        st.markdown("---")
+        st.subheader("📍 Navigazione Singolo Cliente")
+        cliente_nav = st.selectbox("Seleziona cliente verso cui navigare:", options=st.session_state.giro_corrente['CLIENTE'].tolist(), key="sel_nav")
+        if cliente_nav:
+            row_nav = st.session_state.giro_corrente[st.session_state.giro_corrente['CLIENTE'] == cliente_nav].iloc[0]
+            dest_address = urllib.parse.quote(f"{row_nav['VIA']}, {row_nav['COMUNE']}")
+            nav_url = f"https://www.google.com/maps/dir/?api=1&destination={dest_address}"
+            st.markdown(f"[🚘 **AVVIA NAVIGATORE VERSO {row_nav['CLIENTE']}**]({nav_url})")
+
     else:
         st.info("Il giro è attualmente vuoto. Vai nel 'Database Clienti' per selezionare ed aggiungere i clienti al giro.")
 
@@ -138,7 +147,7 @@ if page == "Pianificazione Giro":
                 st.rerun()
 
     with col3:
-        if st.button("MAPS"):
+        if st.button("MAPS (Percorso Completo)"):
             if not st.session_state.giro_corrente.empty:
                 addresses = [f"{row['VIA']}, {row['COMUNE']}" for _, row in st.session_state.giro_corrente.iterrows()]
                 if len(addresses) == 1:
@@ -148,7 +157,7 @@ if page == "Pianificazione Giro":
                     destination = urllib.parse.quote(addresses[-1])
                     waypoints = "|".join([urllib.parse.quote(addr) for addr in addresses[1:-1]])
                     maps_url = f"https://www.google.com/maps/dir/?api=1&origin={origin}&destination={destination}&waypoints={waypoints}"
-                st.markdown(f"[👉 Clicca qui per aprire il percorso su Google Maps]({maps_url})", unsafe_allow_html=True)
+                st.markdown(f"[👉 Apri Percorso su Google Maps]({maps_url})", unsafe_allow_html=True)
 
     with col4:
         if st.button("🗑️ CANCELLA GIRO"):
@@ -225,24 +234,51 @@ elif page == "Database Clienti":
     st.session_state.db_clienti = edited_db
 
     st.markdown("---")
-    st.subheader("🚚 Aggiungi Clienti Selezionati al Giro Consegne")
+    st.subheader("🚚 Aggiungi Clienti al Giro Consegne (Ottimizzato per Mobile)")
     
-    lista_clienti = st.session_state.db_clienti['CLIENTE'].dropna().tolist()
+    # Ricerca per filtro rapido da smartphone
+    filtro_ricerca = st.text_input("🔍 Cerca cliente o comune per filtrare la lista:", "")
+
+    df_filtrato = st.session_state.db_clienti.copy()
+    if filtro_ricerca:
+        df_filtrato = df_filtrato[
+            df_filtrato['CLIENTE'].str.contains(filtro_ricerca, case=False, na=False) |
+            df_filtrato['COMUNE'].str.contains(filtro_ricerca, case=False, na=False)
+        ]
+
+    lista_clienti = df_filtrato['CLIENTE'].dropna().tolist()
+
+    col_btn1, col_btn2 = st.columns([1, 1])
     
+    # Inizializza o gestisce la selezione nel session state
+    if 'clienti_selezionati_m' not in st.session_state:
+        st.session_state.clienti_selezionati_m = []
+
+    with col_btn1:
+        if st.button("✅ SELEZIONA TUTTI QUELLI MOSTRATI"):
+            st.session_state.clienti_selezionati_m = list(set(st.session_state.clienti_selezionati_m + lista_clienti))
+
+    with col_btn2:
+        if st.button("❌ DESELEZIONA TUTTI"):
+            st.session_state.clienti_selezionati_m = []
+
     clienti_selezionati = st.multiselect(
-        "Seleziona i clienti da inserire nel giro del giorno:",
-        options=lista_clienti
+        "Seleziona o digita il nome del cliente:",
+        options=st.session_state.db_clienti['CLIENTE'].dropna().tolist(),
+        default=st.session_state.clienti_selezionati_m,
+        key="multiselect_mobile"
     )
-    
+
     if st.button("➕ AGGIUNGI SELEZIONATI AL GIRO"):
         if clienti_selezionati:
             clienti_da_agg = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
             clienti_da_agg['Q.ta'] = clienti_da_agg['QTA_DEFAULT'].astype(int)
             clienti_da_agg = clienti_da_agg[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
             
-            # Unisce e ordina dal più piccolo al più grande in base alla POSIZIONE
             st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, clienti_da_agg], ignore_index=True)
             st.session_state.giro_corrente = st.session_state.giro_corrente.sort_values(by="POSIZIONE").reset_index(drop=True)
+            st.session_state.clienti_selezionati_m = []
+            st.success("Clienti aggiunti con successo!")
             st.rerun()
         else:
             st.warning("Seleziona almeno un cliente prima di premere il pulsante.")
