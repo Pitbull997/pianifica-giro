@@ -11,21 +11,39 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Styling CSS per Stile Nativo/Dark + Switcher in alto
+# CSS Avanzato per Fix Colori Pulsanti e Visibilità Testo
 st.markdown("""
 <style>
     /* Sfondo generale scuro */
     .stApp {
-        background-color: #121212;
-        color: #FFFFFF;
+        background-color: #121212 !important;
+        color: #FFFFFF !important;
     }
 
-    /* Stile per i pulsanti di switch schermata */
-    div[data-testid="stHorizontalBlock"] button {
+    /* Stile forzato per tutti i bottoni di Streamlit */
+    div.stButton > button {
+        background-color: #2563EB !important;
+        color: #FFFFFF !important;
+        border: 1px solid #3B82F6 !important;
         border-radius: 12px !important;
-        height: 48px !important;
+        height: 50px !important;
         font-weight: bold !important;
         font-size: 15px !important;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3) !important;
+    }
+
+    /* Hover e focus sui bottoni */
+    div.stButton > button:hover, div.stButton > button:focus, div.stButton > button:active {
+        background-color: #1D4ED8 !important;
+        color: #FFFFFF !important;
+        border-color: #60A5FA !important;
+    }
+
+    /* Stile per pulsante non attivo nello switcher */
+    .btn-inactive button {
+        background-color: #1E293B !important;
+        color: #94A3B8 !important;
+        border: 1px solid #334155 !important;
     }
 
     /* Card fermata stile Timeline */
@@ -56,9 +74,9 @@ st.markdown("""
 
     /* Modifica stile expander */
     div[data-testid="stExpander"] {
-        background-color: #1E1E1E;
-        border-radius: 10px;
-        border: 1px solid #2A2A2A;
+        background-color: #1E1E1E !important;
+        border-radius: 10px !important;
+        border: 1px solid #2A2A2A !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -105,16 +123,26 @@ if 'pagina_attiva' not in st.session_state:
 col_sw1, col_sw2 = st.columns(2)
 
 with col_sw1:
-    btn_giro_color = "primary" if st.session_state.pagina_attiva == "giro" else "secondary"
-    if st.button("📍 GIRO DEL GIORNO", type=btn_giro_color, use_container_width=True):
-        st.session_state.pagina_attiva = "giro"
-        st.rerun()
+    if st.session_state.pagina_attiva == "giro":
+        if st.button("📍 GIRO DEL GIORNO", use_container_width=True, key="btn_giro"):
+            pass
+    else:
+        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
+        if st.button("📍 GIRO DEL GIORNO", use_container_width=True, key="btn_giro"):
+            st.session_state.pagina_attiva = "giro"
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
 with col_sw2:
-    btn_db_color = "primary" if st.session_state.pagina_attiva == "db" else "secondary"
-    if st.button("📁 DATABASE CLIENTI", type=btn_db_color, use_container_width=True):
-        st.session_state.pagina_attiva = "db"
-        st.rerun()
+    if st.session_state.pagina_attiva == "db":
+        if st.button("📁 DATABASE CLIENTI", use_container_width=True, key="btn_db"):
+            pass
+    else:
+        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
+        if st.button("📁 DATABASE CLIENTI", use_container_width=True, key="btn_db"):
+            st.session_state.pagina_attiva = "db"
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 
@@ -133,8 +161,6 @@ if st.session_state.pagina_attiva == "giro":
     st.markdown("---")
 
     if not st.session_state.giro_corrente.empty:
-        
-        # Modalità di visualizzazione
         vista = st.radio("Modalità vista:", ["📱 Lista Schede (Mobile)", "✏️ Tabella Modificabile"], horizontal=True)
 
         if vista == "📱 Lista Schede (Mobile)":
@@ -170,7 +196,6 @@ if st.session_state.pagina_attiva == "giro":
 
         st.markdown("---")
 
-        # Bottone mappa completa
         addresses = [f"{r['VIA']}, {r['COMUNE']}" for _, r in st.session_state.giro_corrente.iterrows()]
         if len(addresses) == 1:
             maps_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(addresses[0])}"
@@ -229,7 +254,7 @@ elif st.session_state.pagina_attiva == "db":
             default=st.session_state.clienti_selezionati_m
         )
         
-        if st.button("➕ AGGIUNGI SELEZIONATI AL GIRO", type="primary", use_container_width=True):
+        if st.button("➕ AGGIUNGI SELEZIONATI AL GIRO", use_container_width=True):
             if clienti_selezionati:
                 agg = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
                 agg['Q.ta'] = agg['QTA_DEFAULT'].astype(int)
