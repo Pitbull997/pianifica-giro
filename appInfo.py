@@ -60,7 +60,7 @@ st.markdown("""
         font-size: 15px !important;
     }
 
-    /* Pulsanti Frecce Su/Giù */
+    /* Pulsanti Frecce Su/Giù per Tabella */
     .btn-arrow div[data-testid="stButton"] > button {
         background-color: #1E293B !important;
         color: #38BDF8 !important;
@@ -68,6 +68,45 @@ st.markdown("""
         height: 42px !important;
         font-size: 18px !important;
         padding: 0px !important;
+    }
+
+    /* FIX MENU A TENDINA (SELECTBOX) SU MOBILE */
+    div[data-baseweb="select"] {
+        background-color: #1E293B !important;
+        border-radius: 8px !important;
+    }
+
+    div[data-baseweb="select"] > div {
+        background-color: #1E293B !important;
+        color: #FFFFFF !important;
+        border: 1px solid #3B82F6 !important;
+        border-radius: 8px !important;
+    }
+
+    div[data-baseweb="select"] div[role="button"],
+    div[data-baseweb="select"] span {
+        color: #FFFFFF !important;
+        font-weight: bold !important;
+    }
+
+    div[data-baseweb="select"] svg {
+        fill: #60A5FA !important;
+    }
+
+    ul[data-baseweb="menu"] {
+        background-color: #1E293B !important;
+        border: 1px solid #3B82F6 !important;
+    }
+
+    li[data-baseweb="option"] {
+        background-color: #1E293B !important;
+        color: #FFFFFF !important;
+    }
+
+    li[data-baseweb="option"]:hover,
+    li[data-baseweb="option"][aria-selected="true"] {
+        background-color: #2563EB !important;
+        color: #FFFFFF !important;
     }
 
     /* Card fermata stile Timeline */
@@ -84,6 +123,12 @@ st.markdown("""
     .stop-title { font-size: 17px; font-weight: bold; color: #FFFFFF; margin-bottom: 4px; }
     .stop-address { font-size: 14px; color: #E2E8F0; margin-bottom: 6px; }
     .stop-meta { font-size: 13px; color: #60A5FA; font-weight: 600; }
+
+    .stSelectbox label {
+        color: #93C5FD !important;
+        font-size: 13px !important;
+        font-weight: bold !important;
+    }
 
     div[data-testid="stExpander"] {
         background-color: #1E1E1E !important;
@@ -119,12 +164,11 @@ def carica_db_predefinito():
                 st.error(f"Errore caricamento {file_path}: {e}")
     return pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'])
 
-# Funzione per scambiare due posizioni nel DataFrame
+# Funzione per scambiare due posizioni nel DataFrame (per la tabella con frecce)
 def sposta_riga(df, idx, direzione):
     df_temp = df.copy()
     target_idx = idx - 1 if direzione == "up" else idx + 1
     if 0 <= target_idx < len(df_temp):
-        # Swap delle righe
         df_temp.iloc[idx], df_temp.iloc[target_idx] = df_temp.iloc[target_idx].copy(), df_temp.iloc[idx].copy()
         df_temp['POSIZIONE'] = range(1, len(df_temp) + 1)
         st.session_state.giro_corrente = df_temp.reset_index(drop=True)
@@ -181,6 +225,8 @@ if st.session_state.pagina_attiva == "giro":
         vista = st.radio("Modalità vista:", ["📱 Lista Schede (Mobile)", "✏️ Tabella Modificabile"], horizontal=True)
 
         if vista == "📱 Lista Schede (Mobile)":
+            st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
+            
             for idx in range(tot_clienti):
                 row = st.session_state.giro_corrente.iloc[idx]
                 
@@ -193,27 +239,37 @@ if st.session_state.pagina_attiva == "giro":
                 </div>
                 """, unsafe_allow_html=True)
 
-                # Controlli con Frecce Su/Giù e Navigazione
-                col_c1, col_c2, col_c3 = st.columns([1, 1, 2])
-                
+                # Controlli sottostanti: Menu a tendina per selezione diretta della posizione
+                col_c1, col_c2 = st.columns([1, 1])
                 with col_c1:
-                    st.markdown('<div class="btn-arrow">', unsafe_allow_html=True)
-                    if st.button("⬆️ Su", key=f"btn_up_{idx}", use_container_width=True, disabled=(idx == 0)):
-                        sposta_riga(st.session_state.giro_corrente, idx, "up")
-                    st.markdown('</div>', unsafe_allow_html=True)
+                    nuova_pos = st.selectbox(
+                        "Sposta a pos:",
+                        options=[i for i in range(1, tot_clienti + 1)],
+                        index=idx,
+                        key=f"select_pos_{row['CLIENTE']}_{idx}"
+                    )
+                    
+                    if nuova_pos - 1 != idx:
+                        df_temp = st.session_state.giro_corrente.copy()
+                        riga = df_temp.iloc[idx]
+                        
+                        df_temp = df_temp.drop(df_temp.index[idx])
+                        top = df_temp.iloc[:nuova_pos - 1]
+                        bottom = df_temp.iloc[nuova_pos - 1:]
+                        
+                        df_nuovo = pd.concat([top, pd.DataFrame([riga]), bottom], ignore_index=True)
+                        df_nuovo['POSIZIONE'] = [str(i) for i in range(1, len(df_nuovo) + 1)]
+                        
+                        st.session_state.giro_corrente = df_nuovo
+                        st.rerun()
 
                 with col_c2:
-                    st.markdown('<div class="btn-arrow">', unsafe_allow_html=True)
-                    if st.button("⬇️ Giù", key=f"btn_dn_{idx}", use_container_width=True, disabled=(idx == tot_clienti - 1)):
-                        sposta_riga(st.session_state.giro_corrente, idx, "down")
-                    st.markdown('</div>', unsafe_allow_html=True)
-
-                with col_c3:
+                    st.write("")
                     dest = urllib.parse.quote(f"{row['VIA']}, {row['COMUNE']}")
-                    st.markdown(f"[🚘 **NAVIGA**](https://www.google.com/maps/dir/?api=1&destination={dest})")
+                    st.markdown(f"[🚘 **NAVIGA ORA**](https://www.google.com/maps/dir/?api=1&destination={dest})")
 
         else:
-            # Vista Tabella con Frecce
+            # Vista Tabella con Frecce ⬆️ e ⬇️
             for idx in range(tot_clienti):
                 row = st.session_state.giro_corrente.iloc[idx]
                 col_t1, col_t2, col_t3, col_t4, col_t5 = st.columns([0.6, 0.6, 3, 2, 1])
@@ -237,7 +293,6 @@ if st.session_state.pagina_attiva == "giro":
                     st.caption(f"{row['VIA']}, {row['COMUNE']}")
 
                 with col_t5:
-                    # Modifica rapida Quantità
                     nuova_qta = st.number_input("Q.tà", min_value=0, value=int(row['Q.ta']), key=f"qta_inp_{idx}", label_visibility="collapsed")
                     if nuova_qta != int(row['Q.ta']):
                         st.session_state.giro_corrente.at[idx, 'Q.ta'] = nuova_qta
