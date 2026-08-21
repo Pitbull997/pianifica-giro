@@ -59,13 +59,14 @@ st.markdown("""
     .stop-card {
         background-color: #1E1E1E;
         border-left: 5px solid #2563EB;
-        padding: 14px 16px;
-        border-radius: 10px;
-        margin-bottom: 8px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.4);
+        padding: 12px 14px;
+        border-radius: 10px 10px 0 0;
+        margin-top: 10px;
+        border-top: 1px solid #334155;
+        border-right: 1px solid #334155;
     }
     .stop-title {
-        font-size: 18px;
+        font-size: 17px;
         font-weight: bold;
         color: #FFFFFF;
         margin-bottom: 4px;
@@ -81,12 +82,15 @@ st.markdown("""
         font-weight: 600;
     }
 
-    /* Alert / Box Info con alto contrasto */
-    .stAlert {
-        background-color: #1E293B !important;
-        color: #F8FAFC !important;
-        border: 1px solid #334155 !important;
-        border-radius: 10px !important;
+    /* Box inferiore controllo posizione */
+    .stop-control-box {
+        background-color: #161E2E;
+        border-left: 5px solid #2563EB;
+        border-bottom: 1px solid #334155;
+        border-right: 1px solid #334155;
+        border-radius: 0 0 10px 10px;
+        padding: 8px 12px;
+        margin-bottom: 12px;
     }
 
     /* Modifica stile expander */
@@ -135,7 +139,7 @@ if 'pagina_attiva' not in st.session_state:
     st.session_state.pagina_attiva = "giro"
 
 # ==========================================
-# SWITCHER PULSANTI IN ALTO (AFFIANCATI)
+# SWITCHER PULSANTI IN ALTO
 # ==========================================
 col_sw1, col_sw2 = st.columns(2)
 
@@ -175,24 +179,44 @@ if st.session_state.pagina_attiva == "giro":
         vista = st.radio("Modalità vista:", ["📱 Lista Schede (Mobile)", "✏️ Tabella Modificabile"], horizontal=True)
 
         if vista == "📱 Lista Schede (Mobile)":
+            # Assegna una numerazione sequenziale se manca
+            st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
+            
             for idx, row in st.session_state.giro_corrente.iterrows():
+                # Scheda dati cliente
                 st.markdown(f"""
                 <div class="stop-card">
-                    <div class="stop-title">{idx + 1}. {row['CLIENTE']}</div>
+                    <div class="stop-title">{int(row['POSIZIONE'])}. {row['CLIENTE']}</div>
                     <div class="stop-address">📍 {row['VIA']}, {row['COMUNE']}</div>
                     <div class="stop-meta">🕒 Ora: {row['ORA']} | 📦 Q.tà: {row['Q.ta']} pz</div>
                 </div>
                 """, unsafe_allow_html=True)
-                
-                dest = urllib.parse.quote(f"{row['VIA']}, {row['COMUNE']}")
-                st.markdown(f"[🚘 **Naviga verso Tappa {idx + 1}**](https://www.google.com/maps/dir/?api=1&destination={dest})")
-                st.write("")
+
+                # Controlli rapidi sotto la scheda (Cambio Ordine + Naviga)
+                col_c1, col_c2 = st.columns([1, 1])
+                with col_c1:
+                    nuova_pos = st.selectbox(
+                        "Sposta alla pos:",
+                        options=list(range(1, tot_clienti + 1)),
+                        index=int(row['POSIZIONE']) - 1,
+                        key=f"pos_{idx}"
+                    )
+                    # Se l'utente cambia il numero della posizione
+                    if nuova_pos != int(row['POSIZIONE']):
+                        st.session_state.giro_corrente.at[idx, 'POSIZIONE'] = nuova_pos - 0.5
+                        st.session_state.giro_corrente = st.session_state.giro_corrente.sort_values(by="POSIZIONE").reset_index(drop=True)
+                        st.rerun()
+
+                with col_c2:
+                    st.write("") # Spaziatore
+                    dest = urllib.parse.quote(f"{row['VIA']}, {row['COMUNE']}")
+                    st.markdown(f"[🚘 **NAVIGA ORA**](https://www.google.com/maps/dir/?api=1&destination={dest})")
 
         else:
             edited_df = st.data_editor(
                 st.session_state.giro_corrente,
                 column_config={
-                    "POSIZIONE": st.column_config.NumberColumn("Pos.", disabled=True, format="%d"),
+                    "POSIZIONE": st.column_config.NumberColumn("Pos.", min_value=1, format="%d"),
                     "Q.ta": st.column_config.NumberColumn("Q.tà", min_value=0, step=1, format="%d"),
                     "CLIENTE": st.column_config.TextColumn("Cliente", disabled=True),
                     "COMUNE": st.column_config.TextColumn("Comune", disabled=True),
@@ -203,7 +227,8 @@ if st.session_state.pagina_attiva == "giro":
                 use_container_width=True,
                 key="giro_editor_switch"
             )
-            st.session_state.giro_corrente = edited_df
+            # Riordina in base alla posizione inserita a mano
+            st.session_state.giro_corrente = edited_df.sort_values(by="POSIZIONE").reset_index(drop=True)
 
         st.markdown("---")
 
