@@ -223,7 +223,7 @@ if st.session_state.pagina_attiva == "inserisci":
         st.warning("Database clienti vuoto.")
 
 # ==========================================
-# 2. SCHERMATA: MAPS / GIRO ATTIVO CON TENDINA A CAMBIO IMMEDIATO
+# 2. SCHERMATA: MAPS / GIRO ATTIVO CON TENDINA E PULSANTE STABILE
 # ==========================================
 elif st.session_state.pagina_attiva == "maps":
     st.subheader("🗺️ Giro Consegne Attivo")
@@ -241,7 +241,7 @@ elif st.session_state.pagina_attiva == "maps":
         for idx in range(tot_clienti):
             row = st.session_state.giro_corrente.iloc[idx]
             
-            # Card grafica della fermata con il numero progressivo corretto
+            # Card grafica della fermata con il numero progressivo corretto e aggiornato
             st.markdown(f"""
             <div class="stop-card">
                 <div class="stop-title">{idx + 1}. {row['CLIENTE']}</div>
@@ -250,7 +250,8 @@ elif st.session_state.pagina_attiva == "maps":
             </div>
             """, unsafe_allow_html=True)
             
-            col_nav_singola, col_tendina = st.columns([2, 1])
+            # Riga con link navigazione, menu a tendina e pulsante "Sposta" dedicato
+            col_nav_singola, col_tendina, col_btn_sposta = st.columns([2, 1, 1])
             
             with col_nav_singola:
                 dest = urllib.parse.quote(f"{row['VIA']}, {row['COMUNE']}")
@@ -264,21 +265,22 @@ elif st.session_state.pagina_attiva == "maps":
                     key=f"pos_jump_{idx}",
                     label_visibility="collapsed"
                 )
-                
-                # Se l'utente cambia il valore nella tendina, sposta subito e rinumera in automatico
-                if nuova_pos - 1 != idx:
+            
+            with col_btn_sposta:
+                if st.button("Sposta", key=f"btn_sposta_{idx}", use_container_width=True):
                     idx_attuale = idx
                     idx_nuovo = nuova_pos - 1
                     
-                    righe = st.session_state.giro_corrente.to_dict('records')
-                    elemento_spostato = righe.pop(idx_attuale)
-                    righe.insert(idx_nuovo, elemento_spostato)
-                    
-                    df_aggiornato = pd.DataFrame(righe)
-                    df_aggiornato['POSIZIONE'] = range(1, len(df_aggiornato) + 1)
-                    st.session_state.giro_corrente = df_aggiornato
-                    salva_giro_su_disco(st.session_state.giro_corrente)
-                    st.rerun()
+                    if idx_attuale != idx_nuovo:
+                        righe = st.session_state.giro_corrente.to_dict('records')
+                        elemento_spostato = righe.pop(idx_attuale)
+                        righe.insert(idx_nuovo, elemento_spostato)
+                        
+                        df_aggiornato = pd.DataFrame(righe)
+                        df_aggiornato['POSIZIONE'] = range(1, len(df_aggiornato) + 1)
+                        st.session_state.giro_corrente = df_aggiornato
+                        salva_giro_su_disco(st.session_state.giro_corrente)
+                        st.rerun()
 
             st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
 
