@@ -57,7 +57,6 @@ st.markdown(f"""
         -webkit-appearance: none !important;
     }}
 
-    /* Card fermata provvisoria o definitiva */
     .stop-card {{
         background: rgba(22, 30, 46, 0.9);
         backdrop-filter: blur(8px);
@@ -132,7 +131,6 @@ if 'db_clienti' not in st.session_state or st.session_state.db_clienti.empty:
 if 'giro_corrente' not in st.session_state:
     st.session_state.giro_corrente = carica_giro_da_disco()
 
-# Lista temporanea delle fermate che stai componendo prima di cliccare "Crea Giro"
 if 'bozza_inserimenti' not in st.session_state:
     st.session_state.bozza_inserimenti = []
 
@@ -140,7 +138,7 @@ if 'pagina_attiva' not in st.session_state:
     st.session_state.pagina_attiva = "inserisci"
 
 # ==========================================
-# BARRA DI NAVIGAZIONE IN BASSO (Stile App)
+# BARRA DI NAVIGAZIONE IN BASSO
 # ==========================================
 st.markdown("<div style='margin-bottom: 20px;'></div>", unsafe_allow_html=True)
 
@@ -172,12 +170,10 @@ if st.session_state.pagina_attiva == "inserisci":
     st.subheader("🔍 Aggiungi Fermata al Giro")
     
     if not st.session_state.db_clienti.empty:
-        # Menu con ricerca testuale rapida (digitando le lettere)
         lista_clienti = st.session_state.db_clienti['CLIENTE'].tolist()
         cliente_scelto = st.selectbox("Digita o cerca il cliente:", options=lista_clienti)
         
         if cliente_scelto:
-            # Recupera dati predefiniti del cliente selezionato
             dati_cli = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'] == cliente_scelto].iloc[0]
             
             st.markdown(f"""
@@ -187,7 +183,6 @@ if st.session_state.pagina_attiva == "inserisci":
             </div>
             """, unsafe_allow_html=True)
             
-            # Casella per inserire i colli/pezzi richiesti per questa consegna
             qta_inserita = st.number_input("Quanti colli / pezzi?", min_value=1, value=int(dati_cli['QTA_DEFAULT']) if dati_cli['QTA_DEFAULT'] > 0 else 1)
             
             if st.button("➕ Conferma e Aggiungi alla Bozza", use_container_width=True):
@@ -207,15 +202,21 @@ if st.session_state.pagina_attiva == "inserisci":
         
         if st.session_state.bozza_inserimenti:
             for i, f in enumerate(st.session_state.bozza_inserimenti):
-                st.markdown(f"- **{f['CLIENTE']}** ({f['Q.ta']} colli) - {f['VIA']}, {f['COMUNE']}")
+                col_i1, col_i2 = st.columns([4, 1])
+                with col_i1:
+                    st.markdown(f"**{i+1}. {f['CLIENTE']}** ({f['Q.ta']} colli)  \n<span style='font-size:12px; color:#94A3B8;'>{f['VIA']}, {f['COMUNE']}</span>", unsafe_allow_html=True)
+                with col_i2:
+                    if st.button("❌ Rimuovi", key=f"del_bozza_{i}", use_container_width=True):
+                        st.session_state.bozza_inserimenti.pop(i)
+                        st.rerun()
+                st.markdown("<hr style='margin: 8px 0; border-color: #334155;'>", unsafe_allow_html=True)
             
             if st.button("🚀 CREA GIRO FINALE", use_container_width=True):
-                # Trasforma la bozza nel giro definitivo ordinato
                 df_nuovo_giro = pd.DataFrame(st.session_state.bozza_inserimenti)
                 df_nuovo_giro['POSIZIONE'] = range(1, len(df_nuovo_giro) + 1)
                 st.session_state.giro_corrente = df_nuovo_giro
                 salva_giro_su_disco(st.session_state.giro_corrente)
-                st.session_state.bozza_inserimenti = [] # Svuota la bozza
+                st.session_state.bozza_inserimenti = []
                 st.success("Giro creato e ordinato con successo!")
                 st.session_state.pagina_attiva = "maps"
                 st.rerun()
