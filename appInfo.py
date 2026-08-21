@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import urllib.parse
 import os
+import json
 
 # Configurazione Pagina
 st.set_page_config(
@@ -10,6 +11,8 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+FILE_GIRO_PERSISTENTE = "giro_salvato.json"
 
 # CSS Avanzato - Forzatura Dark Mode & Fix UI Mobile (Android/iOS)
 st.markdown("""
@@ -134,6 +137,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Funzione per pulire formato orario
 def pulisci_orario(valore):
     val_str = str(valore).strip()
     if 'days' in val_str:
@@ -142,6 +146,7 @@ def pulisci_orario(valore):
         return val_str[:5]
     return val_str
 
+# Carica Database iniziale
 def carica_db_predefinito():
     nomi_file_possibili = ["database.xlsx", "database.csv", "database"]
     for file_path in nomi_file_possibili:
@@ -160,7 +165,25 @@ def carica_db_predefinito():
                 st.error(f"Errore caricamento {file_path}: {e}")
     return pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'])
 
-# Funzione per scambiare due posizioni nel DataFrame
+# --- FUNZIONALITÀ SALVATAGGIO / CARICAMENTO PERSISTENTE ---
+def salva_giro_su_disco(df):
+    try:
+        df.to_json(FILE_GIRO_PERSISTENTE, orient="records", date_format="iso")
+    except Exception as e:
+        st.error(f"Errore nel salvataggio del giro: {e}")
+
+def carica_giro_da_disco():
+    if os.path.exists(FILE_GIRO_PERSISTENTE):
+        try:
+            df = pd.read_json(FILE_GIRO_PERSISTENTE, orient="records")
+            if not df.empty:
+                df['POSIZIONE'] = range(1, len(df) + 1)
+                return df
+        except Exception:
+            pass
+    return pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
+
+# Funzione per spostare una riga con le frecce
 def sposta_riga(df, idx, direzione):
     df_temp = df.copy()
     target_idx = idx - 1 if direzione == "up" else idx + 1
@@ -168,6 +191,7 @@ def sposta_riga(df, idx, direzione):
         df_temp.iloc[idx], df_temp.iloc[target_idx] = df_temp.iloc[target_idx].copy(), df_temp.iloc[idx].copy()
         df_temp['POSIZIONE'] = range(1, len(df_temp) + 1)
         st.session_state.giro_corrente = df_temp.reset_index(drop=True)
+        salva_giro_su_disco(st.session_state.giro_corrente)
         st.rerun()
 
 # Inizializzazione sessioni
@@ -175,7 +199,7 @@ if 'db_clienti' not in st.session_state or st.session_state.db_clienti.empty:
     st.session_state.db_clienti = carica_db_predefinito()
 
 if 'giro_corrente' not in st.session_state:
-    st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
+    st.session_state.giro_corrente = carica_giro_da_disco()
 
 if 'pagina_attiva' not in st.session_state:
     st.session_state.pagina_attiva = "giro"
@@ -256,6 +280,7 @@ if st.session_state.pagina_attiva == "giro":
                         df_nuovo['POSIZIONE'] = [str(i) for i in range(1, len(df_nuovo) + 1)]
                         
                         st.session_state.giro_corrente = df_nuovo
+                        salva_giro_su_disco(st.session_state.giro_corrente)
                         st.rerun()
 
                 with col_c2:
@@ -293,6 +318,7 @@ if st.session_state.pagina_attiva == "giro":
                     nuova_qta = st.number_input("Q.tà", min_value=0, value=int(row['Q.ta']), key=f"qta_inp_{idx}", label_visibility="collapsed")
                     if nuova_qta != int(row['Q.ta']):
                         st.session_state.giro_corrente.at[idx, 'Q.ta'] = nuova_qta
+                        salva_giro_su_disco(st.session_state.giro_corrente)
                         st.rerun()
 
                 st.markdown("<hr style='margin: 4px 0; border-color: #262626;'>", unsafe_allow_html=True)
@@ -321,10 +347,12 @@ if st.session_state.pagina_attiva == "giro":
             with col_a1:
                 if st.button("🔄 Inverti Sequenza", use_container_width=True):
                     st.session_state.giro_corrente = st.session_state.giro_corrente.iloc[::-1].reset_index(drop=True)
+                    salva_giro_su_disco(st.session_state.giro_corrente)
                     st.rerun()
             with col_a2:
                 if st.button("🗑️ Svuota Giro", use_container_width=True):
                     st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
+                    salva_giro_su_disco(st.session_state.giro_corrente)
                     st.rerun()
     else:
         st.info("Nessuna fermata nel giro corrente. Clicca in alto su 'DATABASE CLIENTI' per aggiungerne.")
@@ -364,6 +392,7 @@ elif st.session_state.pagina_attiva == "db":
                 agg = agg[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                 st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, agg], ignore_index=True)
                 st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
+                salva_giro_su_disco(st.session_state.giro_corrente)
                 st.success("Aggiunti al giro!")
                 st.session_state.pagina_attiva = "giro"
                 st.rerun()
