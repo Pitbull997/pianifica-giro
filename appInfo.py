@@ -6,8 +6,8 @@ import json
 
 # Configurazione Pagina
 st.set_page_config(
-    page_title="Giro Consegne",
-    page_icon="🚚",
+    page_title="VanGo - Giro Consegne",
+    page_icon="🚐",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -177,7 +177,7 @@ if 'temp_qta' not in st.session_state:
 # ==========================================
 # TITOLO PRINCIPALE IN CIMA
 # ==========================================
-st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 24px; margin-bottom: 20px;'>🚚 PIANIFICAZIONE GIRO</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 26px; margin-bottom: 20px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
 
 # ==========================================
 # SWITCHER PULSANTI IN ALTO
