@@ -356,32 +356,30 @@ else:
         st.subheader("📁 Inserisci Clienti in Sequenza")
         
         if not st.session_state.db_clienti.empty:
-            # Escludiamo i clienti già aggiunti alla sequenza corrente
+            # Funzione di callback eseguita automaticamente appena selezioni un cliente dalla tendina
+            def aggiungi_da_tendina():
+                cli = st.session_state.select_singolo_cliente
+                if cli and cli != "-- Seleziona cliente --" and cli not in st.session_state.clienti_sequenza:
+                    st.session_state.clienti_sequenza.append(cli)
+                    default_val = int(st.session_state.db_clienti.loc[st.session_state.db_clienti['CLIENTE'] == cli, 'QTA_DEFAULT'].values[0])
+                    st.session_state.temp_qta_seq[cli] = default_val
+                # Resettiamo la tendina per il prossimo inserimento
+                st.session_state.select_singolo_cliente = "-- Seleziona cliente --"
+
             clienti_disponibili = [
                 c for c in st.session_state.db_clienti['CLIENTE'].dropna().tolist() 
                 if c not in st.session_state.clienti_sequenza
             ]
             
-            st.markdown("Seleziona i clienti **uno alla volta** dal menu a tendina per aggiungerli alla lista in basso:")
+            st.markdown("Seleziona i clienti **uno alla volta** dal menu a tendina. Si aggiungeranno subito alla lista sotto:")
             
-            col_sel, col_btn_add = st.columns([3, 1])
-            with col_sel:
-                cliente_scelto = st.selectbox(
-                    "Scegli cliente:", 
-                    options=["-- Seleziona cliente --"] + clienti_disponibili,
-                    key="select_singolo_cliente"
-                )
-            
-            with col_btn_add:
-                st.write("") # Spaziatura allineamento
-                st.write("")
-                if st.button("➕ Aggiungi", use_container_width=True):
-                    if cliente_scelto != "-- Seleziona cliente --" and cliente_scelto not in st.session_state.clienti_sequenza:
-                        st.session_state.clienti_sequenza.append(cliente_scelto)
-                        # Impostiamo il default iniziale dei colli
-                        default_val = int(st.session_state.db_clienti.loc[st.session_state.db_clienti['CLIENTE'] == cliente_scelto, 'QTA_DEFAULT'].values[0])
-                        st.session_state.temp_qta_seq[cliente_scelto] = default_val
-                        st.rerun()
+            # Utilizziamo on_change per aggiungere istantaneamente senza dover cliccare un pulsante separato
+            st.selectbox(
+                "Scegli cliente:", 
+                options=["-- Seleziona cliente --"] + clienti_disponibili,
+                key="select_singolo_cliente",
+                on_change=aggiungi_da_tendina
+            )
 
             # Mostriamo la sequenza dei clienti scelti fino a questo momento con i rispettivi campi colli
             if st.session_state.clienti_sequenza:
@@ -424,12 +422,12 @@ else:
                     nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(st.session_state.clienti_sequenza)].copy()
                     
                     # Riordiniamo rigorosamente il dataframe in base all'ordine della lista sequenziale
-                    nuovi_clienti['temp_idx'] = nuovi_clienti['CLIENTE'].map({c: i for i, c in enumerate(st.session_state.clienti_sequenza)})
+                    nuovi_clienti['temp_idx'] = nuevos_clienti_idx = nuovi_clienti['CLIENTE'].map({c: i for i, c in enumerate(st.session_state.clienti_sequenza)}) if 'nuevos_clienti_idx' else nuovi_clienti['CLIENTE'].map({c: i for i, c in enumerate(st.session_state.clienti_sequenza)})
                     nuovi_clienti = nuovi_clienti.sort_values('temp_idx').drop(columns=['temp_idx'])
                     
                     # Assegniamo le quantità inserite
                     nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(st.session_state.temp_qta_seq)
-                    nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
+                    nuovi_clienti = nuv_clienti_cols = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
                     # Accodiamo al giro esistente
                     st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
