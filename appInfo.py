@@ -4,7 +4,6 @@ import urllib.parse
 import os
 import json
 import base64
-import math
 
 # Configurazione Pagina
 st.set_page_config(
@@ -83,6 +82,7 @@ st.markdown("""
     .stop-address { font-size: 14px; color: #E2E8F0; margin-bottom: 6px; }
     .stop-meta { font-size: 13px; color: #60A5FA; font-weight: 600; }
 
+    /* Stili per l'immagine responsive e il pulsante sovrapposto al 90% */
     .hero-container {
         position: relative;
         width: 100%;
@@ -97,7 +97,7 @@ st.markdown("""
     }
     .hero-btn {
         position: absolute;
-        top: 90%;
+        top: 90%; /* Posizionato al 90% dell'altezza dell'immagine */
         left: 50%;
         transform: translate(-50%, -50%);
         background-color: #2563EB !important;
@@ -166,66 +166,7 @@ def carica_giro_da_disco():
             pass
     return pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
 
-# =====================================================================
-# SALTO DI QUALITÀ: Algoritmo di Ottimizzazione a Distanza (Nearest Neighbor)
-# =====================================================================
-def ottimizza_giro_prossimita(df):
-    if df.empty or len(df) <= 1:
-        return df
-    
-    # 1. Raggruppamento preliminare per Zona e Comune per dare una macro-sequenza logica
-    criteri = []
-    if 'ZONA' in df.columns:
-        criteri.append('ZONA')
-    if 'COMUNE' in df.columns:
-        criteri.append('COMUNE')
-    if 'ORA' in df.columns:
-        criteri.append('ORA')
-        
-    if criteri:
-        df_sorted = df.sort_values(by=criteri).reset_index(drop=True)
-    else:
-        df_sorted = df.copy()
-
-    # 2. Ottimizzazione fine basata sulla similarità testuale delle vie e dei comuni 
-    # (Metodo euristico intelligente basato su blocchi sequenziali vicini per evitare il ping-pong)
-    fermate = df_sorted.to_dict('records')
-    ottimizzate = []
-    
-    # Prendi la prima fermata come punto di partenza del furgone
-    corrente = fermate.pop(0)
-    ottimizzate.append(corrente)
-    
-    while fermate:
-        # Cerca tra le fermate rimanenti quella nello stesso comune o con via più simile/adiacente
-        # Diamo priorità assoluta allo stesso comune per evitare sbalzi territoriali
-        indice_piu_vicino = 0
-        min_punteggio = 999
-        
-        for i, f in enumerate(fermate):
-            punteggio = 0
-            # Se il comune è diverso, penalizziamo molto la scelta per tenerli raggruppati
-            if str(f.get('COMUNE', '')).strip().lower() != str(corrente.get('COMUNE', '')).strip().lower():
-                punteggio += 100
-            else:
-                punteggio += 10 # Stesso comune, penalità minima
-                
-            # Controllo incrociato sull'orario se presente
-            if str(f.get('ORA', '')) < str(corrente.get('ORA', '')):
-                punteggio += 50 # Penalizza andare indietro nel tempo se c'è un vincolo orario
-                
-            if punteggio < min_punteggio:
-                min_punteggio = punteggio
-                indice_piu_vicino = i
-                
-        corrente = fermate.pop(indice_piu_vicino)
-        ottimizzate.append(corrente)
-        
-    df_finale = pd.DataFrame(ottimizzate)
-    df_finale['POSIZIONE'] = range(1, len(df_finale) + 1)
-    return df_finale
-
-# Gestione navigazione tramite parametri URL
+# Gestione navigazione tramite parametri URL (per il pulsante overlay)
 if "nav" in st.query_params and st.query_params["nav"] == "giro":
     st.session_state.pagina_attiva = "giro"
     st.query_params.clear()
@@ -255,6 +196,7 @@ if st.session_state.pagina_attiva == "welcome":
         with open(img_path, "rb") as image_file:
             encoded_string = base64.b64encode(image_file.read()).decode()
         
+        # Renderizziamo l'immagine responsive con il pulsante sovrapposto al 90%
         st.markdown(f"""
             <div class="hero-container">
                 <img src="data:image/png;base64,{encoded_string}" class="hero-img">
@@ -268,15 +210,17 @@ if st.session_state.pagina_attiva == "welcome":
             st.rerun()
 
 # ==========================================
-# APPLICAZIONE PRINCIPALE
+# APPLICAZIONE PRINCIPALE (Giro / Inserisci Cliente)
 # ==========================================
 else:
     if st.button("🏠 Home Grafica", key="btn_home_grafica"):
         st.session_state.pagina_attiva = "welcome"
         st.rerun()
 
+    # TITOLO PRINCIPALE IN CIMA
     st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 26px; margin-bottom: 20px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
 
+    # GRIGLIA 4 PULSANTI IN ALTO (2x2)
     col_sw1, col_sw2 = st.columns(2)
 
     with col_sw1:
@@ -295,11 +239,11 @@ else:
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-    col_act1, col_act2, col_act3 = st.columns(3)
+    col_act1, col_act2 = st.columns(2)
 
     with col_act1:
         st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-        if st.button("🔄 INVERTI", use_container_width=True, key="btn_inverti"):
+        if st.button("🔄 INVERTI SEQUENZA", use_container_width=True, key="btn_inverti"):
             if not st.session_state.giro_corrente.empty:
                 st.session_state.giro_corrente = st.session_state.giro_corrente.iloc[::-1].reset_index(drop=True)
                 salva_giro_su_disco(st.session_state.giro_corrente)
@@ -307,18 +251,8 @@ else:
         st.markdown('</div>', unsafe_allow_html=True)
 
     with col_act2:
-        st.markdown('<div class="btn-active">', unsafe_allow_html=True)
-        if st.button("🧠 OTTIMIZZA", use_container_width=True, key="btn_ai_ottimizza"):
-            if not st.session_state.giro_corrente.empty:
-                st.session_state.giro_corrente = ottimizza_giro_prossimita(st.session_state.giro_corrente)
-                salva_giro_su_disco(st.session_state.giro_corrente)
-                st.success("✨ Giro ottimizzato con logica di prossimità!")
-                st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with col_act3:
         st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-        if st.button("🗑️ SVUOTA", use_container_width=True, key="btn_svuota"):
+        if st.button("🗑️ SVUOTA GIRO", use_container_width=True, key="btn_svuota"):
             if not st.session_state.giro_corrente.empty:
                 st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
                 salva_giro_su_disco(st.session_state.giro_corrente)
