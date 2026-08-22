@@ -181,8 +181,11 @@ if 'giro_corrente' not in st.session_state:
 if 'pagina_attiva' not in st.session_state:
     st.session_state.pagina_attiva = "welcome"
 
-if 'clienti_selezionati_m' not in st.session_state:
-    st.session_state.clienti_selezionati_m = []
+if 'clienti_sequenza' not in st.session_state:
+    st.session_state.clienti_sequenza = []
+
+if 'temp_qta_seq' not in st.session_state:
+    st.session_state.temp_qta_seq = {}
 
 # ==========================================
 # SCHERMATA 0: WELCOME / HOME PAGE GRAFICA
@@ -347,67 +350,100 @@ else:
             st.info("Nessuna fermata nel giro corrente. Clicca in alto su 'INSERISCI CLIENTE' per aggiungerne.")
 
     # ==========================================
-    # SCHERMATA 2: INSERISCI CLIENTE
+    # SCHERMATA 2: INSERISCI CLIENTE IN SEQUENZA
     # ==========================================
     elif st.session_state.pagina_attiva == "db":
-        st.subheader("📁 Inserisci Clienti nel Giro")
+        st.subheader("📁 Inserisci Clienti in Sequenza")
         
         if not st.session_state.db_clienti.empty:
-            lista_completa = st.session_state.db_clienti['CLIENTE'].dropna().tolist()
+            # Escludiamo i clienti già aggiunti alla sequenza corrente
+            clienti_disponibili = [
+                c for c in st.session_state.db_clienti['CLIENTE'].dropna().tolist() 
+                if c not in st.session_state.clienti_sequenza
+            ]
             
-            col_b1, col_b2 = st.columns(2)
-            with col_b1:
-                if st.button("✅ Seleziona Tutti", use_container_width=True):
-                    st.session_state.clienti_selezionati_m = lista_completa
-                    st.rerun()
-            with col_b2:
-                if st.button("❌ Deseleziona Tutti", use_container_width=True):
-                    st.session_state.clienti_selezionati_m = []
-                    st.rerun()
-
-            clienti_selezionati = st.multiselect(
-                "Cerca e seleziona i clienti per le consegne:",
-                options=lista_completa,
-                default=st.session_state.clienti_selezionati_m
-            )
-            st.session_state.clienti_selezionati_m = clienti_selezionati
-
-            if clienti_selezionati:
-                st.markdown("---")
-                st.markdown("### 📦 Imposta Colli per i Clienti Selezionati")
-                
-                # Creiamo un piccolo DataFrame temporaneo con i clienti selezionati e i loro default
-                df_sel = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
-                df_sel['Q.ta'] = df_sel['QTA_DEFAULT']
-                
-                # Tabella editabile solo per definire i colli dei clienti selezionati in un unico blocco pulito
-                df_edit_colli = st.data_editor(
-                    df_sel[['CLIENTE', 'COMUNE', 'Q.ta']],
-                    hide_index=True,
-                    use_container_width=True,
-                    key="editor_colli_scelti"
+            st.markdown("Seleziona i clienti **uno alla volta** dal menu a tendina per aggiungerli alla lista in basso:")
+            
+            col_sel, col_btn_add = st.columns([3, 1])
+            with col_sel:
+                cliente_scelto = st.selectbox(
+                    "Scegli cliente:", 
+                    options=["-- Seleziona cliente --"] + clienti_disponibili,
+                    key="select_singolo_cliente"
                 )
+            
+            with col_btn_add:
+                st.write("") # Spaziatura allineamento
+                st.write("")
+                if st.button("➕ Aggiungi", use_container_width=True):
+                    if cliente_scelto != "-- Seleziona cliente --" and cliente_scelto not in st.session_state.clienti_sequenza:
+                        st.session_state.clienti_sequenza.append(cliente_scelto)
+                        # Impostiamo il default iniziale dei colli
+                        default_val = int(st.session_state.db_clienti.loc[st.session_state.db_clienti['CLIENTE'] == cliente_scelto, 'QTA_DEFAULT'].values[0])
+                        st.session_state.temp_qta_seq[cliente_scelto] = default_val
+                        st.rerun()
 
-                if st.button("➕ AGGIUNGI AL GIRO", use_container_width=True, type="primary"):
-                    # Uniamo le quantità modificate dall'utente nella tabella
-                    nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
+            # Mostriamo la sequenza dei clienti scelti fino a questo momento con i rispettivi campi colli
+            if st.session_state.clienti_sequenza:
+                st.markdown("---")
+                st.markdown("### 📋 Clienti in coda (inserisci i colli per ciascuno):")
+                
+                clienti_da_rimuovere = []
+                
+                for idx, cli in enumerate(st.session_state.clienti_sequenza):
+                    col_info, col_qta, col_del = st.columns([2, 1, 0.5])
                     
-                    # Mappiamo i valori aggiornati dall'editor
-                    qta_dict = dict(zip(df_edit_colli['CLIENTE'], df_edit_colli['Q.ta']))
-                    nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(qta_dict)
+                    with col_info:
+                        st.markdown(f"**{idx + 1}. {cli}**")
+                        
+                    with col_qta:
+                        val_attuale = st.session_state.temp_qta_seq.get(cli, 0)
+                        st.session_state.temp_qta_seq[cli] = st.number_input(
+                            "Colli", 
+                            min_value=0, 
+                            value=val_attuale, 
+                            key=f"qta_seq_{cli}"
+                        )
+                        
+                    with col_del:
+                        st.write("")
+                        if st.button("❌", key=f"del_seq_{cli}"):
+                            clienti_da_rimuovere.append(cli)
+
+                # Rimuoviamo eventuali clienti scartati dall'utente
+                if clienti_da_rimuovere:
+                    for cli in clienti_da_rimuovere:
+                        st.session_state.clienti_sequenza.remove(cli)
+                        if cli in st.session_state.temp_qta_seq:
+                            del st.session_state.temp_qta_seq[cli]
+                    st.rerun()
+
+                st.markdown("---")
+                if st.button("🚀 AGGIUNGI AL GIRO DEFINITIVO", use_container_width=True, type="primary"):
+                    # Creiamo il dataframe con i clienti nell'ordine esatto in cui li ha messi
+                    nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(st.session_state.clienti_sequenza)].copy()
                     
+                    # Riordiniamo rigorosamente il dataframe in base all'ordine della lista sequenziale
+                    nuovi_clienti['temp_idx'] = nuovi_clienti['CLIENTE'].map({c: i for i, c in enumerate(st.session_state.clienti_sequenza)})
+                    nuovi_clienti = nuovi_clienti.sort_values('temp_idx').drop(columns=['temp_idx'])
+                    
+                    # Assegniamo le quantità inserite
+                    nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(st.session_state.temp_qta_seq)
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
+                    # Accodiamo al giro esistente
                     st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
                     st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
                     
+                    # Salvataggio e reset della sequenza temporanea
                     salva_giro_su_disco(st.session_state.giro_corrente)
-                    st.session_state.clienti_selezionati_m = []
+                    st.session_state.clienti_sequenza = []
+                    st.session_state.temp_qta_seq = {}
                     
-                    st.success("Clienti aggiunti al giro con successo!")
+                    st.success("Giro aggiornato con successo!")
                     st.session_state.pagina_attiva = "giro"
                     st.rerun()
-                    
+
             st.markdown("---")
             with st.expander("👀 Visualizza o Modifica Anagrafica Clienti intera"):
                 edited_db = st.data_editor(
