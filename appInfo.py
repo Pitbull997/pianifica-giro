@@ -128,7 +128,7 @@ def carica_giro_da_disco():
             pass
     return pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
 
-# Inizializzazione sessioni
+# Inizializzazione sessioni (pagina_attiva parte da "welcome")
 if 'db_clienti' not in st.session_state or st.session_state.db_clienti.empty:
     st.session_state.db_clienti = carica_db_predefinito()
 
@@ -136,7 +136,7 @@ if 'giro_corrente' not in st.session_state:
     st.session_state.giro_corrente = carica_giro_da_disco()
 
 if 'pagina_attiva' not in st.session_state:
-    st.session_state.pagina_attiva = "giro"
+    st.session_state.pagina_attiva = "welcome"
 
 if 'clienti_selezionati_m' not in st.session_state:
     st.session_state.clienti_selezionati_m = []
@@ -145,207 +145,229 @@ if 'temp_qta' not in st.session_state:
     st.session_state.temp_qta = {}
 
 # ==========================================
-# TITOLO PRINCIPALE IN CIMA
+# SCHERMATA 0: WELCOME / HOME PAGE
 # ==========================================
-st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 26px; margin-bottom: 20px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
-
-# ==========================================
-# GRIGLIA 4 PULSANTI IN ALTO (2x2)
-# ==========================================
-col_sw1, col_sw2 = st.columns(2)
-
-with col_sw1:
-    css_class = "btn-active" if st.session_state.pagina_attiva == "giro" else "btn-inactive"
-    st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
-    if st.button("📍 GIRO DEL GIORNO", use_container_width=True, key="btn_giro"):
+if st.session_state.pagina_attiva == "welcome":
+    if os.path.exists("vango_splash.png"):
+        st.image("vango_splash.png", use_container_width=True)
+    else:
+        st.markdown("<h1 style='text-align: center; color: #FF7A00;'>🚐 VANGO</h1>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center; color: #CCCCCC;'>Ottimizzazione Consegne - Pianifica, Risparmia, Consegna.</p>", unsafe_allow_html=True)
+        st.warning("⚠️ Immagine 'vango_splash.png' non trovata nella cartella. Inseriscila per visualizzarla correttamente.")
+    
+    st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
+    
+    if st.button("🚀 ACCEDI ALL'APPLICAZIONE", use_container_width=True, type="primary"):
         st.session_state.pagina_attiva = "giro"
         st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
 
-with col_sw2:
-    css_class = "btn-active" if st.session_state.pagina_attiva == "db" else "btn-inactive"
-    st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
-    if st.button("📁 INSERISCI CLIENTE", use_container_width=True, key="btn_db"):
-        st.session_state.pagina_attiva = "db"
+# ==========================================
+# APPLICAZIONE PRINCIPALE (Giro / Inserisci Cliente)
+# ==========================================
+else:
+    # Pulsante per tornare alla Home Page Grafica
+    if st.button("🏠 Home Grafica", key="btn_home_grafica"):
+        st.session_state.pagina_attiva = "welcome"
         st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
 
-col_act1, col_act2 = st.columns(2)
+    # TITOLO PRINCIPALE IN CIMA
+    st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 26px; margin-bottom: 20px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
 
-with col_act1:
-    st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-    if st.button("🔄 INVERTI SEQUENZA", use_container_width=True, key="btn_inverti"):
-        if not st.session_state.giro_corrente.empty:
-            st.session_state.giro_corrente = st.session_state.giro_corrente.iloc[::-1].reset_index(drop=True)
-            salva_giro_su_disco(st.session_state.giro_corrente)
+    # GRIGLIA 4 PULSANTI IN ALTO (2x2)
+    col_sw1, col_sw2 = st.columns(2)
+
+    with col_sw1:
+        css_class = "btn-active" if st.session_state.pagina_attiva == "giro" else "btn-inactive"
+        st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
+        if st.button("📍 GIRO DEL GIORNO", use_container_width=True, key="btn_giro"):
+            st.session_state.pagina_attiva = "giro"
             st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-with col_act2:
-    st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-    if st.button("🗑️ SVUOTA GIRO", use_container_width=True, key="btn_svuota"):
-        if not st.session_state.giro_corrente.empty:
-            st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
-            salva_giro_su_disco(st.session_state.giro_corrente)
+    with col_sw2:
+        css_class = "btn-active" if st.session_state.pagina_attiva == "db" else "btn-inactive"
+        st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
+        if st.button("📁 INSERISCI CLIENTE", use_container_width=True, key="btn_db"):
+            st.session_state.pagina_attiva = "db"
             st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+    col_act1, col_act2 = st.columns(2)
 
-# ==========================================
-# SCHERMATA 1: GIRO CONSEGNE
-# ==========================================
-if st.session_state.pagina_attiva == "giro":
-    tot_clienti = len(st.session_state.giro_corrente)
-    tot_qta = int(st.session_state.giro_corrente['Q.ta'].sum()) if not st.session_state.giro_corrente.empty else 0
-
-    col_m1, col_m2 = st.columns(2)
-    col_m1.metric("Fermate Totali", f"{tot_clienti}")
-    col_m2.metric("Pezzi Totali", f"{tot_qta}")
-
-    st.markdown("---")
-
-    if not st.session_state.giro_corrente.empty:
-        st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
-        
-        for idx in range(tot_clienti):
-            row = st.session_state.giro_corrente.iloc[idx]
-            
-            st.markdown(f"""
-            <div class="stop-card">
-                <div class="stop-title">{idx + 1}. {row['CLIENTE']}</div>
-                <div class="stop-address">📍 {row['VIA']}, {row['COMUNE']}</div>
-                <div class="stop-meta">🕒 Ora: {row['ORA']} | 📦 Q.tà: {row['Q.ta']} pz</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            col_c1, col_c2, col_c3 = st.columns([1, 1, 1])
-            
-            with col_c1:
-                dest = urllib.parse.quote(f"{row['VIA']}, {row['COMUNE']}")
-                st.write("")
-                st.markdown(f"[🚘 **NAVIGA ORA**](https://www.google.com/maps/dir/?api=1&destination={dest})")
-
-            with col_c2:
-                nuova_qta = st.number_input(
-                    "Q.tà colli",
-                    min_value=0,
-                    value=int(row['Q.ta']),
-                    key=f"qta_mobile_{row['CLIENTE']}_{idx}"
-                )
-                if nuova_qta != int(row['Q.ta']):
-                    st.session_state.giro_corrente.at[idx, 'Q.ta'] = nuova_qta
-                    salva_giro_su_disco(st.session_state.giro_corrente)
-                    st.rerun()
-
-            with col_c3:
-                nuova_pos = st.selectbox(
-                    "Sposta a pos:",
-                    options=[i for i in range(1, tot_clienti + 1)],
-                    index=idx,
-                    key=f"select_pos_{row['CLIENTE']}_{idx}"
-                )
-                
-                if nuova_pos - 1 != idx:
-                    df_temp = st.session_state.giro_corrente.copy()
-                    riga = df_temp.iloc[idx]
-                    df_temp = df_temp.drop(df_temp.index[idx])
-                    top = df_temp.iloc[:nuova_pos - 1]
-                    bottom = df_temp.iloc[nuova_pos - 1:]
-                    
-                    df_nuovo = pd.concat([top, pd.DataFrame([riga]), bottom], ignore_index=True)
-                    df_nuovo['POSIZIONE'] = [str(i) for i in range(1, len(df_nuovo) + 1)]
-                    
-                    st.session_state.giro_corrente = df_nuovo
-                    salva_giro_su_disco(st.session_state.giro_corrente)
-                    st.rerun()
-
-            st.markdown("<hr style='margin: 10px 0; border-color: #262626;'>", unsafe_allow_html=True)
-
-        st.markdown("---")
-
-        addresses = [f"{r['VIA']}, {r['COMUNE']}" for _, r in st.session_state.giro_corrente.iterrows()]
-        if len(addresses) == 1:
-            maps_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(addresses[0])}"
-        else:
-            origin = urllib.parse.quote(addresses[0])
-            destination = urllib.parse.quote(addresses[-1])
-            waypoints = "|".join([urllib.parse.quote(a) for a in addresses[1:-1]])
-            maps_url = f"https://www.google.com/maps/dir/?api=1&origin={origin}&destination={destination}&waypoints={waypoints}"
-
-        st.markdown(f'''
-            <a href="{maps_url}" target="_blank" style="text-decoration:none;">
-                <button style="width:100%; background-color:#2563EB; color:white; border:none; border-radius:25px; height:52px; font-weight:bold; font-size:16px; box-shadow: 0 4px 10px rgba(37, 99, 235, 0.4);">
-                    🗺️ AVVIA PERCORSO COMPLETO
-                </button>
-            </a>
-        ''', unsafe_allow_html=True)
-    else:
-        st.info("Nessuna fermata nel giro corrente. Clicca in alto su 'INSERISCI CLIENTE' per aggiungerne.")
-
-# ==========================================
-# SCHERMATA 2: DATABASE CLIENTI
-# ==========================================
-elif st.session_state.pagina_attiva == "db":
-    st.subheader("📁 Inserisci Clienti nel Giro")
-    
-    if not st.session_state.db_clienti.empty:
-        lista_completa = st.session_state.db_clienti['CLIENTE'].dropna().tolist()
-        
-        col_b1, col_b2 = st.columns(2)
-        with col_b1:
-            if st.button("✅ Seleziona Tutti", use_container_width=True):
-                st.session_state.clienti_selezionati_m = lista_completa
-                st.rerun()
-        with col_b2:
-            if st.button("❌ Deseleziona Tutti", use_container_width=True):
-                st.session_state.clienti_selezionati_m = []
-                st.rerun()
-
-        clienti_selezionati = st.multiselect(
-            "Cerca e seleziona i clienti per il giro:",
-            options=lista_completa,
-            default=st.session_state.clienti_selezionati_m
-        )
-        st.session_state.clienti_selezionati_m = clienti_selezionati
-
-        if clienti_selezionati:
-            st.markdown("---")
-            st.markdown("### 📦 Specifica Colli per i clienti selezionati")
-            
-            for cliente in clienti_selezionati:
-                default_val = int(st.session_state.db_clienti.loc[st.session_state.db_clienti['CLIENTE'] == cliente, 'QTA_DEFAULT'].values[0])
-                st.session_state.temp_qta[cliente] = st.number_input(
-                    f"Colli per {cliente}:",
-                    min_value=0,
-                    value=st.session_state.temp_qta.get(cliente, default_val),
-                    key=f"input_qta_{cliente}"
-                )
-
-            if st.button("➕ AGGIUNGI AL GIRO", use_container_width=True, type="primary"):
-                nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
-                nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(st.session_state.temp_qta)
-                nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
-                
-                st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
-                st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
-                
+    with col_act1:
+        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
+        if st.button("🔄 INVERTI SEQUENZA", use_container_width=True, key="btn_inverti"):
+            if not st.session_state.giro_corrente.empty:
+                st.session_state.giro_corrente = st.session_state.giro_corrente.iloc[::-1].reset_index(drop=True)
                 salva_giro_su_disco(st.session_state.giro_corrente)
-                st.session_state.clienti_selezionati_m = []
-                st.session_state.temp_qta = {}
-                
-                st.success("Aggiunti al giro!")
-                st.session_state.pagina_attiva = "giro"
                 st.rerun()
-                
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col_act2:
+        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
+        if st.button("🗑️ SVUOTA GIRO", use_container_width=True, key="btn_svuota"):
+            if not st.session_state.giro_corrente.empty:
+                st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
+                salva_giro_su_disco(st.session_state.giro_corrente)
+                st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+
+    # ==========================================
+    # SCHERMATA 1: GIRO CONSEGNE
+    # ==========================================
+    if st.session_state.pagina_attiva == "giro":
+        tot_clienti = len(st.session_state.giro_corrente)
+        tot_qta = int(st.session_state.giro_corrente['Q.ta'].sum()) if not st.session_state.giro_corrente.empty else 0
+
+        col_m1, col_m2 = st.columns(2)
+        col_m1.metric("Fermate Totali", f"{tot_clienti}")
+        col_m2.metric("Pezzi Totali", f"{tot_qta}")
+
         st.markdown("---")
-        with st.expander("👀 Visualizza o Modifica Anagrafica Clienti intera"):
-            edited_db = st.data_editor(
-                st.session_state.db_clienti,
-                num_rows="dynamic",
-                use_container_width=True,
-                key="db_editor_switch"
+
+        if not st.session_state.giro_corrente.empty:
+            st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
+            
+            for idx in range(tot_clienti):
+                row = st.session_state.giro_corrente.iloc[idx]
+                
+                st.markdown(f"""
+                <div class="stop-card">
+                    <div class="stop-title">{idx + 1}. {row['CLIENTE']}</div>
+                    <div class="stop-address">📍 {row['VIA']}, {row['COMUNE']}</div>
+                    <div class="stop-meta">🕒 Ora: {row['ORA']} | 📦 Q.tà: {row['Q.ta']} pz</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                col_c1, col_c2, col_c3 = st.columns([1, 1, 1])
+                
+                with col_c1:
+                    dest = urllib.parse.quote(f"{row['VIA']}, {row['COMUNE']}")
+                    st.write("")
+                    st.markdown(f"[🚘 **NAVIGA ORA**](https://www.google.com/maps/dir/?api=1&destination={dest})")
+
+                with col_c2:
+                    nuova_qta = st.number_input(
+                        "Q.tà colli",
+                        min_value=0,
+                        value=int(row['Q.ta']),
+                        key=f"qta_mobile_{row['CLIENTE']}_{idx}"
+                    )
+                    if nuova_qta != int(row['Q.ta']):
+                        st.session_state.giro_corrente.at[idx, 'Q.ta'] = nuova_qta
+                        salva_giro_su_disco(st.session_state.giro_corrente)
+                        st.rerun()
+
+                with col_c3:
+                    nuova_pos = st.selectbox(
+                        "Sposta a pos:",
+                        options=[i for i in range(1, tot_clienti + 1)],
+                        index=idx,
+                        key=f"select_pos_{row['CLIENTE']}_{idx}"
+                    )
+                    
+                    if nuova_pos - 1 != idx:
+                        df_temp = st.session_state.giro_corrente.copy()
+                        riga = df_temp.iloc[idx]
+                        df_temp = df_temp.drop(df_temp.index[idx])
+                        top = df_temp.iloc[:nuova_pos - 1]
+                        bottom = df_temp.iloc[nuova_pos - 1:]
+                        
+                        df_nuovo = pd.concat([top, pd.DataFrame([riga]), bottom], ignore_index=True)
+                        df_nuovo['POSIZIONE'] = [str(i) for i in range(1, len(df_nuovo) + 1)]
+                        
+                        st.session_state.giro_corrente = df_nuovo
+                        salva_giro_su_disco(st.session_state.giro_corrente)
+                        st.rerun()
+
+                st.markdown("<hr style='margin: 10px 0; border-color: #262626;'>", unsafe_allow_html=True)
+
+            st.markdown("---")
+
+            addresses = [f"{r['VIA']}, {r['COMUNE']}" for _, r in st.session_state.giro_corrente.iterrows()]
+            if len(addresses) == 1:
+                maps_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(addresses[0])}"
+            else:
+                origin = urllib.parse.quote(addresses[0])
+                destination = urllib.parse.quote(addresses[-1])
+                waypoints = "|".join([urllib.parse.quote(a) for a in addresses[1:-1]])
+                maps_url = f"https://www.google.com/maps/dir/?api=1&origin={origin}&destination={destination}&waypoints={waypoints}"
+
+            st.markdown(f'''
+                <a href="{maps_url}" target="_blank" style="text-decoration:none;">
+                    <button style="width:100%; background-color:#2563EB; color:white; border:none; border-radius:25px; height:52px; font-weight:bold; font-size:16px; box-shadow: 0 4px 10px rgba(37, 99, 235, 0.4);">
+                        🗺️ AVVIA PERCORSO COMPLETO
+                    </button>
+                </a>
+            ''', unsafe_allow_html=True)
+        else:
+            st.info("Nessuna fermata nel giro corrente. Clicca in alto su 'INSERISCI CLIENTE' per aggiungerne.")
+
+    # ==========================================
+    # SCHERMATA 2: INSERISCI CLIENTE
+    # ==========================================
+    elif st.session_state.pagina_attiva == "db":
+        st.subheader("📁 Inserisci Clienti nel Giro")
+        
+        if not st.session_state.db_clienti.empty:
+            lista_completa = st.session_state.db_clienti['CLIENTE'].dropna().tolist()
+            
+            col_b1, col_b2 = st.columns(2)
+            with col_b1:
+                if st.button("✅ Seleziona Tutti", use_container_width=True):
+                    st.session_state.clienti_selezionati_m = lista_completa
+                    st.rerun()
+            with col_b2:
+                if st.button("❌ Deseleziona Tutti", use_container_width=True):
+                    st.session_state.clienti_selezionati_m = []
+                    st.rerun()
+
+            clienti_selezionati = st.multiselect(
+                "Cerca e seleziona i clienti per il giro:",
+                options=lista_completa,
+                default=st.session_state.clienti_selezionati_m
             )
-            st.session_state.db_clienti = edited_db
-    else:
-        st.warning("Nessun cliente trovato. Verifica che il file del database sia caricato.")
+            st.session_state.clienti_selezionati_m = clienti_selezionati
+
+            if clienti_selezionati:
+                st.markdown("---")
+                st.markdown("### 📦 Specifica Colli per i clienti selezionati")
+                
+                for cliente in clienti_selezionati:
+                    default_val = int(st.session_state.db_clienti.loc[st.session_state.db_clienti['CLIENTE'] == cliente, 'QTA_DEFAULT'].values[0])
+                    st.session_state.temp_qta[cliente] = st.number_input(
+                        f"Colli per {cliente}:",
+                        min_value=0,
+                        value=st.session_state.temp_qta.get(cliente, default_val),
+                        key=f"input_qta_{cliente}"
+                    )
+
+                if st.button("➕ AGGIUNGI AL GIRO", use_container_width=True, type="primary"):
+                    nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
+                    nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(st.session_state.temp_qta)
+                    nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
+                    
+                    st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
+                    st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
+                    
+                    salva_giro_su_disco(st.session_state.giro_corrente)
+                    st.session_state.clienti_selezionati_m = []
+                    st.session_state.temp_qta = {}
+                    
+                    st.success("Aggiunti al giro!")
+                    st.session_state.pagina_attiva = "giro"
+                    st.rerun()
+                    
+            st.markdown("---")
+            with st.expander("👀 Visualizza o Modifica Anagrafica Clienti intera"):
+                edited_db = st.data_editor(
+                    st.session_state.db_clienti,
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    key="db_editor_switch"
+                )
+                st.session_state.db_clienti = edited_db
+        else:
+            st.warning("Nessun cliente trovato. Verifica che il file del database sia caricato.")
