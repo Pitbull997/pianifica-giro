@@ -373,24 +373,10 @@ else:
 
             if clienti_selezionati:
                 st.markdown("---")
-                st.markdown("### 📦 Conferma Colli per i clienti selezionati")
-                st.caption("Puoi lasciare il valore predefinito o modificarlo al volo per ciascuno.")
-                
-                # Creiamo un dizionario temporaneo locale per raccogliere i dati di questa schermata
-                colli_inseriti = {}
-                
-                for cliente in clienti_selezionati:
-                    default_val = int(st.session_state.db_clienti.loc[st.session_state.db_clienti['CLIENTE'] == cliente, 'QTA_DEFAULT'].values[0])
-                    colli_inseriti[cliente] = st.number_input(
-                        f"Colli per {cliente}:",
-                        min_value=0,
-                        value=default_val,
-                        key=f"input_qta_batch_{cliente}"
-                    )
-
                 if st.button("➕ AGGIUNGI AL GIRO", use_container_width=True, type="primary"):
                     nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
-                    nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(colli_inseriti)
+                    # Assegna automaticamente la quantità predefinita dal database senza chiedere nulla
+                    nuovi_clienti['Q.ta'] = nuovi_clienti['QTA_DEFAULT']
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
                     st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
@@ -399,7 +385,7 @@ else:
                     salva_giro_su_disco(st.session_state.giro_corrente)
                     st.session_state.clienti_selezionati_m = []
                     
-                    st.success("Aggiunti al giro!")
+                    st.success("Clienti aggiunti al giro con successo!")
                     st.session_state.pagina_attiva = "giro"
                     st.rerun()
                     
