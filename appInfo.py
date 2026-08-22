@@ -168,12 +168,6 @@ if 'giro_corrente' not in st.session_state:
 if 'pagina_attiva' not in st.session_state:
     st.session_state.pagina_attiva = "giro"
 
-if 'clienti_selezionati_m' not in st.session_state:
-    st.session_state.clienti_selezionati_m = []
-
-if 'temp_qta' not in st.session_state:
-    st.session_state.temp_qta = {}
-
 # ==========================================
 # SWITCHER PULSANTI IN ALTO
 # ==========================================
@@ -286,7 +280,7 @@ if st.session_state.pagina_attiva == "giro":
                     label_visibility="collapsed"
                 )
                 if nuova_qta != int(row['Q.ta']):
-                    st.session_state.giro_corrente.at[idx, 'Q.ta'] = nuova_qta
+                    st.session_state.giro_corrente.at[idx, 'Q.ta'] = nueva_qta if 'nueva_qta' in locals() else nuova_qta
                     salva_giro_su_disco(st.session_state.giro_corrente)
                     st.rerun()
 
@@ -330,58 +324,41 @@ if st.session_state.pagina_attiva == "giro":
 # SCHERMATA 2: DATABASE CLIENTI
 # ==========================================
 elif st.session_state.pagina_attiva == "db":
-    st.subheader("📁 Database & Selezione Clienti")
+    st.subheader("📁 Aggiungi Cliente al Giro")
     
     if not st.session_state.db_clienti.empty:
         lista_completa = st.session_state.db_clienti['CLIENTE'].dropna().tolist()
         
-        col_b1, col_b2 = st.columns(2)
-        with col_b1:
-            if st.button("✅ Seleziona Tutti", use_container_width=True):
-                st.session_state.clienti_selezionati_m = lista_completa
-                st.rerun()
-        with col_b2:
-            if st.button("❌ Deseleziona Tutti", use_container_width=True):
-                st.session_state.clienti_selezionati_m = []
-                st.rerun()
-
-        clienti_selezionati = st.multiselect(
-            "Cerca e seleziona i clienti per il giro:",
-            options=lista_completa,
-            default=st.session_state.clienti_selezionati_m
-        )
-        st.session_state.clienti_selezionati_m = clienti_selezionati
-
-        # --- SEZIONE COLLI PERSONALIZZATI ---
-        if clienti_selezionati:
-            st.markdown("---")
-            st.markdown("### 📦 Specifica Colli per i clienti selezionati")
+        # 1. Selezione di un singolo cliente dal menu a tendina
+        cliente_scelto = st.selectbox("Seleziona il cliente da aggiungere:", options=["-- Seleziona un cliente --"] + lista_completa)
+        
+        if cliente_scelto != "-- Seleziona un cliente --":
+            # Recupera il valore di default dei colli dal database
+            default_val = int(st.session_state.db_clienti.loc[st.session_state.db_clienti['CLIENTE'] == cliente_scelto, 'QTA_DEFAULT'].values[0])
             
-            for cliente in clienti_selezionati:
-                default_val = int(st.session_state.db_clienti.loc[st.session_state.db_clienti['CLIENTE'] == cliente, 'QTA_DEFAULT'].values[0])
-                st.session_state.temp_qta[cliente] = st.number_input(
-                    f"Colli per {cliente}:",
-                    min_value=0,
-                    value=st.session_state.temp_qta.get(cliente, default_val),
-                    key=f"input_qta_{cliente}"
-                )
-
+            # 2. Richiesta immediata della quantità (colli)
+            qta_inserita = st.number_input(
+                f"Quanti colli per {cliente_scelto}?",
+                min_value=0,
+                value=default_val,
+                key=f"input_qta_{cliente_scelto}"
+            )
+            
+            # 3. Pulsante di conferma per aggiungere direttamente al giro
             if st.button("➕ AGGIUNGI AL GIRO", use_container_width=True, type="primary"):
-                nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
-                nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(st.session_state.temp_qta)
-                nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
+                nuovo_record = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'] == cliente_scelto].copy()
+                nuovo_record['Q.ta'] = qta_inserita
+                nuovo_record = nuovo_record[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                 
-                st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
+                # Aggiunge al giro corrente
+                st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovo_record], ignore_index=True)
                 st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
                 
                 salva_giro_su_disco(st.session_state.giro_corrente)
-                st.session_state.clienti_selezionati_m = []
-                st.session_state.temp_qta = {}
-                
-                st.success("Aggiunti al giro!")
-                st.session_state.pagina_attiva = "giro"
+                st.success(f"Aggiunto {cliente_scelto} ({qta_inserita} colli) al giro!")
                 st.rerun()
-                
+
+        st.markdown("---")
         with st.expander("👀 Visualizza o Modifica Anagrafica Clienti intera"):
             edited_db = st.data_editor(
                 st.session_state.db_clienti,
@@ -392,3 +369,4 @@ elif st.session_state.pagina_attiva == "db":
             st.session_state.db_clienti = edited_db
     else:
         st.warning("Nessun cliente trovato. Verifica che il file del database sia caricato.")
+    
