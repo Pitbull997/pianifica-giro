@@ -373,9 +373,9 @@ else:
 
             if clienti_selezionati:
                 st.markdown("---")
+                # Pulsante unico in fondo per aggiungere tutti i selezionati in blocco usando i loro valori di default
                 if st.button("➕ AGGIUNGI AL GIRO", use_container_width=True, type="primary"):
                     nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
-                    # Assegna automaticamente la quantità predefinita dal database senza chiedere nulla
                     nuovi_clienti['Q.ta'] = nuovi_clienti['QTA_DEFAULT']
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
