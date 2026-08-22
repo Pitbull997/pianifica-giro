@@ -150,7 +150,7 @@ if 'temp_qta' not in st.session_state:
 st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 26px; margin-bottom: 20px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
 
 # ==========================================
-# SWITCHER PULSANTI IN ALTO
+# GRIGLIA 4 PULSANTI IN ALTO (2x2)
 # ==========================================
 col_sw1, col_sw2 = st.columns(2)
 
@@ -168,6 +168,26 @@ with col_sw2:
     if st.button("📁 DATABASE CLIENTI", use_container_width=True, key="btn_db"):
         st.session_state.pagina_attiva = "db"
         st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+col_act1, col_act2 = st.columns(2)
+
+with col_act1:
+    st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
+    if st.button("🔄 INVERTI SEQUENZA", use_container_width=True, key="btn_inverti"):
+        if not st.session_state.giro_corrente.empty:
+            st.session_state.giro_corrente = st.session_state.giro_corrente.iloc[::-1].reset_index(drop=True)
+            salva_giro_su_disco(st.session_state.giro_corrente)
+            st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with col_act2:
+    st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
+    if st.button("🗑️ SVUOTA GIRO", use_container_width=True, key="btn_svuota"):
+        if not st.session_state.giro_corrente.empty:
+            st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
+            salva_giro_su_disco(st.session_state.giro_corrente)
+            st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
@@ -260,19 +280,6 @@ if st.session_state.pagina_attiva == "giro":
                 </button>
             </a>
         ''', unsafe_allow_html=True)
-
-        with st.expander("⚙️ Azioni e Gestione Giro"):
-            col_a1, col_a2 = st.columns(2)
-            with col_a1:
-                if st.button("🔄 Inverti Sequenza", use_container_width=True):
-                    st.session_state.giro_corrente = st.session_state.giro_corrente.iloc[::-1].reset_index(drop=True)
-                    salva_giro_su_disco(st.session_state.giro_corrente)
-                    st.rerun()
-            with col_a2:
-                if st.button("🗑️ Svuota Giro", use_container_width=True):
-                    st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
-                    salva_giro_su_disco(st.session_state.giro_corrente)
-                    st.rerun()
     else:
         st.info("Nessuna fermata nel giro corrente. Clicca in alto su 'DATABASE CLIENTI' per aggiungerne.")
 
