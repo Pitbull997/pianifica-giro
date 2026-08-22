@@ -356,14 +356,13 @@ else:
         st.subheader("📁 Inserisci Clienti in Sequenza")
         
         if not st.session_state.db_clienti.empty:
-            # Funzione di callback eseguita automaticamente appena selezioni un cliente dalla tendina
+            # Funzione richiamata automaticamente al click/selezione nel menu a tendina
             def aggiungi_da_tendina():
                 cli = st.session_state.select_singolo_cliente
                 if cli and cli != "-- Seleziona cliente --" and cli not in st.session_state.clienti_sequenza:
                     st.session_state.clienti_sequenza.append(cli)
                     default_val = int(st.session_state.db_clienti.loc[st.session_state.db_clienti['CLIENTE'] == cli, 'QTA_DEFAULT'].values[0])
                     st.session_state.temp_qta_seq[cli] = default_val
-                # Resettiamo la tendina per il prossimo inserimento
                 st.session_state.select_singolo_cliente = "-- Seleziona cliente --"
 
             clienti_disponibili = [
@@ -371,9 +370,8 @@ else:
                 if c not in st.session_state.clienti_sequenza
             ]
             
-            st.markdown("Seleziona i clienti **uno alla volta** dal menu a tendina. Si aggiungeranno subito alla lista sotto:")
+            st.markdown("Seleziona i clienti **uno alla volta** dal menu a tendina. Cliccando un cliente si aggiunge subito alla lista:")
             
-            # Utilizziamo on_change per aggiungere istantaneamente senza dover cliccare un pulsante separato
             st.selectbox(
                 "Scegli cliente:", 
                 options=["-- Seleziona cliente --"] + clienti_disponibili,
@@ -418,22 +416,17 @@ else:
 
                 st.markdown("---")
                 if st.button("🚀 AGGIUNGI AL GIRO DEFINITIVO", use_container_width=True, type="primary"):
-                    # Creiamo il dataframe con i clienti nell'ordine esatto in cui li ha messi
                     nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(st.session_state.clienti_sequenza)].copy()
                     
-                    # Riordiniamo rigorosamente il dataframe in base all'ordine della lista sequenziale
-                    nuovi_clienti['temp_idx'] = nuevos_clienti_idx = nuovi_clienti['CLIENTE'].map({c: i for i, c in enumerate(st.session_state.clienti_sequenza)}) if 'nuevos_clienti_idx' else nuovi_clienti['CLIENTE'].map({c: i for i, c in enumerate(st.session_state.clienti_sequenza)})
+                    nuovi_clienti['temp_idx'] = nuovi_clienti['CLIENTE'].map({c: i for i, c in enumerate(st.session_state.clienti_sequenza)})
                     nuovi_clienti = nuovi_clienti.sort_values('temp_idx').drop(columns=['temp_idx'])
                     
-                    # Assegniamo le quantità inserite
                     nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(st.session_state.temp_qta_seq)
-                    nuovi_clienti = nuv_clienti_cols = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
+                    nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
-                    # Accodiamo al giro esistente
                     st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
                     st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
                     
-                    # Salvataggio e reset della sequenza temporanea
                     salva_giro_su_disco(st.session_state.giro_corrente)
                     st.session_state.clienti_sequenza = []
                     st.session_state.temp_qta_seq = {}
