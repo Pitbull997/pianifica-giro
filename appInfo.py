@@ -165,7 +165,7 @@ with col_sw1:
 with col_sw2:
     css_class = "btn-active" if st.session_state.pagina_attiva == "db" else "btn-inactive"
     st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
-    if st.button("📁 DATABASE CLIENTI", use_container_width=True, key="btn_db"):
+    if st.button("📁 INSERISCI CLIENTE", use_container_width=True, key="btn_db"):
         st.session_state.pagina_attiva = "db"
         st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
@@ -281,13 +281,13 @@ if st.session_state.pagina_attiva == "giro":
             </a>
         ''', unsafe_allow_html=True)
     else:
-        st.info("Nessuna fermata nel giro corrente. Clicca in alto su 'DATABASE CLIENTI' per aggiungerne.")
+        st.info("Nessuna fermata nel giro corrente. Clicca in alto su 'INSERISCI CLIENTE' per aggiungerne.")
 
 # ==========================================
 # SCHERMATA 2: DATABASE CLIENTI
 # ==========================================
 elif st.session_state.pagina_attiva == "db":
-    st.subheader("📁 Database & Selezione Clienti")
+    st.subheader("📁 Inserisci Clienti nel Giro")
     
     if not st.session_state.db_clienti.empty:
         lista_completa = st.session_state.db_clienti['CLIENTE'].dropna().tolist()
