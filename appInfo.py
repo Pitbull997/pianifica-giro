@@ -175,6 +175,11 @@ if 'temp_qta' not in st.session_state:
     st.session_state.temp_qta = {}
 
 # ==========================================
+# TITOLO PRINCIPALE IN CIMA
+# ==========================================
+st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 24px; margin-bottom: 20px;'>🚚 PIANIFICAZIONE GIRO</h1>", unsafe_allow_html=True)
+
+# ==========================================
 # SWITCHER PULSANTI IN ALTO
 # ==========================================
 col_sw1, col_sw2 = st.columns(2)
@@ -345,7 +350,7 @@ elif st.session_state.pagina_attiva == "db":
                 st.session_state.clienti_selezionati_m = []
                 st.rerun()
 
-        # Multiselect con i tag (la parte cerchiata in giallo)
+        # Multiselect con i tag
         clienti_selezionati = st.multiselect(
             "Cerca e seleziona i clienti per il giro:",
             options=lista_completa,
@@ -353,7 +358,6 @@ elif st.session_state.pagina_attiva == "db":
         )
         st.session_state.clienti_selezionati_m = clienti_selezionati
 
-        # Se ci sono clienti selezionati, mostra i campi per i colli e il tasto conferma
         if clienti_selezionati:
             st.markdown("---")
             st.markdown("### 📦 Specifica Colli per i clienti selezionati")
