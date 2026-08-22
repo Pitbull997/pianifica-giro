@@ -15,7 +15,7 @@ st.set_page_config(
 
 FILE_GIRO_PERSISTENTE = "giro_salvato.json"
 
-# CSS Avanzato - Forzatura Dark Mode & Fix UI Mobile + Overlay all'85%
+# CSS Avanzato - Forzatura Dark Mode & Fix UI Mobile + Overlay al 90%
 st.markdown("""
 <style>
     .stApp, body, html {
@@ -82,7 +82,7 @@ st.markdown("""
     .stop-address { font-size: 14px; color: #E2E8F0; margin-bottom: 6px; }
     .stop-meta { font-size: 13px; color: #60A5FA; font-weight: 600; }
 
-    /* Stili per l'immagine responsive e il pulsante sovrapposto all'85% */
+    /* Stili per l'immagine responsive e il pulsante sovrapposto al 90% */
     .hero-container {
         position: relative;
         width: 100%;
@@ -97,7 +97,7 @@ st.markdown("""
     }
     .hero-btn {
         position: absolute;
-        top: 85%; /* Posizionato all'85% dell'altezza dell'immagine */
+        top: 90%; /* Posizionato al 90% dell'altezza dell'immagine */
         left: 50%;
         transform: translate(-50%, -50%);
         background-color: #2563EB !important;
@@ -196,16 +196,16 @@ if st.session_state.pagina_attiva == "welcome":
         with open(img_path, "rb") as image_file:
             encoded_string = base64.b64encode(image_file.read()).decode()
         
-        # Renderizziamo l'immagine responsive con il pulsante sovrapposto all'85%
+        # Renderizziamo l'immagine responsive con il pulsante sovrapposto al 90%
         st.markdown(f"""
             <div class="hero-container">
                 <img src="data:image/png;base64,{encoded_string}" class="hero-img">
-                <a href="?nav=giro" target="_self" class="hero-btn">🚀 ACCEDI ALL'APPLICAZIONE</a>
+                <a href="?nav=giro" target="_self" class="hero-btn">ENTRA IN VanGo</a>
             </div>
         """, unsafe_allow_html=True)
     else:
         st.warning("⚠️ Immagine 'vango_splash.png' non trovata nella cartella.")
-        if st.button("🚀 ACCEDI ALL'APPLICAZIONE", use_container_width=True, type="primary"):
+        if st.button("ENTRA IN VanGo", use_container_width=True, type="primary"):
             st.session_state.pagina_attiva = "giro"
             st.rerun()
 
@@ -315,7 +315,7 @@ else:
                         key=f"select_pos_{row['CLIENTE']}_{idx}"
                     )
                     
-                    if nuova_pos - 1 != idx:
+                    if nueva_pos - 1 != idx:
                         df_temp = st.session_state.giro_corrente.copy()
                         riga = df_temp.iloc[idx]
                         df_temp = df_temp.drop(df_temp.index[idx])
