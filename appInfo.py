@@ -97,7 +97,7 @@ def carica_db_predefinito():
             try:
                 df = pd.read_csv(file_path) if file_path.endswith('.csv') else pd.read_excel(file_path)
                 df.columns = df.columns.str.strip().str.upper()
-                df['POSIZIONE'] = pd.to_numeric(df['POSIZIONE'], errors='coerce').fillna(0).astype(int)
+                df['POSIZIONE'] = pd.to_numeric(df['POSIZIONE'], errors='coerce').fillna(9999).astype(int)
                 df['QTA_DEFAULT'] = pd.to_numeric(df['QTA_DEFAULT'], errors='coerce').fillna(0).astype(int)
                 df['CLIENTE'] = df['CLIENTE'].astype(str)
                 df['COMUNE'] = df['COMUNE'].astype(str)
@@ -179,7 +179,7 @@ if st.session_state.pagina_attiva == "inserisci":
             st.markdown(f"""
             <div class="stop-card">
                 <div class="stop-address">📍 Indirizzo: {dati_cli['VIA']}, {dati_cli['COMUNE']}</div>
-                <div class="stop-meta">🕒 Orario solito: {dati_cli['ORA']}</div>
+                <div class="stop-meta">🕒 Orario solito: {dati_cli['ORA']} | 🔢 Posizione DB: {dati_cli['POSIZIONE']}</div>
             </div>
             """, unsafe_allow_html=True)
             
@@ -187,6 +187,7 @@ if st.session_state.pagina_attiva == "inserisci":
             
             if st.button("➕ Conferma e Aggiungi alla Bozza", use_container_width=True):
                 nuova_fermata = {
+                    'POSIZIONE_DB': int(dati_cli['POSIZIONE']),
                     'CLIENTE': dati_cli['CLIENTE'],
                     'COMUNE': dati_cli['COMUNE'],
                     'VIA': dati_cli['VIA'],
@@ -204,7 +205,7 @@ if st.session_state.pagina_attiva == "inserisci":
             for i, f in enumerate(st.session_state.bozza_inserimenti):
                 col_i1, col_i2 = st.columns([4, 1])
                 with col_i1:
-                    st.markdown(f"**{i+1}. {f['CLIENTE']}** ({f['Q.ta']} colli)  \n<span style='font-size:12px; color:#94A3B8;'>{f['VIA']}, {f['COMUNE']}</span>", unsafe_allow_html=True)
+                    st.markdown(f"**{i+1}. {f['CLIENTE']}** ({f['Q.ta']} colli)  \n<span style='font-size:12px; color:#94A3B8;'>{f['VIA']}, {f['COMUNE']} (Pos. DB: {f['POSIZIONE_DB']})</span>", unsafe_allow_html=True)
                 with col_i2:
                     if st.button("❌ Rimuovi", key=f"del_bozza_{i}", use_container_width=True):
                         st.session_state.bozza_inserimenti.pop(i)
@@ -212,12 +213,22 @@ if st.session_state.pagina_attiva == "inserisci":
                 st.markdown("<hr style='margin: 8px 0; border-color: #334155;'>", unsafe_allow_html=True)
             
             if st.button("🚀 CREA GIRO FINALE", use_container_width=True):
+                # Crea il dataframe dalla bozza
                 df_nuovo_giro = pd.DataFrame(st.session_state.bozza_inserimenti)
+                
+                # ORDINA AUTOMATICAMENTE IN BASE ALLA POSIZIONE DEL DATABASE
+                df_nuovo_giro = df_nuovo_giro.sort_values(by="POSIZIONE_DB").reset_index(drop=True)
+                
+                # Riassegna la posizione sequenziale pulita per il giro attivo (1, 2, 3...)
                 df_nuovo_giro['POSIZIONE'] = range(1, len(df_nuovo_giro) + 1)
+                
+                # Rimuovi la colonna d'appoggio se non serve e tieni l'ordine pulito
+                df_nuovo_giro = df_nuovo_giro[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
+                
                 st.session_state.giro_corrente = df_nuovo_giro
                 salva_giro_su_disco(st.session_state.giro_corrente)
                 st.session_state.bozza_inserimenti = []
-                st.success("Giro creato e ordinato con successo!")
+                st.success("Giro creato e ordinato in base al database!")
                 st.session_state.pagina_attiva = "maps"
                 st.rerun()
     else:
