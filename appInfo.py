@@ -82,6 +82,7 @@ st.markdown("""
     .stop-address { font-size: 14px; color: #E2E8F0; margin-bottom: 6px; }
     .stop-meta { font-size: 13px; color: #60A5FA; font-weight: 600; }
 
+    /* Stili per l'immagine responsive e il pulsante sovrapposto al 90% */
     .hero-container {
         position: relative;
         width: 100%;
@@ -373,10 +374,28 @@ else:
 
             if clienti_selezionati:
                 st.markdown("---")
-                # Pulsante unico in fondo per aggiungere tutti i selezionati in blocco usando i loro valori di default
+                st.markdown("### 📦 Imposta Colli per i Clienti Selezionati")
+                
+                # Creiamo un piccolo DataFrame temporaneo con i clienti selezionati e i loro default
+                df_sel = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
+                df_sel['Q.ta'] = df_sel['QTA_DEFAULT']
+                
+                # Tabella editabile solo per definire i colli dei clienti selezionati in un unico blocco pulito
+                df_edit_colli = st.data_editor(
+                    df_sel[['CLIENTE', 'COMUNE', 'Q.ta']],
+                    hide_index=True,
+                    use_container_width=True,
+                    key="editor_colli_scelti"
+                )
+
                 if st.button("➕ AGGIUNGI AL GIRO", use_container_width=True, type="primary"):
+                    # Uniamo le quantità modificate dall'utente nella tabella
                     nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
-                    nuovi_clienti['Q.ta'] = nuovi_clienti['QTA_DEFAULT']
+                    
+                    # Mappiamo i valori aggiornati dall'editor
+                    qta_dict = dict(zip(df_edit_colli['CLIENTE'], df_edit_colli['Q.ta']))
+                    nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(qta_dict)
+                    
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
                     st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
