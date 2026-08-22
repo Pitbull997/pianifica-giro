@@ -3,6 +3,7 @@ import pandas as pd
 import urllib.parse
 import os
 import json
+import base64
 
 # Configurazione Pagina
 st.set_page_config(
@@ -14,7 +15,7 @@ st.set_page_config(
 
 FILE_GIRO_PERSISTENTE = "giro_salvato.json"
 
-# CSS Avanzato - Forzatura Dark Mode & Fix UI Mobile + Welcome Overlay
+# CSS Avanzato - Forzatura Dark Mode & Fix UI Mobile + Overlay Perfetto al 2/3
 st.markdown("""
 <style>
     .stApp, body, html {
@@ -81,26 +82,41 @@ st.markdown("""
     .stop-address { font-size: 14px; color: #E2E8F0; margin-bottom: 6px; }
     .stop-meta { font-size: 13px; color: #60A5FA; font-weight: 600; }
 
-    /* Stile per l'immagine responsive con pulsante sovrapposto a 2/3 */
-    .welcome-container {
+    /* Stili per l'immagine responsive e il pulsante sovrapposto esattamente a 2/3 */
+    .hero-container {
         position: relative;
         width: 100%;
-        max-width: 500px; /* Ottimizzato per schermi smartphone */
-        margin: auto;
+        max-width: 450px;
+        margin: 0 auto;
     }
-    .welcome-image {
+    .hero-img {
         width: 100%;
         height: auto;
         display: block;
         border-radius: 12px;
     }
-    .welcome-btn-container {
+    .hero-btn {
         position: absolute;
-        top: 66%; /* 2/3 dell'altezza */
+        top: 66.66%; /* Esattamente a 2/3 dell'altezza dell'immagine */
         left: 50%;
         transform: translate(-50%, -50%);
-        width: 80%;
+        background-color: #2563EB !important;
+        color: white !important;
+        padding: 14px 20px;
+        border-radius: 30px;
+        font-weight: bold;
+        text-decoration: none !important;
+        box-shadow: 0 4px 15px rgba(37, 99, 235, 0.7);
         text-align: center;
+        width: 82%;
+        font-size: 16px;
+        border: 2px solid #60A5FA !important;
+        display: block;
+        z-index: 10;
+    }
+    .hero-btn:hover {
+        background-color: #1D4ED8 !important;
+        color: white !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -150,6 +166,11 @@ def carica_giro_da_disco():
             pass
     return pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
 
+# Gestione navigazione tramite parametri URL (per il pulsante overlay)
+if "nav" in st.query_params and st.query_params["nav"] == "giro":
+    st.session_state.pagina_attiva = "giro"
+    st.query_params.clear()
+
 # Inizializzazione sessioni
 if 'db_clienti' not in st.session_state or st.session_state.db_clienti.empty:
     st.session_state.db_clienti = carica_db_predefinito()
@@ -170,31 +191,23 @@ if 'temp_qta' not in st.session_state:
 # SCHERMATA 0: WELCOME / HOME PAGE GRAFICA
 # ==========================================
 if st.session_state.pagina_attiva == "welcome":
-    import base64
-    
     img_path = "vango_splash.png"
     if os.path.exists(img_path):
         with open(img_path, "rb") as image_file:
             encoded_string = base64.b64encode(image_file.read()).decode()
         
-        # Mostriamo l'immagine responsive con il pulsante posizionato esattamente al 66% (2/3) dell'altezza
+        # Renderizziamo l'immagine responsive con il pulsante sovrapposto esattamente al 66.6% di altezza
         st.markdown(f"""
-            <div class="welcome-container">
-                <img src="data:image/png;base64,{encoded_string}" class="welcome-image">
+            <div class="hero-container">
+                <img src="data:image/png;base64,{encoded_string}" class="hero-img">
+                <a href="?nav=giro" target="_self" class="hero-btn">🚀 ACCEDI ALL'APPLICAZIONE</a>
             </div>
         """, unsafe_allow_html=True)
     else:
         st.warning("⚠️ Immagine 'vango_splash.png' non trovata nella cartella.")
-
-    # Spazio verticale per centrare o gestire il click se preferisci usare lo streamlit button nativo subito sotto,
-    # oppure usiamo un form HTML con azione o un pulsante Streamlit posizionato subito dopo l'immagine.
-    st.markdown("<div style='text-align: center; margin-top: -80px; position: relative; z-index: 10;'>", unsafe_allow_html=True)
-    col_centrata = st.columns([1, 2, 1])
-    with col_centrata[1]:
         if st.button("🚀 ACCEDI ALL'APPLICAZIONE", use_container_width=True, type="primary"):
             st.session_state.pagina_attiva = "giro"
             st.rerun()
-    st.markdown("</div>", unsafe_allow_html=True)
 
 # ==========================================
 # APPLICAZIONE PRINCIPALE (Giro / Inserisci Cliente)
@@ -380,7 +393,6 @@ else:
 
                 if st.button("➕ AGGIUNGI AL GIRO", use_container_width=True, type="primary"):
                     nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
-                    nuovi_clienti['Q.ta'] = nuevos_clienti['CLIENTE'].map(st.session_state.temp_qta) if 'nuevos_clienti' not in locals() else nuovi_clienti['CLIENTE'].map(st.session_state.temp_qta)
                     nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(st.session_state.temp_qta)
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
