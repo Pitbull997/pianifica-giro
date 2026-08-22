@@ -14,7 +14,7 @@ st.set_page_config(
 
 FILE_GIRO_PERSISTENTE = "giro_salvato.json"
 
-# CSS Avanzato - Forzatura Dark Mode & Fix UI Mobile
+# CSS Avanzato - Forzatura Dark Mode & Fix UI Mobile + Welcome Overlay
 st.markdown("""
 <style>
     .stApp, body, html {
@@ -80,6 +80,28 @@ st.markdown("""
     .stop-title { font-size: 17px; font-weight: bold; color: #FFFFFF; margin-bottom: 4px; }
     .stop-address { font-size: 14px; color: #E2E8F0; margin-bottom: 6px; }
     .stop-meta { font-size: 13px; color: #60A5FA; font-weight: 600; }
+
+    /* Stile per l'immagine responsive con pulsante sovrapposto a 2/3 */
+    .welcome-container {
+        position: relative;
+        width: 100%;
+        max-width: 500px; /* Ottimizzato per schermi smartphone */
+        margin: auto;
+    }
+    .welcome-image {
+        width: 100%;
+        height: auto;
+        display: block;
+        border-radius: 12px;
+    }
+    .welcome-btn-container {
+        position: absolute;
+        top: 66%; /* 2/3 dell'altezza */
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 80%;
+        text-align: center;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -128,7 +150,7 @@ def carica_giro_da_disco():
             pass
     return pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
 
-# Inizializzazione sessioni (pagina_attiva parte da "welcome")
+# Inizializzazione sessioni
 if 'db_clienti' not in st.session_state or st.session_state.db_clienti.empty:
     st.session_state.db_clienti = carica_db_predefinito()
 
@@ -145,27 +167,39 @@ if 'temp_qta' not in st.session_state:
     st.session_state.temp_qta = {}
 
 # ==========================================
-# SCHERMATA 0: WELCOME / HOME PAGE
+# SCHERMATA 0: WELCOME / HOME PAGE GRAFICA
 # ==========================================
 if st.session_state.pagina_attiva == "welcome":
-    if os.path.exists("vango_splash.png"):
-        st.image("vango_splash.png", use_container_width=True)
+    import base64
+    
+    img_path = "vango_splash.png"
+    if os.path.exists(img_path):
+        with open(img_path, "rb") as image_file:
+            encoded_string = base64.b64encode(image_file.read()).decode()
+        
+        # Mostriamo l'immagine responsive con il pulsante posizionato esattamente al 66% (2/3) dell'altezza
+        st.markdown(f"""
+            <div class="welcome-container">
+                <img src="data:image/png;base64,{encoded_string}" class="welcome-image">
+            </div>
+        """, unsafe_allow_html=True)
     else:
-        st.markdown("<h1 style='text-align: center; color: #FF7A00;'>🚐 VANGO</h1>", unsafe_allow_html=True)
-        st.markdown("<p style='text-align: center; color: #CCCCCC;'>Ottimizzazione Consegne - Pianifica, Risparmia, Consegna.</p>", unsafe_allow_html=True)
-        st.warning("⚠️ Immagine 'vango_splash.png' non trovata nella cartella. Inseriscila per visualizzarla correttamente.")
-    
-    st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
-    
-    if st.button("🚀 ACCEDI ALL'APPLICAZIONE", use_container_width=True, type="primary"):
-        st.session_state.pagina_attiva = "giro"
-        st.rerun()
+        st.warning("⚠️ Immagine 'vango_splash.png' non trovata nella cartella.")
+
+    # Spazio verticale per centrare o gestire il click se preferisci usare lo streamlit button nativo subito sotto,
+    # oppure usiamo un form HTML con azione o un pulsante Streamlit posizionato subito dopo l'immagine.
+    st.markdown("<div style='text-align: center; margin-top: -80px; position: relative; z-index: 10;'>", unsafe_allow_html=True)
+    col_centrata = st.columns([1, 2, 1])
+    with col_centrata[1]:
+        if st.button("🚀 ACCEDI ALL'APPLICAZIONE", use_container_width=True, type="primary"):
+            st.session_state.pagina_attiva = "giro"
+            st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # ==========================================
 # APPLICAZIONE PRINCIPALE (Giro / Inserisci Cliente)
 # ==========================================
 else:
-    # Pulsante per tornare alla Home Page Grafica
     if st.button("🏠 Home Grafica", key="btn_home_grafica"):
         st.session_state.pagina_attiva = "welcome"
         st.rerun()
@@ -325,7 +359,7 @@ else:
                     st.rerun()
 
             clienti_selezionati = st.multiselect(
-                "Cerca e seleziona i clienti per il giro:",
+                "Cerca e seleziona i clienti per le consegne:",
                 options=lista_completa,
                 default=st.session_state.clienti_selezionati_m
             )
@@ -346,6 +380,7 @@ else:
 
                 if st.button("➕ AGGIUNGI AL GIRO", use_container_width=True, type="primary"):
                     nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
+                    nuovi_clienti['Q.ta'] = nuevos_clienti['CLIENTE'].map(st.session_state.temp_qta) if 'nuevos_clienti' not in locals() else nuovi_clienti['CLIENTE'].map(st.session_state.temp_qta)
                     nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(st.session_state.temp_qta)
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
