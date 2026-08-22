@@ -82,7 +82,6 @@ st.markdown("""
     .stop-address { font-size: 14px; color: #E2E8F0; margin-bottom: 6px; }
     .stop-meta { font-size: 13px; color: #60A5FA; font-weight: 600; }
 
-    /* Stili per l'immagine responsive e il pulsante sovrapposto al 90% */
     .hero-container {
         position: relative;
         width: 100%;
@@ -97,7 +96,7 @@ st.markdown("""
     }
     .hero-btn {
         position: absolute;
-        top: 90%; /* Posizionato al 90% dell'altezza dell'immagine */
+        top: 90%;
         left: 50%;
         transform: translate(-50%, -50%);
         background-color: #2563EB !important;
@@ -166,7 +165,7 @@ def carica_giro_da_disco():
             pass
     return pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
 
-# Gestione navigazione tramite parametri URL (per il pulsante overlay)
+# Gestione navigazione tramite parametri URL
 if "nav" in st.query_params and st.query_params["nav"] == "giro":
     st.session_state.pagina_attiva = "giro"
     st.query_params.clear()
@@ -184,9 +183,6 @@ if 'pagina_attiva' not in st.session_state:
 if 'clienti_selezionati_m' not in st.session_state:
     st.session_state.clienti_selezionati_m = []
 
-if 'temp_qta' not in st.session_state:
-    st.session_state.temp_qta = {}
-
 # ==========================================
 # SCHERMATA 0: WELCOME / HOME PAGE GRAFICA
 # ==========================================
@@ -196,7 +192,6 @@ if st.session_state.pagina_attiva == "welcome":
         with open(img_path, "rb") as image_file:
             encoded_string = base64.b64encode(image_file.read()).decode()
         
-        # Renderizziamo l'immagine responsive con il pulsante sovrapposto al 90%
         st.markdown(f"""
             <div class="hero-container">
                 <img src="data:image/png;base64,{encoded_string}" class="hero-img">
@@ -210,17 +205,15 @@ if st.session_state.pagina_attiva == "welcome":
             st.rerun()
 
 # ==========================================
-# APPLICAZIONE PRINCIPALE (Giro / Inserisci Cliente)
+# APPLICAZIONE PRINCIPALE
 # ==========================================
 else:
     if st.button("🏠 Home Grafica", key="btn_home_grafica"):
         st.session_state.pagina_attiva = "welcome"
         st.rerun()
 
-    # TITOLO PRINCIPALE IN CIMA
     st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 26px; margin-bottom: 20px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
 
-    # GRIGLIA 4 PULSANTI IN ALTO (2x2)
     col_sw1, col_sw2 = st.columns(2)
 
     with col_sw1:
@@ -380,20 +373,24 @@ else:
 
             if clienti_selezionati:
                 st.markdown("---")
-                st.markdown("### 📦 Specifica Colli per i clienti selezionati")
+                st.markdown("### 📦 Conferma Colli per i clienti selezionati")
+                st.caption("Puoi lasciare il valore predefinito o modificarlo al volo per ciascuno.")
+                
+                # Creiamo un dizionario temporaneo locale per raccogliere i dati di questa schermata
+                colli_inseriti = {}
                 
                 for cliente in clienti_selezionati:
                     default_val = int(st.session_state.db_clienti.loc[st.session_state.db_clienti['CLIENTE'] == cliente, 'QTA_DEFAULT'].values[0])
-                    st.session_state.temp_qta[cliente] = st.number_input(
+                    colli_inseriti[cliente] = st.number_input(
                         f"Colli per {cliente}:",
                         min_value=0,
-                        value=st.session_state.temp_qta.get(cliente, default_val),
-                        key=f"input_qta_{cliente}"
+                        value=default_val,
+                        key=f"input_qta_batch_{cliente}"
                     )
 
                 if st.button("➕ AGGIUNGI AL GIRO", use_container_width=True, type="primary"):
                     nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
-                    nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(st.session_state.temp_qta)
+                    nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(colli_inseriti)
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
                     st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
@@ -401,7 +398,6 @@ else:
                     
                     salva_giro_su_disco(st.session_state.giro_corrente)
                     st.session_state.clienti_selezionati_m = []
-                    st.session_state.temp_qta = {}
                     
                     st.success("Aggiunti al giro!")
                     st.session_state.pagina_attiva = "giro"
