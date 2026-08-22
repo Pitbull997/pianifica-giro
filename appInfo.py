@@ -168,12 +168,6 @@ if 'giro_corrente' not in st.session_state:
 if 'pagina_attiva' not in st.session_state:
     st.session_state.pagina_attiva = "giro"
 
-if 'clienti_selezionati_m' not in st.session_state:
-    st.session_state.clienti_selezionati_m = []
-
-if 'temp_qta' not in st.session_state:
-    st.session_state.temp_qta = {}
-
 # ==========================================
 # TITOLO PRINCIPALE IN CIMA
 # ==========================================
@@ -335,57 +329,65 @@ if st.session_state.pagina_attiva == "giro":
 # SCHERMATA 2: DATABASE CLIENTI
 # ==========================================
 elif st.session_state.pagina_attiva == "db":
-    st.subheader("📁 Database & Selezione Clienti")
+    st.subheader("📁 Seleziona Cliente & Inserisci Colli")
     
     if not st.session_state.db_clienti.empty:
-        lista_completa = st.session_state.db_clienti['CLIENTE'].dropna().tolist()
+        # Barra di ricerca testuale per filtrare rapidamente i clienti
+        ricerca = st.text_input("🔍 Cerca cliente o comune:", "").strip().lower()
         
-        col_b1, col_b2 = st.columns(2)
-        with col_b1:
-            if st.button("✅ Seleziona Tutti", use_container_width=True):
-                st.session_state.clienti_selezionati_m = lista_completa
-                st.rerun()
-        with col_b2:
-            if st.button("❌ Deseleziona Tutti", use_container_width=True):
-                st.session_state.clienti_selezionati_m = []
-                st.rerun()
+        df_mostrato = st.session_state.db_clienti
+        if ricerca:
+            df_mostrato = df_mostrato[
+                df_mostrato['CLIENTE'].str.lower().str.contains(ricerca) | 
+                df_mostrato['COMUNE'].str.lower().str.contains(ricerca)
+            ]
 
-        # Multiselect con i tag
-        clienti_selezionati = st.multiselect(
-            "Cerca e seleziona i clienti per il giro:",
-            options=lista_completa,
-            default=st.session_state.clienti_selezionati_m
-        )
-        st.session_state.clienti_selezionati_m = clienti_selezionati
+        st.markdown("<p style='color: #94A3B8; font-size: 13px;'>Clicca su un cliente per impostare i colli e aggiungerlo al giro:</p>", unsafe_allow_html=True)
 
-        if clienti_selezionati:
-            st.markdown("---")
-            st.markdown("### 📦 Specifica Colli per i clienti selezionati")
-            
-            for cliente in clienti_selezionati:
-                default_val = int(st.session_state.db_clienti.loc[st.session_state.db_clienti['CLIENTE'] == cliente, 'QTA_DEFAULT'].values[0])
-                st.session_state.temp_qta[cliente] = st.number_input(
-                    f"Colli per {cliente}:",
-                    min_value=0,
-                    value=st.session_state.temp_qta.get(cliente, default_val),
-                    key=f"input_qta_{cliente}"
-                )
+        for idx, row in df_mostrato.iterrows():
+            cliente_nome = row['CLIENTE']
+            comune = row['COMUNE']
+            via = row['VIA']
+            default_qta = int(row['QTA_DEFAULT'])
 
-            if st.button("➕ AGGIUNGI AL GIRO", use_container_width=True, type="primary"):
-                nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
-                nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(st.session_state.temp_qta)
-                nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
+            # Creiamo un expander o un box interattivo per ogni cliente trovato
+            with st.container():
+                st.markdown(f"""
+                <div style="background-color: #1E1E1E; padding: 10px 14px; border-radius: 8px; border: 1px solid #334155; margin-bottom: 8px;">
+                    <div style="font-size: 16px; font-weight: bold; color: #FFFFFF;">{cliente_nome}</div>
+                    <div style="font-size: 13px; color: #94A3B8;">📍 {via}, {comune}</div>
+                </div>
+                """, unsafe_allow_html=True)
                 
-                st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
-                st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
+                col_q, col_btn = st.columns([1, 1])
+                with col_q:
+                    qta_inserita = st.number_input(
+                        "Colli", 
+                        min_value=0, 
+                        value=default_qta, 
+                        key=f"qta_add_{idx}",
+                        label_visibility="collapsed"
+                    )
+                with col_btn:
+                    if st.button("➕ Aggiungi al Giro", key=f"btn_add_{idx}", use_container_width=True):
+                        # Aggiunge direttamente il singolo cliente al giro con la quantità scelta
+                        nuova_riga = pd.DataFrame([{
+                            'POSIZIONE': len(st.session_state.giro_corrente) + 1,
+                            'CLIENTE': cliente_nome,
+                            'COMUNE': comune,
+                            'VIA': via,
+                            'ORA': row['ORA'],
+                            'Q.ta': qta_inserita
+                        }])
+                        
+                        st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuova_riga], ignore_index=True)
+                        st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
+                        salva_giro_su_disco(st.session_state.giro_corrente)
+                        
+                        st.success(f"Aggiunto: {cliente_nome} ({qta_inserita} colli)")
+                        st.rerun()
                 
-                salva_giro_su_disco(st.session_state.giro_corrente)
-                st.session_state.clienti_selezionati_m = []
-                st.session_state.temp_qta = {}
-                
-                st.success("Aggiunti al giro!")
-                st.session_state.pagina_attiva = "giro"
-                st.rerun()
+                st.markdown("<div style='margin-bottom: 4px;'></div>", unsafe_allow_html=True)
                 
         st.markdown("---")
         with st.expander("👀 Visualizza o Modifica Anagrafica Clienti intera"):
