@@ -57,26 +57,6 @@ st.markdown("""
         font-size: 15px !important;
     }
 
-    .btn-arrow-up div[data-testid="stButton"] > button {
-        background-color: #0F172A !important;
-        color: #38BDF8 !important;
-        border: 1px solid #0284C7 !important;
-        height: 42px !important;
-        font-size: 20px !important;
-        padding: 0px !important;
-        border-radius: 8px !important;
-    }
-
-    .btn-arrow-down div[data-testid="stButton"] > button {
-        background-color: #0F172A !important;
-        color: #FB923C !important;
-        border: 1px solid #EA580C !important;
-        height: 42px !important;
-        font-size: 20px !important;
-        padding: 0px !important;
-        border-radius: 8px !important;
-    }
-
     div[data-baseweb="select"] {
         background-color: #1E293B !important;
         border-radius: 8px !important;
@@ -148,16 +128,6 @@ def carica_giro_da_disco():
             pass
     return pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
 
-def sposta_riga(df, idx, direzione):
-    df_temp = df.copy()
-    target_idx = idx - 1 if direzione == "up" else idx + 1
-    if 0 <= target_idx < len(df_temp):
-        df_temp.iloc[idx], df_temp.iloc[target_idx] = df_temp.iloc[target_idx].copy(), df_temp.iloc[idx].copy()
-        df_temp['POSIZIONE'] = range(1, len(df_temp) + 1)
-        st.session_state.giro_corrente = df_temp.reset_index(drop=True)
-        salva_giro_su_disco(st.session_state.giro_corrente)
-        st.rerun()
-
 # Inizializzazione sessioni
 if 'db_clienti' not in st.session_state or st.session_state.db_clienti.empty:
     st.session_state.db_clienti = carica_db_predefinito()
@@ -216,101 +186,61 @@ if st.session_state.pagina_attiva == "giro":
     st.markdown("---")
 
     if not st.session_state.giro_corrente.empty:
-        vista = st.radio("Modalità vista:", ["📱 Lista Schede (Mobile)", "✏️ Tabella Modificabile"], horizontal=True)
-
-        if vista == "📱 Lista Schede (Mobile)":
-            st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
+        st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
+        
+        for idx in range(tot_clienti):
+            row = st.session_state.giro_corrente.iloc[idx]
             
-            for idx in range(tot_clienti):
-                row = st.session_state.giro_corrente.iloc[idx]
-                
-                st.markdown(f"""
-                <div class="stop-card">
-                    <div class="stop-title">{idx + 1}. {row['CLIENTE']}</div>
-                    <div class="stop-address">📍 {row['VIA']}, {row['COMUNE']}</div>
-                    <div class="stop-meta">🕒 Ora: {row['ORA']} | 📦 Q.tà: {row['Q.ta']} pz</div>
-                </div>
-                """, unsafe_allow_html=True)
+            st.markdown(f"""
+            <div class="stop-card">
+                <div class="stop-title">{idx + 1}. {row['CLIENTE']}</div>
+                <div class="stop-address">📍 {row['VIA']}, {row['COMUNE']}</div>
+                <div class="stop-meta">🕒 Ora: {row['ORA']} | 📦 Q.tà: {row['Q.ta']} pz</div>
+            </div>
+            """, unsafe_allow_html=True)
 
-                col_c1, col_c2, col_c3 = st.columns([1, 1, 1])
-                
-                with col_c1:
-                    dest = urllib.parse.quote(f"{row['VIA']}, {row['COMUNE']}")
-                    st.write("")
-                    st.markdown(f"[🚘 **NAVIGA ORA**](https://www.google.com/maps/dir/?api=1&destination={dest})")
+            col_c1, col_c2, col_c3 = st.columns([1, 1, 1])
+            
+            with col_c1:
+                dest = urllib.parse.quote(f"{row['VIA']}, {row['COMUNE']}")
+                st.write("")
+                st.markdown(f"[🚘 **NAVIGA ORA**](https://www.google.com/maps/dir/?api=1&destination={dest})")
 
-                with col_c2:
-                    nuova_qta = st.number_input(
-                        "Q.tà colli",
-                        min_value=0,
-                        value=int(row['Q.ta']),
-                        key=f"qta_mobile_{row['CLIENTE']}_{idx}"
-                    )
-                    if nuova_qta != int(row['Q.ta']):
-                        st.session_state.giro_corrente.at[idx, 'Q.ta'] = nuova_qta
-                        salva_giro_su_disco(st.session_state.giro_corrente)
-                        st.rerun()
-
-                with col_c3:
-                    nuova_pos = st.selectbox(
-                        "Sposta a pos:",
-                        options=[i for i in range(1, tot_clienti + 1)],
-                        index=idx,
-                        key=f"select_pos_{row['CLIENTE']}_{idx}"
-                    )
-                    
-                    if nuova_pos - 1 != idx:
-                        df_temp = st.session_state.giro_corrente.copy()
-                        riga = df_temp.iloc[idx]
-                        df_temp = df_temp.drop(df_temp.index[idx])
-                        top = df_temp.iloc[:nuova_pos - 1]
-                        bottom = df_temp.iloc[nuova_pos - 1:]
-                        
-                        df_nuovo = pd.concat([top, pd.DataFrame([riga]), bottom], ignore_index=True)
-                        df_nuovo['POSIZIONE'] = [str(i) for i in range(1, len(df_nuovo) + 1)]
-                        
-                        st.session_state.giro_corrente = df_nuovo
-                        salva_giro_su_disco(st.session_state.giro_corrente)
-                        st.rerun()
-
-                st.markdown("<hr style='margin: 10px 0; border-color: #262626;'>", unsafe_allow_html=True)
-
-        else:
-            for idx in range(tot_clienti):
-                row = st.session_state.giro_corrente.iloc[idx]
-                
-                col_title, col_btn1, col_btn2 = st.columns([5, 1, 1])
-                
-                with col_title:
-                    st.markdown(f"<h3 style='margin: 0; padding-top: 4px; font-size: 18px;'>{idx + 1}. {row['CLIENTE']}</h3>", unsafe_allow_html=True)
-
-                with col_btn1:
-                    st.markdown('<div class="btn-arrow-up">', unsafe_allow_html=True)
-                    if st.button("⬆️", key=f"tbl_up_{idx}", use_container_width=True, disabled=(idx == 0)):
-                        sposta_riga(st.session_state.giro_corrente, idx, "up")
-                    st.markdown('</div>', unsafe_allow_html=True)
-
-                with col_btn2:
-                    st.markdown('<div class="btn-arrow-down">', unsafe_allow_html=True)
-                    if st.button("⬇️", key=f"tbl_dn_{idx}", use_container_width=True, disabled=(idx == tot_clienti - 1)):
-                        sposta_riga(st.session_state.giro_corrente, idx, "down")
-                    st.markdown('</div>', unsafe_allow_html=True)
-
-                st.markdown(f"<div style='color: #A3A3A3; font-size: 14px; margin-top: 4px;'>📍 {row['VIA']}, {row['COMUNE']}</div>", unsafe_allow_html=True)
-
+            with col_c2:
                 nuova_qta = st.number_input(
-                    "Q.tà",
+                    "Q.tà colli",
                     min_value=0,
                     value=int(row['Q.ta']),
-                    key=f"qta_inp_{idx}",
-                    label_visibility="collapsed"
+                    key=f"qta_mobile_{row['CLIENTE']}_{idx}"
                 )
                 if nuova_qta != int(row['Q.ta']):
                     st.session_state.giro_corrente.at[idx, 'Q.ta'] = nuova_qta
                     salva_giro_su_disco(st.session_state.giro_corrente)
                     st.rerun()
 
-                st.markdown("<hr style='margin: 12px 0; border-color: #262626;'>", unsafe_allow_html=True)
+            with col_c3:
+                nuova_pos = st.selectbox(
+                    "Sposta a pos:",
+                    options=[i for i in range(1, tot_clienti + 1)],
+                    index=idx,
+                    key=f"select_pos_{row['CLIENTE']}_{idx}"
+                )
+                
+                if nuova_pos - 1 != idx:
+                    df_temp = st.session_state.giro_corrente.copy()
+                    riga = df_temp.iloc[idx]
+                    df_temp = df_temp.drop(df_temp.index[idx])
+                    top = df_temp.iloc[:nuova_pos - 1]
+                    bottom = df_temp.iloc[nuova_pos - 1:]
+                    
+                    df_nuovo = pd.concat([top, pd.DataFrame([riga]), bottom], ignore_index=True)
+                    df_nuovo['POSIZIONE'] = [str(i) for i in range(1, len(df_nuovo) + 1)]
+                    
+                    st.session_state.giro_corrente = df_nuovo
+                    salva_giro_su_disco(st.session_state.giro_corrente)
+                    st.rerun()
+
+            st.markdown("<hr style='margin: 10px 0; border-color: #262626;'>", unsafe_allow_html=True)
 
         st.markdown("---")
 
@@ -365,7 +295,6 @@ elif st.session_state.pagina_attiva == "db":
                 st.session_state.clienti_selezionati_m = []
                 st.rerun()
 
-        # Multiselect con i tag
         clienti_selezionati = st.multiselect(
             "Cerca e seleziona i clienti per il giro:",
             options=lista_completa,
