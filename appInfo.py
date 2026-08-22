@@ -365,16 +365,21 @@ else:
                     st.session_state.clienti_selezionati_m = []
                     st.rerun()
 
+            # Usiamo una callback / key legata allo state per evitare il reset della tendina durante la digitazione/selezione
+            def aggiorna_selezione():
+                st.session_state.clienti_selezionati_m = st.session_state.widget_multiselect
+
             clienti_selezionati = st.multiselect(
                 "Cerca e seleziona i clienti per le consegne:",
                 options=lista_completa,
-                default=st.session_state.clienti_selezionati_m
+                default=st.session_state.clienti_selezionati_m,
+                key="widget_multiselect",
+                on_change=aggiorna_selezione
             )
-            st.session_state.clienti_selezionati_m = clienti_selezionati
 
             if clienti_selezionati:
-                st.markdown("---")
-                st.markdown("### 📦 Imposta Colli per i Clienti Selezionati")
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown("### 📦 Configura Colli per i Clienti Selezionati")
                 
                 df_sel = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
                 df_sel['Q.ta'] = df_sel['QTA_DEFAULT']
@@ -386,7 +391,7 @@ else:
                     key="editor_colli_scelti"
                 )
 
-                if st.button("➕ AGGIUNGI AL GIRO", use_container_width=True, type="primary"):
+                if st.button("➕ CONFERMA E AGGIUNGI AL GIRO", use_container_width=True, type="primary"):
                     nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
                     
                     qta_dict = dict(zip(df_edit_colli['CLIENTE'], df_edit_colli['Q.ta']))
