@@ -232,8 +232,26 @@ if st.session_state.pagina_attiva == "giro":
                 </div>
                 """, unsafe_allow_html=True)
 
-                col_c1, col_c2 = st.columns([1, 1])
+                col_c1, col_c2, col_c3 = st.columns([1, 1, 1])
+                
                 with col_c1:
+                    dest = urllib.parse.quote(f"{row['VIA']}, {row['COMUNE']}")
+                    st.write("")
+                    st.markdown(f"[🚘 **NAVIGA ORA**](https://www.google.com/maps/dir/?api=1&destination={dest})")
+
+                with col_c2:
+                    nuova_qta = st.number_input(
+                        "Q.tà colli",
+                        min_value=0,
+                        value=int(row['Q.ta']),
+                        key=f"qta_mobile_{row['CLIENTE']}_{idx}"
+                    )
+                    if nuova_qta != int(row['Q.ta']):
+                        st.session_state.giro_corrente.at[idx, 'Q.ta'] = nuova_qta
+                        salva_giro_su_disco(st.session_state.giro_corrente)
+                        st.rerun()
+
+                with col_c3:
                     nuova_pos = st.selectbox(
                         "Sposta a pos:",
                         options=[i for i in range(1, tot_clienti + 1)],
@@ -255,10 +273,7 @@ if st.session_state.pagina_attiva == "giro":
                         salva_giro_su_disco(st.session_state.giro_corrente)
                         st.rerun()
 
-                with col_c2:
-                    st.write("")
-                    dest = urllib.parse.quote(f"{row['VIA']}, {row['COMUNE']}")
-                    st.markdown(f"[🚘 **NAVIGA ORA**](https://www.google.com/maps/dir/?api=1&destination={dest})")
+                st.markdown("<hr style='margin: 10px 0; border-color: #262626;'>", unsafe_allow_html=True)
 
         else:
             for idx in range(tot_clienti):
@@ -350,7 +365,7 @@ elif st.session_state.pagina_attiva == "db":
                 st.session_state.clienti_selezionati_m = []
                 st.rerun()
 
-        # Multiselect con i tag come piace a te
+        # Multiselect con i tag
         clienti_selezionati = st.multiselect(
             "Cerca e seleziona i clienti per il giro:",
             options=lista_completa,
@@ -360,58 +375,20 @@ elif st.session_state.pagina_attiva == "db":
 
         if clienti_selezionati:
             st.markdown("---")
-            st.markdown("### 📦 Inserisci Colli per i clienti selezionati")
+            st.markdown("### 📦 Specifica Colli per i clienti selezionati")
             
-            # Mostra un blocco interattivo per ogni cliente selezionato nel multiselect
             for cliente in clienti_selezionati:
-                riga_cliente = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'] == cliente].iloc[0]
-                default_val = int(riga_cliente['QTA_DEFAULT'])
-                
-                st.markdown(f"""
-                <div style="background-color: #1E1E1E; padding: 10px 14px; border-radius: 8px; border: 1px solid #334155; margin-bottom: 6px;">
-                    <div style="font-size: 16px; font-weight: bold; color: #FFFFFF;">🏢 {cliente}</div>
-                    <div style="font-size: 13px; color: #94A3B8;">📍 {riga_cliente['VIA']}, {riga_cliente['COMUNE']}</div>
-                </div>
-                """, unsafe_allow_html=True)
+                default_val = int(st.session_state.db_clienti.loc[st.session_state.db_clienti['CLIENTE'] == cliente, 'QTA_DEFAULT'].values[0])
+                st.session_state.temp_qta[cliente] = st.number_input(
+                    f"Colli per {cliente}:",
+                    min_value=0,
+                    value=st.session_state.temp_qta.get(cliente, default_val),
+                    key=f"input_qta_{cliente}"
+                )
 
-                col_q, col_btn = st.columns([1, 1])
-                with col_q:
-                    st.session_state.temp_qta[cliente] = st.number_input(
-                        f"Colli per {cliente}:",
-                        min_value=0,
-                        value=st.session_state.temp_qta.get(cliente, default_val),
-                        key=f"input_qta_{cliente}",
-                        label_visibility="collapsed"
-                    )
-                with col_btn:
-                    if st.button(f"➕ Aggiungi {cliente}", key=f"btn_single_add_{cliente}", use_container_width=True):
-                        qta_scelta = st.session_state.temp_qta.get(cliente, default_val)
-                        nuova_riga = pd.DataFrame([{
-                            'POSIZIONE': len(st.session_state.giro_corrente) + 1,
-                            'CLIENTE': cliente,
-                            'COMUNE': riga_cliente['COMUNE'],
-                            'VIA': riga_cliente['VIA'],
-                            'ORA': riga_cliente['ORA'],
-                            'Q.ta': qta_scelta
-                        }])
-                        
-                        st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuova_riga], ignore_index=True)
-                        st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
-                        salva_giro_su_disco(st.session_state.giro_corrente)
-                        
-                        # Rimuove il cliente dai selezionati e pulisce la memoria temporanea
-                        st.session_state.clienti_selezionati_m.remove(cliente)
-                        if cliente in st.session_state.temp_qta:
-                            del st.session_state.temp_qta[cliente]
-                            
-                        st.success(f"Aggiunto {cliente} al giro!")
-                        st.rerun()
-
-                st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
-
-            if st.button("➕ AGGIUNGI TUTTI I SELEZIONATI IN BLOCCO", use_container_width=True, type="primary"):
+            if st.button("➕ AGGIUNGI AL GIRO", use_container_width=True, type="primary"):
                 nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
-                nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(lambda c: st.session_state.temp_qta.get(c, int(st.session_state.db_clienti.loc[st.session_state.db_clienti['CLIENTE'] == c, 'QTA_DEFAULT'].values[0])))
+                nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(st.session_state.temp_qta)
                 nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                 
                 st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
@@ -421,7 +398,7 @@ elif st.session_state.pagina_attiva == "db":
                 st.session_state.clienti_selezionati_m = []
                 st.session_state.temp_qta = {}
                 
-                st.success("Tutti i clienti selezionati sono stati aggiunti al giro!")
+                st.success("Aggiunti al giro!")
                 st.session_state.pagina_attiva = "giro"
                 st.rerun()
                 
