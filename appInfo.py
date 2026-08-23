@@ -322,6 +322,16 @@ else:
         if not st.session_state.giro_corrente.empty:
             st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
             
+            # Generazione link mappe comune per entrambe le viste
+            addresses = [f"{r['VIA']}, {r['COMUNE']}" for _, r in st.session_state.giro_corrente.iterrows()]
+            if len(addresses) == 1:
+                maps_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(addresses[0])}"
+            else:
+                origin = urllib.parse.quote(addresses[0])
+                destination = urllib.parse.quote(addresses[-1])
+                waypoints = "|".join([urllib.parse.quote(a) for a in addresses[1:-1]])
+                maps_url = f"https://www.google.com/maps/dir/?api=1&origin={origin}&destination={destination}&waypoints={waypoints}"
+
             # SEZIONE VISTA PULITA (Senza fronzoli)
             if st.session_state.vista_pulita:
                 st.markdown(f"<p style='color: #94A3B8; font-size: 14px; margin-bottom: 15px;'>{tot_clienti} indirizzi trovati nel giro.</p>", unsafe_allow_html=True)
@@ -337,6 +347,16 @@ else:
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
+
+                st.markdown("---")
+
+                st.markdown(f'''
+                    <a href="{maps_url}" target="_blank" style="text-decoration:none;">
+                        <button style="width:100%; background-color:#2563EB; color:white; border:none; border-radius:25px; height:52px; font-weight:bold; font-size:16px; box-shadow: 0 4px 10px rgba(37, 99, 235, 0.4);">
+                            🗺️ AVVIA PERCORSO
+                        </button>
+                    </a>
+                ''', unsafe_allow_html=True)
             
             # SEZIONE VISTA OPERATIVA NORMALE
             else:
@@ -365,7 +385,7 @@ else:
                             value=int(row['Q.ta']),
                             key=f"qta_mobile_{row['CLIENTE']}_{idx}"
                         )
-                        if nueva_qta if 'nueva_qta' in locals() else nuova_qta != int(row['Q.ta']):
+                        if nuova_qta != int(row['Q.ta']):
                             st.session_state.giro_corrente.at[idx, 'Q.ta'] = nuova_qta
                             salva_giro_su_disco(st.session_state.giro_corrente)
                             st.rerun()
@@ -396,19 +416,10 @@ else:
 
                 st.markdown("---")
 
-                addresses = [f"{r['VIA']}, {r['COMUNE']}" for _, r in st.session_state.giro_corrente.iterrows()]
-                if len(addresses) == 1:
-                    maps_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(addresses[0])}"
-                else:
-                    origin = urllib.parse.quote(addresses[0])
-                    destination = urllib.parse.quote(addresses[-1])
-                    waypoints = "|".join([urllib.parse.quote(a) for a in addresses[1:-1]])
-                    maps_url = f"https://www.google.com/maps/dir/?api=1&origin={origin}&destination={destination}&waypoints={waypoints}"
-
                 st.markdown(f'''
                     <a href="{maps_url}" target="_blank" style="text-decoration:none;">
                         <button style="width:100%; background-color:#2563EB; color:white; border:none; border-radius:25px; height:52px; font-weight:bold; font-size:16px; box-shadow: 0 4px 10px rgba(37, 99, 235, 0.4);">
-                            🗺️ AVVIA PERCORSO COMPLETO
+                            🗺️ AVVIA PERCORSO
                         </button>
                     </a>
                 ''', unsafe_allow_html=True)
