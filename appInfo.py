@@ -266,7 +266,7 @@ else:
         col_m1, col_m2, col_m3 = st.columns(3)
         col_m1.metric("Fermate Totali", f"{tot_clienti}")
         col_m2.metric("Pezzi Totali", f"{tot_qta}")
-        col_m3.metric("Comuni Toccatali", f"{tot_comuni}")
+        col_m3.metric("Comuni", f"{tot_comuni}")
 
         st.markdown("---")
 
