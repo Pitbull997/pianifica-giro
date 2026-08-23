@@ -82,6 +82,44 @@ st.markdown("""
     .stop-address { font-size: 14px; color: #E2E8F0; margin-bottom: 6px; }
     .stop-meta { font-size: 13px; color: #60A5FA; font-weight: 600; }
 
+    /* Stili per la Vista Pulita / Riepilogo */
+    .clean-card {
+        background-color: #1E1E1E;
+        border: 1px solid #334155;
+        border-radius: 14px;
+        padding: 12px 16px;
+        margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+    }
+    .clean-badge {
+        background-color: #DBEAFE;
+        color: #1D4ED8;
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        font-size: 16px;
+        flex-shrink: 0;
+    }
+    .clean-content {
+        flex-grow: 1;
+    }
+    .clean-title {
+        font-size: 16px;
+        font-weight: bold;
+        color: #FFFFFF;
+        margin-bottom: 2px;
+    }
+    .clean-subtitle {
+        font-size: 13px;
+        color: #94A3B8;
+    }
+
     /* Stili per l'immagine responsive e il pulsante sovrapposto al 90% */
     .hero-container {
         position: relative;
@@ -184,6 +222,9 @@ if 'pagina_attiva' not in st.session_state:
 if 'clienti_selezionati_m' not in st.session_state:
     st.session_state.clienti_selezionati_m = []
 
+if 'vista_pulita' not in st.session_state:
+    st.session_state.vista_pulita = False
+
 # ==========================================
 # SCHERMATA 0: WELCOME / HOME PAGE GRAFICA
 # ==========================================
@@ -270,81 +311,107 @@ else:
 
         st.markdown("---")
 
+        # Pulsante per attivare/disattivare la Vista Riepilogo Pulita
+        if not st.session_state.giro_corrente.empty:
+            label_btn_vista = "👁️ TORNA ALLA VISTA OPERATIVA" if st.session_state.vista_pulita else "📋 VISTA RIEPILOGO PULITA"
+            if st.button(label_btn_vista, use_container_width=True):
+                st.session_state.vista_pulita = not st.session_state.vista_pulita
+                st.rerun()
+            st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+
         if not st.session_state.giro_corrente.empty:
             st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
             
-            for idx in range(tot_clienti):
-                row = st.session_state.giro_corrente.iloc[idx]
+            # SEZIONE VISTA PULITA (Senza fronzoli)
+            if st.session_state.vista_pulita:
+                st.markdown(f"<p style='color: #94A3B8; font-size: 14px; margin-bottom: 15px;'>{tot_clienti} indirizzi trovati nel giro.</p>", unsafe_allow_html=True)
                 
-                st.markdown(f"""
-                <div class="stop-card">
-                    <div class="stop-title">{idx + 1}. {row['CLIENTE']}</div>
-                    <div class="stop-address">📍 {row['VIA']}, {row['COMUNE']}</div>
-                    <div class="stop-meta">🕒 Ora: {row['ORA']} | 📦 Q.tà: {row['Q.ta']} pz</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                col_c1, col_c2, col_c3 = st.columns([1, 1, 1])
-                
-                with col_c1:
-                    dest = urllib.parse.quote(f"{row['VIA']}, {row['COMUNE']}")
-                    st.write("")
-                    st.markdown(f"[🚘 **NAVIGA ORA**](https://www.google.com/maps/dir/?api=1&destination={dest})")
-
-                with col_c2:
-                    nuova_qta = st.number_input(
-                        "Q.tà colli",
-                        min_value=0,
-                        value=int(row['Q.ta']),
-                        key=f"qta_mobile_{row['CLIENTE']}_{idx}"
-                    )
-                    if nuova_qta != int(row['Q.ta']):
-                        st.session_state.giro_corrente.at[idx, 'Q.ta'] = nuova_qta
-                        salva_giro_su_disco(st.session_state.giro_corrente)
-                        st.rerun()
-
-                with col_c3:
-                    nuova_pos = st.selectbox(
-                        "Sposta a pos:",
-                        options=[i for i in range(1, tot_clienti + 1)],
-                        index=idx,
-                        key=f"select_pos_{row['CLIENTE']}_{idx}"
-                    )
-                    
-                    if nuova_pos - 1 != idx:
-                        df_temp = st.session_state.giro_corrente.copy()
-                        riga = df_temp.iloc[idx]
-                        df_temp = df_temp.drop(df_temp.index[idx])
-                        top = df_temp.iloc[:nuova_pos - 1]
-                        bottom = df_temp.iloc[nuova_pos - 1:]
-                        
-                        df_nuovo = pd.concat([top, pd.DataFrame([riga]), bottom], ignore_index=True)
-                        df_nuovo['POSIZIONE'] = [str(i) for i in range(1, len(df_nuovo) + 1)]
-                        
-                        st.session_state.giro_corrente = df_nuovo
-                        salva_giro_su_disco(st.session_state.giro_corrente)
-                        st.rerun()
-
-                st.markdown("<hr style='margin: 10px 0; border-color: #262626;'>", unsafe_allow_html=True)
-
-            st.markdown("---")
-
-            addresses = [f"{r['VIA']}, {r['COMUNE']}" for _, r in st.session_state.giro_corrente.iterrows()]
-            if len(addresses) == 1:
-                maps_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(addresses[0])}"
+                for idx in range(tot_clienti):
+                    row = st.session_state.giro_corrente.iloc[idx]
+                    st.markdown(f"""
+                    <div class="clean-card">
+                        <div class="clean-badge">{idx + 1}</div>
+                        <div class="clean-content">
+                            <div class="clean-title">{row['VIA']}</div>
+                            <div class="clean-subtitle">{row['COMUNE']} — Cliente: {row['CLIENTE']} (🕒 {row['ORA']} | 📦 {row['Q.ta']} pz)</div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+            # SEZIONE VISTA OPERATIVA NORMALE
             else:
-                origin = urllib.parse.quote(addresses[0])
-                destination = urllib.parse.quote(addresses[-1])
-                waypoints = "|".join([urllib.parse.quote(a) for a in addresses[1:-1]])
-                maps_url = f"https://www.google.com/maps/dir/?api=1&origin={origin}&destination={destination}&waypoints={waypoints}"
+                for idx in range(tot_clienti):
+                    row = st.session_state.giro_corrente.iloc[idx]
+                    
+                    st.markdown(f"""
+                    <div class="stop-card">
+                        <div class="stop-title">{idx + 1}. {row['CLIENTE']}</div>
+                        <div class="stop-address">📍 {row['VIA']}, {row['COMUNE']}</div>
+                        <div class="stop-meta">🕒 Ora: {row['ORA']} | 📦 Q.tà: {row['Q.ta']} pz</div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-            st.markdown(f'''
-                <a href="{maps_url}" target="_blank" style="text-decoration:none;">
-                    <button style="width:100%; background-color:#2563EB; color:white; border:none; border-radius:25px; height:52px; font-weight:bold; font-size:16px; box-shadow: 0 4px 10px rgba(37, 99, 235, 0.4);">
-                        🗺️ AVVIA PERCORSO COMPLETO
-                    </button>
-                </a>
-            ''', unsafe_allow_html=True)
+                    col_c1, col_c2, col_c3 = st.columns([1, 1, 1])
+                    
+                    with col_c1:
+                        dest = urllib.parse.quote(f"{row['VIA']}, {row['COMUNE']}")
+                        st.write("")
+                        st.markdown(f"[🚘 **NAVIGA ORA**](https://www.google.com/maps/dir/?api=1&destination={dest})")
+
+                    with col_c2:
+                        nuova_qta = st.number_input(
+                            "Q.tà colli",
+                            min_value=0,
+                            value=int(row['Q.ta']),
+                            key=f"qta_mobile_{row['CLIENTE']}_{idx}"
+                        )
+                        if nueva_qta if 'nueva_qta' in locals() else nuova_qta != int(row['Q.ta']):
+                            st.session_state.giro_corrente.at[idx, 'Q.ta'] = nuova_qta
+                            salva_giro_su_disco(st.session_state.giro_corrente)
+                            st.rerun()
+
+                    with col_c3:
+                        nuova_pos = st.selectbox(
+                            "Sposta a pos:",
+                            options=[i for i in range(1, tot_clienti + 1)],
+                            index=idx,
+                            key=f"select_pos_{row['CLIENTE']}_{idx}"
+                        )
+                        
+                        if nuova_pos - 1 != idx:
+                            df_temp = st.session_state.giro_corrente.copy()
+                            riga = df_temp.iloc[idx]
+                            df_temp = df_temp.drop(df_temp.index[idx])
+                            top = df_temp.iloc[:nuova_pos - 1]
+                            bottom = df_temp.iloc[nuova_pos - 1:]
+                            
+                            df_nuovo = pd.concat([top, pd.DataFrame([riga]), bottom], ignore_index=True)
+                            df_nuovo['POSIZIONE'] = [str(i) for i in range(1, len(df_nuovo) + 1)]
+                            
+                            st.session_state.giro_corrente = df_nuovo
+                            salva_giro_su_disco(st.session_state.giro_corrente)
+                            st.rerun()
+
+                    st.markdown("<hr style='margin: 10px 0; border-color: #262626;'>", unsafe_allow_html=True)
+
+                st.markdown("---")
+
+                addresses = [f"{r['VIA']}, {r['COMUNE']}" for _, r in st.session_state.giro_corrente.iterrows()]
+                if len(addresses) == 1:
+                    maps_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(addresses[0])}"
+                else:
+                    origin = urllib.parse.quote(addresses[0])
+                    destination = urllib.parse.quote(addresses[-1])
+                    waypoints = "|".join([urllib.parse.quote(a) for a in addresses[1:-1]])
+                    maps_url = f"https://www.google.com/maps/dir/?api=1&origin={origin}&destination={destination}&waypoints={waypoints}"
+
+                st.markdown(f'''
+                    <a href="{maps_url}" target="_blank" style="text-decoration:none;">
+                        <button style="width:100%; background-color:#2563EB; color:white; border:none; border-radius:25px; height:52px; font-weight:bold; font-size:16px; box-shadow: 0 4px 10px rgba(37, 99, 235, 0.4);">
+                            🗺️ AVVIA PERCORSO COMPLETO
+                        </button>
+                    </a>
+                ''', unsafe_allow_html=True)
         else:
             st.info("Nessuna fermata nel giro corrente. Clicca in alto su 'INSERISCI CLIENTE' per aggiungerne.")
 
