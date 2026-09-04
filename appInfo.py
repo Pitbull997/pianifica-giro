@@ -273,10 +273,10 @@ if st.session_state.pagina_attiva == "welcome":
 # APPLICAZIONE PRINCIPALE
 # ==========================================
 else:
-    # Mostra la nuova icona centrata al posto del furgoncino/scritta precedente
+    # Mostra l'icona più piccola sfruttando colonne più larghe ai lati
     icon_path = "icovg.png"
     if os.path.exists(icon_path):
-        col_img1, col_img2, col_img3 = st.columns([1, 1.2, 1])
+        col_img1, col_img2, col_img3 = st.columns([2, 1.2, 2])
         with col_img2:
             st.image(icon_path, use_container_width=True)
     else:
@@ -499,7 +499,7 @@ else:
                     
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
-                    st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, novos_clienti] if 'novos_clienti' in locals() else [st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
+                    st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
                     st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
                     
                     salva_giro_su_disco(st.session_state.giro_corrente)
