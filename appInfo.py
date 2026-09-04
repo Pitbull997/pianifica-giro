@@ -51,9 +51,18 @@ st.markdown("""
         max-width: 100% !important;
     }
     .block-container {
-        padding-top: 1rem !important;
+        padding-top: 0.5rem !important;
         padding-bottom: 1rem !important;
         max-width: 100% !important;
+    }
+
+    /* Compattamento spaziatura verticale tra le righe di bottoni */
+    div[data-testid="stHorizontalBlock"] {
+        gap: 0.5rem !important;
+        margin-bottom: -0.5rem !important;
+    }
+    div[data-testid="column"] {
+        margin-bottom: 0px !important;
     }
 
     [data-testid="stMetricLabel"] {
@@ -79,16 +88,16 @@ st.markdown("""
         background-color: #2563EB !important;
         color: #FFFFFF !important;
         border: 2px solid #60A5FA !important;
-        height: 52px !important;
-        font-size: 15px !important;
+        height: 46px !important;
+        font-size: 14px !important;
     }
 
     .btn-inactive div[data-testid="stButton"] > button {
         background-color: #1E293B !important;
         color: #94A3B8 !important;
         border: 1px solid #334155 !important;
-        height: 52px !important;
-        font-size: 15px !important;
+        height: 46px !important;
+        font-size: 14px !important;
     }
 
     div[data-baseweb="select"] {
@@ -268,7 +277,7 @@ else:
         st.session_state.pagina_attiva = "welcome"
         st.rerun()
 
-    st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 26px; margin-bottom: 20px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 22px; margin-bottom: 5px; margin-top: 0px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
 
     col_sw1, col_sw2 = st.columns(2)
 
@@ -308,7 +317,7 @@ else:
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
 
     # ==========================================
     # SCHERMATA 1: GIRO CONSEGNE
