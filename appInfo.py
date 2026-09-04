@@ -273,11 +273,16 @@ if st.session_state.pagina_attiva == "welcome":
 # APPLICAZIONE PRINCIPALE
 # ==========================================
 else:
-    if st.button("🏠 Home Grafica", key="btn_home_grafica"):
-        st.session_state.pagina_attiva = "welcome"
-        st.rerun()
+    # Mostra la nuova icona centrata al posto del furgoncino/scritta precedente
+    icon_path = "icovg.png"
+    if os.path.exists(icon_path):
+        col_img1, col_img2, col_img3 = st.columns([1, 1.2, 1])
+        with col_img2:
+            st.image(icon_path, use_container_width=True)
+    else:
+        st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 22px; margin-bottom: 5px; margin-top: 0px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
 
-    st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 22px; margin-bottom: 5px; margin-top: 0px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
+    st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
 
     col_sw1, col_sw2 = st.columns(2)
 
@@ -494,7 +499,7 @@ else:
                     
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
-                    st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
+                    st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, novos_clienti] if 'novos_clienti' in locals() else [st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
                     st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
                     
                     salva_giro_su_disco(st.session_state.giro_corrente)
