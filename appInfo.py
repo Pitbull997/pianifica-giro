@@ -214,7 +214,7 @@ if st.session_state.pagina_attiva == "welcome":
                 height: 100vh;
                 background-image: url("data:image/png;base64,{encoded_string}");
                 background-size: cover;
-                background-position: center;
+                background-position: left center;
                 background-repeat: no-repeat;
                 z-index: 99999;
                 display: flex;
