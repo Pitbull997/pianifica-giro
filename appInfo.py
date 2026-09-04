@@ -56,6 +56,19 @@ st.markdown("""
         max-width: 100% !important;
     }
 
+    /* Stile per rimpicciolire e centrare l'icona in cima */
+    .logo-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        margin-bottom: 10px;
+    }
+    .logo-container img {
+        width: 140px !important; /* Puoi regolare questa misura se la vuoi ancora più piccola o più grande */
+        max-width: 100%;
+        height: auto;
+    }
+
     /* Compattamento spaziatura verticale tra le righe di bottoni */
     div[data-testid="stHorizontalBlock"] {
         gap: 0.5rem !important;
@@ -273,12 +286,16 @@ if st.session_state.pagina_attiva == "welcome":
 # APPLICAZIONE PRINCIPALE
 # ==========================================
 else:
-    # Mostra l'icona più piccola sfruttando colonne più larghe ai lati
+    # Mostra l'icona ridotta e centrata tramite HTML
     icon_path = "icovg.png"
     if os.path.exists(icon_path):
-        col_img1, col_img2, col_img3 = st.columns([2, 1.2, 2])
-        with col_img2:
-            st.image(icon_path, use_container_width=True)
+        with open(icon_path, "rb") as icon_file:
+            encoded_icon = base64.b64encode(icon_file.read()).decode()
+        st.markdown(f'''
+            <div class="logo-container">
+                <img src="data:image/png;base64,{encoded_icon}" alt="VanGo Logo">
+            </div>
+        ''', unsafe_allow_html=True)
     else:
         st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 22px; margin-bottom: 5px; margin-top: 0px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
 
