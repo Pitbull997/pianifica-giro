@@ -120,41 +120,47 @@ st.markdown("""
         color: #94A3B8;
     }
 
-    /* Stili per l'immagine responsive e il pulsante sovrapposto al 90% */
+    /* Stili Responsive per Hero e Pulsante Trasparente Glass/Border */
     .hero-container {
         position: relative;
         width: 100%;
-        max-width: 450px;
+        max-width: 500px;
         margin: 0 auto;
     }
     .hero-img {
         width: 100%;
         height: auto;
         display: block;
-        border-radius: 12px;
+        border-radius: 16px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.5);
     }
     .hero-btn {
         position: absolute;
         top: 90%;
         left: 50%;
         transform: translate(-50%, -50%);
-        background-color: #2563EB !important;
-        color: white !important;
+        background: rgba(18, 18, 18, 0.45) !important;
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        color: #FFFFFF !important;
         padding: 14px 20px;
         border-radius: 30px;
         font-weight: bold;
         text-decoration: none !important;
-        box-shadow: 0 4px 15px rgba(37, 99, 235, 0.7);
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
         text-align: center;
         width: 82%;
         font-size: 16px;
-        border: 2px solid #60A5FA !important;
+        border: 2px solid rgba(96, 165, 250, 0.7) !important;
         display: block;
         z-index: 10;
+        transition: all 0.3s ease;
     }
     .hero-btn:hover {
-        background-color: #1D4ED8 !important;
-        color: white !important;
+        background: rgba(37, 99, 235, 0.6) !important;
+        border-color: #60A5FA !important;
+        color: #FFFFFF !important;
+        box-shadow: 0 6px 25px rgba(37, 99, 235, 0.6);
     }
 </style>
 """, unsafe_allow_html=True)
