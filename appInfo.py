@@ -15,7 +15,7 @@ st.set_page_config(
 
 FILE_GIRO_PERSISTENTE = "giro_salvato.json"
 
-# CSS Avanzato - Forzatura Dark Mode & Fix UI Mobile + Overlay al 90%
+# CSS Avanzato - Forzatura Dark Mode & Fix UI Mobile
 st.markdown("""
 <style>
     .stApp, body, html {
@@ -119,49 +119,6 @@ st.markdown("""
         font-size: 13px;
         color: #94A3B8;
     }
-
-    /* Stili Responsive per Hero e Pulsante Trasparente Glass/Border */
-    .hero-container {
-        position: relative;
-        width: 100%;
-        max-width: 500px;
-        margin: 0 auto;
-    }
-    .hero-img {
-        width: 100%;
-        height: auto;
-        display: block;
-        border-radius: 16px;
-        box-shadow: 0 10px 25px rgba(0,0,0,0.5);
-    }
-    .hero-btn {
-        position: absolute;
-        top: 90%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        background: rgba(18, 18, 18, 0.45) !important;
-        backdrop-filter: blur(8px);
-        -webkit-backdrop-filter: blur(8px);
-        color: #FFFFFF !important;
-        padding: 14px 20px;
-        border-radius: 30px;
-        font-weight: bold;
-        text-decoration: none !important;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
-        text-align: center;
-        width: 82%;
-        font-size: 16px;
-        border: 2px solid rgba(96, 165, 250, 0.7) !important;
-        display: block;
-        z-index: 10;
-        transition: all 0.3s ease;
-    }
-    .hero-btn:hover {
-        background: rgba(37, 99, 235, 0.6) !important;
-        border-color: #60A5FA !important;
-        color: #FFFFFF !important;
-        box-shadow: 0 6px 25px rgba(37, 99, 235, 0.6);
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -241,10 +198,59 @@ if st.session_state.pagina_attiva == "welcome":
             encoded_string = base64.b64encode(image_file.read()).decode()
         
         st.markdown(f"""
-            <div class="hero-container">
-                <img src="data:image/png;base64,{encoded_string}" class="hero-img">
-                <a href="?nav=giro" target="_self" class="hero-btn">ENTRA IN VanGo</a>
+        <style>
+            .hero-responsive-wrapper {{
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                width: 100%;
+                padding: 10px 0;
+            }}
+            .hero-card {{
+                position: relative;
+                width: 100%;
+                max-width: 420px;
+                aspect-ratio: 9 / 16;
+                background-image: url("data:image/png;base64,{encoded_string}");
+                background-size: cover;
+                background-position: center;
+                background-repeat: no-repeat;
+                border-radius: 20px;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+            }}
+            .hero-btn-overlay {{
+                position: absolute;
+                bottom: 6%;
+                left: 50%;
+                transform: translateX(-50%);
+                background: rgba(18, 18, 18, 0.4) !important;
+                backdrop-filter: blur(8px);
+                -webkit-backdrop-filter: blur(8px);
+                color: #FFFFFF !important;
+                padding: 14px 20px;
+                border-radius: 30px;
+                font-weight: bold;
+                text-decoration: none !important;
+                text-align: center;
+                width: 82%;
+                font-size: 16px;
+                border: 2px solid rgba(96, 165, 250, 0.8) !important;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+                z-index: 10;
+                transition: all 0.3s ease;
+            }}
+            .hero-btn-overlay:hover {{
+                background: rgba(37, 99, 235, 0.7) !important;
+                border-color: #60A5FA !important;
+                color: #FFFFFF !important;
+            }}
+        </style>
+
+        <div class="hero-responsive-wrapper">
+            <div class="hero-card">
+                <a href="?nav=giro" target="_self" class="hero-btn-overlay">ENTRA IN VanGo</a>
             </div>
+        </div>
         """, unsafe_allow_html=True)
     else:
         st.warning("⚠️ Immagine 'vango_splash.png' non trovata nella cartella.")
@@ -484,7 +490,7 @@ else:
                     
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
-                    st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
+                    st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, novos_clienti if 'novos_clienti' in locals() else nuovi_clienti], ignore_index=True)
                     st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
                     
                     salva_giro_su_disco(st.session_state.giro_corrente)
