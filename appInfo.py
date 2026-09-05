@@ -19,6 +19,9 @@ FILE_DB_PERSISTENTE = "database_salvato.xlsx"
 if 'pagina_attiva' not in st.session_state:
     st.session_state.pagina_attiva = "welcome"
 
+if 'autenticato' not in st.session_state:
+    st.session_state.autenticato = False
+
 if 'db_clienti' not in st.session_state:
     st.session_state.db_clienti = pd.DataFrame()
 
@@ -31,9 +34,10 @@ if 'clienti_selezionati_m' not in st.session_state:
 if 'vista_pulita' not in st.session_state:
     st.session_state.vista_pulita = False
 
-# Gestione navigazione tramite parametri URL
+# Gestione navigazione tramite parametri URL (se già autenticato)
 if "nav" in st.query_params and st.query_params["nav"] == "giro":
-    st.session_state.pagina_attiva = "giro"
+    if st.session_state.autenticato:
+        st.session_state.pagina_attiva = "giro"
     st.query_params.clear()
 
 # CSS Avanzato - Forzatura Dark Mode & Fix UI Mobile a Schermo Intero
@@ -253,9 +257,9 @@ if st.session_state.giro_corrente.empty:
     st.session_state.giro_corrente = carica_giro_da_disco()
 
 # ==========================================
-# SCHERMATA 0: WELCOME / HOME PAGE GRAFICA A TUTTO SCHERMO
+# SCHERMATA 0: WELCOME / LOGIN PAGE A TUTTO SCHERMO
 # ==========================================
-if st.session_state.pagina_attiva == "welcome":
+if st.session_state.pagina_attiva == "welcome" and not st.session_state.autenticato:
     img_path = "vango_splash.png"
     if os.path.exists(img_path):
         with open(img_path, "rb") as image_file:
@@ -275,52 +279,66 @@ if st.session_state.pagina_attiva == "welcome":
                 background-repeat: no-repeat;
                 z-index: 99999;
                 display: flex;
-                justify-content: center;
-                align-items: flex-end;
+                flex-direction: column;
+                justify-content: flex-end;
+                align-items: center;
+                padding-bottom: 5%;
             }}
-            .hero-btn-overlay {{
-                position: absolute;
-                bottom: 6%;
-                left: 50%;
-                transform: translateX(-50%);
-                background: rgba(18, 18, 18, 0.4) !important;
-                backdrop-filter: blur(8px);
-                -webkit-backdrop-filter: blur(8px);
-                color: #FFFFFF !important;
-                padding: 14px 20px;
-                border-radius: 30px;
-                font-weight: bold;
-                text-decoration: none !important;
-                text-align: center;
+            .login-box {{
+                background: rgba(18, 18, 18, 0.75) !important;
+                backdrop-filter: blur(10px);
+                -webkit-backdrop-filter: blur(10px);
+                padding: 20px 25px;
+                border-radius: 20px;
                 width: 85%;
-                max-width: 400px;
-                font-size: 16px;
+                max-width: 380px;
                 border: 2px solid rgba(96, 165, 250, 0.8) !important;
-                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
                 z-index: 100000;
-                transition: all 0.3s ease;
-            }}
-            .hero-btn-overlay:hover {{
-                background: rgba(37, 99, 235, 0.7) !important;
-                border-color: #60A5FA !important;
-                color: #FFFFFF !important;
             }}
         </style>
 
         <div class="hero-fullscreen">
-            <a href="?nav=giro" target="_self" class="hero-btn-overlay">ENTRA IN VanGo</a>
         </div>
         """, unsafe_allow_html=True)
+        
+        # Container Streamlit sovrapposto tramite layout nativo centrato nella schermata di login
+        st.markdown("<div style='position: fixed; bottom: 4vh; left: 50%; transform: translateX(-50%); width: 85%; max-width: 380px; z-index: 100001;'>", unsafe_allow_html=True)
+        
+        with st.container():
+            st.markdown("<h3 style='text-align: center; color: white; margin-bottom: 10px; font-size: 20px;'>🔐 Accesso VanGo</h3>", unsafe_allow_html=True)
+            user_input = st.text_input("Utente", key="login_user", placeholder="Inserisci utente")
+            pass_input = st.text_input("Password", type="password", key="login_pass", placeholder="Inserisci password")
+            
+            st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+            if st.button("ACCEDI", use_container_width=True, type="primary"):
+                # Credenziali configurate (Modificabili a piacimento)
+                if user_input == "driver" and pass_input == "vango2026":
+                    st.session_state.autenticato = True
+                    st.session_state.pagina_attiva = "giro"
+                    st.rerun()
+                else:
+                    st.error("❌ Utente o password errati!")
+        
+        st.markdown("</div>", unsafe_allow_html=True)
+
     else:
         st.warning("⚠️ Immagine 'vango_splash.png' non trovata nella cartella.")
-        if st.button("ENTRA IN VanGo", use_container_width=True, type="primary"):
-            st.session_state.pagina_attiva = "giro"
-            st.rerun()
+        st.subheader("🔐 Accesso VanGo")
+        user_input = st.text_input("Utente", key="login_user_fallback")
+        pass_input = st.text_input("Password", type="password", key="login_pass_fallback")
+        if st.button("ACCEDI", use_container_width=True, type="primary"):
+            if user_input == "driver" and pass_input == "vango2026":
+                st.session_state.autenticato = True
+                st.session_state.pagina_attiva = "giro"
+                st.rerun()
+            else:
+                st.error("❌ Utente o password errati!")
 
 # ==========================================
-# APPLICAZIONE PRINCIPALE
+# APPLICAZIONE PRINCIPALE (Solo se autenticato)
 # ==========================================
-else:
+elif st.session_state.autenticato:
     icon_path = "icovg.png"
     if os.path.exists(icon_path):
         with open(icon_path, "rb") as icon_file:
@@ -590,7 +608,6 @@ else:
                     use_container_width=True,
                     key="db_editor_switch"
                 )
-                # Controlla se ci sono modifiche e salva automaticamente su disco
                 if not edited_db.equals(st.session_state.db_clienti):
                     st.session_state.db_clienti = elabora_dataframe_db(edited_db)
                     salva_db_su_disco(st.session_state.db_clienti)
