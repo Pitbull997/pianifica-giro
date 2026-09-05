@@ -48,7 +48,7 @@ except Exception as e:
     sheet_utenti = None
     sheet_giro = None
 
-# Funzioni per la sessione persistente di login
+# Funzioni per la sessione persistente per singolo utente
 def carica_sessione():
     if os.path.exists(FILE_SESSIONE_PERSISTENTE):
         try:
@@ -167,11 +167,9 @@ def carica_giro_utente_da_sheets(nome_utente):
                 df = pd.DataFrame(data)
                 df.columns = df.columns.str.strip().str.upper()
                 
-                # Verifica presenza colonna UTENTE
                 if 'UTENTE' not in df.columns:
                     return df_vuoto
                 
-                # Filtra solo le righe dell'utente corrente
                 df_utente = df[df['UTENTE'].astype(str).str.strip().str.lower() == nome_utente.strip().lower()].copy()
                 
                 if 'Q.TA' in df_utente.columns and 'Q.TA' not in cols_giro:
@@ -192,7 +190,6 @@ def carica_giro_utente_da_sheets(nome_utente):
 def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
     try:
         if sheet_giro:
-            # Legge tutto il foglio esistente per preservare i giri degli altri autisti
             data_totale = sheet_giro.get_all_records()
             df_tutti = pd.DataFrame(data_totale) if data_totale else pd.DataFrame(columns=['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
             
@@ -200,10 +197,8 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
                 df_tutti.columns = df_tutti.columns.str.strip().str.upper()
                 if 'Q.TA' in df_tutti.columns:
                     df_tutti = df_tutti.rename(columns={'Q.TA': 'Q.ta'})
-                # Rimuove il vecchio giro dell'utente corrente
                 df_tutti = df_tutti[df_tutti['UTENTE'].astype(str).str.strip().str.lower() != nome_utente.strip().lower()]
             
-            # Prepara il nuovo giro per l'utente corrente
             if not df_nuovo_giro.empty:
                 df_agg = df_nuovo_giro.copy()
                 df_agg['UTENTE'] = nome_utente
@@ -217,13 +212,11 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
                 if df_tutti.empty:
                     df_tutti = df_agg
                 else:
-                    # Uniforma le colonne prima del concat
                     for c in cols_ordine:
                         if c not in df_tutti.columns:
                             df_tutti[c] = ""
                     df_tutti = pd.concat([df_tutti[cols_ordine], df_agg[cols_ordine]], ignore_index=True)
             
-            # Salva tutto su Google Sheets
             sheet_giro.clear()
             intestazioni = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']
             if df_tutti.empty:
@@ -234,11 +227,8 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
     except Exception as e:
         st.error(f"Errore nel salvataggio del giro su Google Sheets: {e}")
 
-# Inizializzazione dati di sessione
+# Inizializzazione dati di sessione persistente
 sessione_salvata = carica_sessione()
-
-if 'pagina_attiva' not in st.session_state:
-    st.session_state.pagina_attiva = "giro" if sessione_salvata["autenticato"] else "welcome"
 
 if 'autenticato' not in st.session_state:
     st.session_state.autenticato = sessione_salvata["autenticato"]
@@ -249,13 +239,16 @@ if 'utente_corrente' not in st.session_state:
 if 'is_admin' not in st.session_state:
     st.session_state.is_admin = sessione_salvata["is_admin"]
 
+if 'pagina_attiva' not in st.session_state:
+    st.session_state.pagina_attiva = "giro" if st.session_state.autenticato else "welcome"
+
 if 'db_clienti' not in st.session_state:
     st.session_state.db_clienti = carica_db_da_google_sheets()
 
 if 'utenti_sistema' not in st.session_state:
     st.session_state.utenti_sistema = carica_utenti_da_sheets()
 
-# Carica il giro specifico dell'utente appena fa il login
+# Caricamento automatico del giro dell'utente loggato
 if 'giro_corrente' not in st.session_state or st.session_state.get('ultimo_utente_caricato') != st.session_state.utente_corrente:
     if st.session_state.utente_corrente:
         st.session_state.giro_corrente = carica_giro_utente_da_sheets(st.session_state.utente_corrente)
@@ -434,7 +427,7 @@ if not st.session_state.autenticato and st.session_state.pagina_attiva == "welco
 # ==========================================
 # SCHERMATA DI LOGIN
 # ==========================================
-elif not st.session_state.autenticato and (st.session_state.pagina_attiva == "login" or not sessione_salvata["autenticato"]):
+elif not st.session_state.autenticato and st.session_state.pagina_attiva == "login":
     st.markdown("<div style='margin-top: 40px;'></div>", unsafe_allow_html=True)
     
     icon_path = "icovg.png"
@@ -449,7 +442,7 @@ elif not st.session_state.autenticato and (st.session_state.pagina_attiva == "lo
     else:
         st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 26px;'>🚐 ACCESSO VANGO</h1>", unsafe_allow_html=True)
 
-    st.markdown("<p style='text-align: center; color: #94A3B8; font-size: 14px; margin-bottom: 30px;'>Inserisci le credenziali per accedere al sistema</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #94A3B8; font-size: 14px; margin-bottom: 30px;'>Inserisci le credenziali per accedere al tuo giro</p>", unsafe_allow_html=True)
 
     col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
     with col_l2:
@@ -471,10 +464,11 @@ elif not st.session_state.autenticato and (st.session_state.pagina_attiva == "lo
                     st.session_state.is_admin = (username_input.lower() == "admin")
                     st.session_state.pagina_attiva = "giro"
                     
-                    # Carica subito il giro specifico dell'utente
+                    # Carica il giro specifico dell'utente loggato
                     st.session_state.giro_corrente = carica_giro_utente_da_sheets(username_input)
                     st.session_state.ultimo_utente_caricato = username_input
                     
+                    # Salva la sessione persistente per questo utente
                     salva_sessione(True, username_input, st.session_state.is_admin)
                     st.rerun()
                 else:
@@ -506,12 +500,19 @@ else:
         st.markdown(f"<p style='color: #94A3B8; font-size: 13px; margin: 0;'>👤 Utente: <b style='color: #60A5FA;'>{st.session_state.get('utente_corrente', '')}</b></p>", unsafe_allow_html=True)
     with col_logout_u:
         if st.button("🚪 LOGOUT", use_container_width=True, key="btn_logout_principale"):
+            # Pulisce completamente la sessione e cancella il file locale
             st.session_state.autenticato = False
             st.session_state.utente_corrente = ""
             st.session_state.is_admin = False
             st.session_state.pagina_attiva = "login"
+            st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
+            st.session_state.ultimo_utente_caricato = ""
+            
             if os.path.exists(FILE_SESSIONE_PERSISTENTE):
-                os.remove(FILE_SESSIONE_PERSISTENTE)
+                try:
+                    os.remove(FILE_SESSIONE_PERSISTENTE)
+                except Exception:
+                    pass
             st.rerun()
 
     st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
@@ -758,7 +759,7 @@ else:
                     nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
                     
                     qta_dict = dict(zip(df_edit_colli['CLIENTE'], df_edit_colli['Q.ta']))
-                    nuovi_clienti['Q.ta'] = nouveaux = nuovi_clienti['CLIENTE'].map(qta_dict)
+                    nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(qta_dict)
                     
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
