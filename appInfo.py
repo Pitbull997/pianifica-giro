@@ -48,7 +48,7 @@ except Exception as e:
     sheet_utenti = None
     sheet_giro = None
 
-# Funzioni per la sessione persistente per singolo utente
+# --- Gestione Sessione Multi-Utente Persistente ---
 def carica_sessione():
     if os.path.exists(FILE_SESSIONE_PERSISTENTE):
         try:
@@ -56,18 +56,18 @@ def carica_sessione():
                 return json.load(f)
         except Exception:
             pass
-    return {"autenticato": False, "utente": "", "is_admin": False}
+    return {"utenti_salvati": {}, "utente_attivo": ""}
 
-def salva_sessione(autenticato, utente, is_admin):
+def salva_sessione(utenti_salvati, utente_attivo):
     try:
         with open(FILE_SESSIONE_PERSISTENTE, "w") as f:
-            json.dump({"autenticato": autenticato, "utente": utente, "is_admin": is_admin}, f)
+            json.dump({"utenti_salvati": utenti_salvati, "utente_attivo": utente_attivo}, f)
     except Exception as e:
         st.error(f"Errore nel salvataggio della sessione: {e}")
 
 # Funzioni per caricare e salvare gli utenti da Google Sheets
 def carica_utenti_da_sheets():
-    utenti_default = {"admin": "vango2026", "autista": "consegne2026"}
+    utenti_default = {"admin": "vango2026", "maurizio": "consegne2026", "roberta": "consegne2026"}
     try:
         if sheet_utenti:
             data = sheet_utenti.get_all_records()
@@ -75,7 +75,7 @@ def carica_utenti_da_sheets():
                 dict_utenti = {}
                 for row in data:
                     row_clean = {str(k).strip().upper(): str(v).strip() for k, v in row.items()}
-                    usr = row_clean.get("USERNAME", "")
+                    usr = row_clean.get("USERNAME", "").lower()
                     pwd = row_clean.get("PASSWORD", "")
                     if usr:
                         dict_utenti[usr] = pwd
@@ -227,17 +227,22 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
     except Exception as e:
         st.error(f"Errore nel salvataggio del giro su Google Sheets: {e}")
 
-# Inizializzazione dati di sessione persistente
-sessione_salvata = carica_sessione()
+# Inizializzazione dati di sessione persistente multi-utente
+dati_sessione = carica_sessione()
+utenti_salvati_dispositivo = dati_sessione.get("utenti_salvati", {})
+utente_attivo_salvato = dati_sessione.get("utente_attivo", "")
 
-if 'autenticato' not in st.session_state:
-    st.session_state.autenticato = sessione_salvata["autenticato"]
+if 'utenti_salvati' not in st.session_state:
+    st.session_state.utenti_salvati = utenti_salvati_dispositivo
 
 if 'utente_corrente' not in st.session_state:
-    st.session_state.utente_corrente = sessione_salvata["utente"]
+    st.session_state.utente_corrente = utente_attivo_salvato
+
+if 'autenticato' not in st.session_state:
+    st.session_state.autenticato = bool(utente_attivo_salvato and utente_attivo_salvato in st.session_state.utenti_salvati)
 
 if 'is_admin' not in st.session_state:
-    st.session_state.is_admin = sessione_salvata["is_admin"]
+    st.session_state.is_admin = (st.session_state.utente_corrente.lower() == "admin")
 
 if 'pagina_attiva' not in st.session_state:
     st.session_state.pagina_attiva = "giro" if st.session_state.autenticato else "welcome"
@@ -425,10 +430,10 @@ if not st.session_state.autenticato and st.session_state.pagina_attiva == "welco
             st.rerun()
 
 # ==========================================
-# SCHERMATA DI LOGIN
+# SCHERMATA DI LOGIN / SELETTORE UTENTI
 # ==========================================
 elif not st.session_state.autenticato and st.session_state.pagina_attiva == "login":
-    st.markdown("<div style='margin-top: 40px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='margin-top: 20px;'></div>", unsafe_allow_html=True)
     
     icon_path = "icovg.png"
     if os.path.exists(icon_path):
@@ -442,10 +447,25 @@ elif not st.session_state.autenticato and st.session_state.pagina_attiva == "log
     else:
         st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 26px;'>🚐 ACCESSO VANGO</h1>", unsafe_allow_html=True)
 
-    st.markdown("<p style='text-align: center; color: #94A3B8; font-size: 14px; margin-bottom: 30px;'>Inserisci le credenziali per accedere al tuo giro</p>", unsafe_allow_html=True)
-
     col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
     with col_l2:
+        # Se ci sono utenti già loggati in precedenza su questo dispositivo, mostra l'accesso rapido!
+        if st.session_state.utenti_salvati:
+            st.markdown("<p style='text-align: center; color: #60A5FA; font-weight: bold;'>Account registrati su questo dispositivo:</p>", unsafe_allow_html=True)
+            for usr_salvato in list(st.session_state.utenti_salvati.keys()):
+                if st.button(f"👤 Accedi come {usr_salvato.capitalize()}", use_container_width=True):
+                    st.session_state.autenticato = True
+                    st.session_state.utente_corrente = usr_salvato
+                    st.session_state.is_admin = (usr_salvato.lower() == "admin")
+                    st.session_state.pagina_attiva = "giro"
+                    
+                    # Salva lo stato nel file locale
+                    salva_sessione(st.session_state.utenti_salvati, usr_salvato)
+                    st.rerun()
+            st.markdown("<hr style='border-color: #334155;'>", unsafe_allow_html=True)
+
+        st.markdown("<p style='text-align: center; color: #94A3B8; font-size: 14px; margin-bottom: 20px;'>Inserisci le credenziali per aggiungere o accedere a un account</p>", unsafe_allow_html=True)
+
         with st.form("form_login"):
             username_input = st.text_input("Utente")
             password_input = st.text_input("Password", type="password")
@@ -456,20 +476,23 @@ elif not st.session_state.autenticato and st.session_state.pagina_attiva == "log
             if submit_login:
                 st.session_state.utenti_sistema = carica_utenti_da_sheets()
                 utenti_validi = st.session_state.utenti_sistema
-                username_input = username_input.strip()
+                username_ pulito = username_input.strip().lower()
 
-                if username_input in utenti_validi and utenti_validi[username_input] == password_input:
+                if username_pulito in utenti_validi and utenti_validi[username_pulito] == password_input:
                     st.session_state.autenticato = True
-                    st.session_state.utente_corrente = username_input
-                    st.session_state.is_admin = (username_input.lower() == "admin")
+                    st.session_state.utente_corrente = username_pulito
+                    st.session_state.is_admin = (username_pulito == "admin")
                     st.session_state.pagina_attiva = "giro"
                     
-                    # Carica il giro specifico dell'utente loggato
-                    st.session_state.giro_corrente = carica_giro_utente_da_sheets(username_input)
-                    st.session_state.ultimo_utente_caricato = username_input
+                    # Salva l'utente tra quelli registrati sul dispositivo
+                    st.session_state.utenti_salvati[username_pulito] = True
                     
-                    # Salva la sessione persistente per questo utente
-                    salva_sessione(True, username_input, st.session_state.is_admin)
+                    # Carica il giro specifico dell'utente loggato
+                    st.session_state.giro_corrente = carica_giro_utente_da_sheets(username_pulito)
+                    st.session_state.ultimo_utente_caricato = username_pulito
+                    
+                    # Salva la sessione persistente multi-utente su file
+                    salva_sessione(st.session_state.utenti_salvati, username_pulito)
                     st.rerun()
                 else:
                     st.error("❌ Utente o password errati.")
@@ -494,13 +517,23 @@ else:
     else:
         st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 22px; margin-bottom: 5px; margin-top: 0px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
 
-    # --- BARRA SUPERIORE / INFO UTENTE E TASTO LOGOUT ---
-    col_info_u, col_logout_u = st.columns([3, 1])
+    # --- BARRA SUPERIORE / INFO UTENTE E TASTI GESTIONE ACCOUNT ---
+    col_info_u, col_sw_acc, col_logout_u = st.columns([2, 1.2, 1])
     with col_info_u:
-        st.markdown(f"<p style='color: #94A3B8; font-size: 13px; margin: 0;'>👤 Utente: <b style='color: #60A5FA;'>{st.session_state.get('utente_corrente', '')}</b></p>", unsafe_allow_html=True)
+        st.markdown(f"<p style='color: #94A3B8; font-size: 13px; margin: 0;'>👤 <b style='color: #60A5FA;'>{st.session_state.get('utente_corrente', '').capitalize()}</b></p>", unsafe_allow_html=True)
+    with col_sw_acc:
+        if st.button("👥 CAMBIA", use_container_width=True, key="btn_cambia_account"):
+            # Torna alla schermata di login mantenendo però salvati gli account sul dispositivo
+            st.session_state.autenticato = False
+            st.session_state.pagina_attiva = "login"
+            st.rerun()
     with col_logout_u:
-        if st.button("🚪 LOGOUT", use_container_width=True, key="btn_logout_principale"):
-            # Pulisce completamente la sessione e cancella il file locale
+        if st.button("🚪 ESCI", use_container_width=True, key="btn_logout_principale"):
+            # Rimuove l'utente corrente dai salvati del dispositivo e fa logout pulito
+            curr_user = st.session_state.get('utente_corrente', '')
+            if curr_user in st.session_state.utenti_salvati:
+                del st.session_state.utenti_salvati[curr_user]
+
             st.session_state.autenticato = False
             st.session_state.utente_corrente = ""
             st.session_state.is_admin = False
@@ -508,11 +541,15 @@ else:
             st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
             st.session_state.ultimo_utente_caricato = ""
             
-            if os.path.exists(FILE_SESSIONE_PERSISTENTE):
-                try:
-                    os.remove(FILE_SESSIONE_PERSISTENTE)
-                except Exception:
-                    pass
+            if st.session_state.utenti_salvati:
+                primo_rimasto = list(st.session_state.utenti_salvati.keys())[0]
+                salva_sessione(st.session_state.utenti_salvati, primo_rimasto)
+            else:
+                if os.path.exists(FILE_SESSIONE_PERSISTENTE):
+                    try:
+                        os.remove(FILE_SESSIONE_PERSISTENTE)
+                    except Exception:
+                        pass
             st.rerun()
 
     st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
@@ -809,9 +846,9 @@ else:
         if st.button("💾 SALVA MODIFICHE UTENTI SU GOOGLE SHEETS", use_container_width=True, type="primary"):
             nuovo_dict = {}
             for _, row in edited_utenti.iterrows():
-                u = str(row["USERNAME"]).strip()
+                u = str(row["USERNAME"]).strip().lower()
                 p = str(row["PASSWORD"]).strip()
-                if u and u.lower() != "nan":
+                if u and u != "nan":
                     nuovo_dict[u] = p
             
             if "admin" not in nuovo_dict:
