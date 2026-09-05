@@ -16,7 +16,7 @@ st.set_page_config(
 )
 
 FILE_GIRO_PERSISTENTE = "giro_salvato.json"
-FILE_UTENTI_PERSISTENTE = "utenti_salvati.json"
+FILE_SESSIONE_PERSISTENTE = "sessione_salvata.json"
 
 # Inizializzazione Connessione Google Sheets tramite Streamlit Secrets
 @st.cache_resource
@@ -30,29 +30,100 @@ def init_google_sheets():
     client = gspread.authorize(creds)
     return client
 
-# Connessione al foglio Google (Assicurati che il file si chiami "VanGo Database" su Google Drive)
+# Connessione al foglio Google
 try:
     client_gs = init_google_sheets()
-    sheet_db = client_gs.open("VanGo Database").sheet1
+    sh = client_gs.open("VanGo Database")
+    sheet_db = sh.get_worksheet(0) # Prima scheda: Database Clienti
+    try:
+        sheet_utenti = sh.worksheet("Utenti") # Seconda scheda: Utenti
+    except Exception:
+        sheet_utenti = None
 except Exception as e:
     st.error(f"⚠️ Errore di connessione a Google Sheets: {e}")
     sheet_db = None
+    sheet_utenti = None
 
-# Inizializzazione prioritaria delle variabili di sessione
+# Funzioni per la sessione persistente di login
+def carica_sessione():
+    if os.path.exists(FILE_SESSIONE_PERSISTENTE):
+        try:
+            with open(FILE_SESSIONE_PERSISTENTE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"autenticato": False, "utente": "", "is_admin": False}
+
+def salva_sessione(autenticato, utente, is_admin):
+    try:
+        with open(FILE_SESSIONE_PERSISTENTE, "w") as f:
+            json.dump({"autenticato": autenticato, "utente": utente, "is_admin": is_admin}, f)
+    except Exception as e:
+        st.error(f"Errore nel salvataggio della sessione: {e}")
+
+# Funzioni per caricare e salvare gli utenti da Google Sheets
+def carica_utenti_da_sheets():
+    utenti_default = {"admin": "vango2026", "autista": "consegne2026"}
+    try:
+        if sheet_utenti:
+            data = sheet_utenti.get_all_records()
+            if data:
+                dict_utenti = {}
+                for row in data:
+                    # Normalizza le chiavi nel caso di spazi o maiuscole
+                    row_clean = {str(k).strip().upper(): str(v).strip() for k, v in row.items()}
+                    usr = row_clean.get("USERNAME", "")
+                    pwd = row_clean.get("PASSWORD", "")
+                    if usr:
+                        dict_utenti[usr] = pwd
+                if dict_utenti:
+                    return dict_utenti
+    except Exception as e:
+        st.error(f"Errore di lettura utenti da Google Sheets: {e}")
+    return utenti_default
+
+def salva_utenti_su_sheets(dict_utenti):
+    try:
+        if sheet_utenti:
+            sheet_utenti.clear()
+            data_to_update = [["USERNAME", "PASSWORD"]] + [[u, p] for u, p in dict_utenti.items()]
+            sheet_utenti.update(data_to_update)
+    except Exception as e:
+        st.error(f"Errore nel salvataggio utenti su Google Sheets: {e}")
+
+# Inizializzazione prioritaria delle variabili di sessione leggendo dal file persistente
+sessione_salvata = carica_sessione()
+
 if 'pagina_attiva' not in st.session_state:
-    st.session_state.pagina_attiva = "welcome"
+    st.session_state.pagina_attiva = "giro" if sessione_salvata["autenticato"] else "welcome"
 
 if 'autenticato' not in st.session_state:
-    st.session_state.autenticato = False
+    st.session_state.autenticato = sessione_salvata["autenticato"]
+
+if 'utente_corrente' not in st.session_state:
+    st.session_state.utente_corrente = sessione_salvata["utente"]
 
 if 'is_admin' not in st.session_state:
-    st.session_state.is_admin = False
+    st.session_state.is_admin = sessione_salvata["is_admin"]
 
 if 'db_clienti' not in st.session_state:
     st.session_state.db_clienti = pd.DataFrame()
 
+if 'utenti_sistema' not in st.session_state:
+    st.session_state.utenti_sistema = carica_utenti_da_sheets()
+
 if 'giro_corrente' not in st.session_state:
-    st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
+    def carica_giro_da_disco():
+        if os.path.exists(FILE_GIRO_PERSISTENTE):
+            try:
+                df = pd.read_json(FILE_GIRO_PERSISTENTE, orient="records")
+                if not df.empty:
+                    df['POSIZIONE'] = range(1, len(df) + 1)
+                    return df
+            except Exception:
+                pass
+        return pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
+    st.session_state.giro_corrente = carica_giro_da_disco()
 
 if 'clienti_selezionati_m' not in st.session_state:
     st.session_state.clienti_selezionati_m = []
@@ -60,50 +131,21 @@ if 'clienti_selezionati_m' not in st.session_state:
 if 'vista_pulita' not in st.session_state:
     st.session_state.vista_pulita = False
 
-# Gestione utenti persistenti
-def carica_utenti():
-    utenti_default = {"admin": "vango2026", "autista": "consegne2026"}
-    if os.path.exists(FILE_UTENTI_PERSISTENTE):
-        try:
-            with open(FILE_UTENTI_PERSISTENTE, "r") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return utenti_default
-
-def salva_utenti(dict_utenti):
-    try:
-        with open(FILE_UTENTI_PERSISTENTE, "w") as f:
-            json.dump(dict_utenti, f, indent=4)
-    except Exception as e:
-        st.error(f"Errore nel salvataggio degli utenti: {e}")
-
-if 'utenti_sistema' not in st.session_state:
-    st.session_state.utenti_sistema = carica_utenti()
-
 # Gestione navigazione tramite parametri URL
 if "nav" in st.query_params and st.query_params["nav"] == "login":
     st.session_state.pagina_attiva = "login"
     st.query_params.clear()
 
-# CSS Avanzato - Forzatura Dark Mode & Fix UI Mobile a Schermo Intero
+# CSS Avanzato
 st.markdown("""
 <style>
     .stApp, body, html {
         background-color: #121212 !important;
         color: #FFFFFF !important;
     }
-
     header {visibility: hidden;}
-    .stMainBlockContainer {
-        padding: 0rem !important;
-        max-width: 100% !important;
-    }
-    .block-container {
-        padding-top: 0.5rem !important;
-        padding-bottom: 1rem !important;
-        max-width: 100% !important;
-    }
+    .stMainBlockContainer { padding: 0rem !important; max-width: 100% !important; }
+    .block-container { padding-top: 0.5rem !important; padding-bottom: 1rem !important; max-width: 100% !important; }
 
     .logo-container {
         display: flex;
@@ -117,24 +159,11 @@ st.markdown("""
         height: auto;
     }
 
-    div[data-testid="stHorizontalBlock"] {
-        gap: 0.5rem !important;
-        margin-bottom: -0.5rem !important;
-    }
-    div[data-testid="column"] {
-        margin-bottom: 0px !important;
-    }
+    div[data-testid="stHorizontalBlock"] { gap: 0.5rem !important; margin-bottom: -0.5rem !important; }
+    div[data-testid="column"] { margin-bottom: 0px !important; }
 
-    [data-testid="stMetricLabel"] {
-        color: #CCCCCC !important;
-        font-size: 14px !important;
-        font-weight: 600 !important;
-    }
-    [data-testid="stMetricValue"] {
-        color: #FFFFFF !important;
-        font-size: 28px !important;
-        font-weight: bold !important;
-    }
+    [data-testid="stMetricLabel"] { color: #CCCCCC !important; font-size: 14px !important; font-weight: 600 !important; }
+    [data-testid="stMetricValue"] { color: #FFFFFF !important; font-size: 28px !important; font-weight: bold !important; }
 
     div[data-testid="stButton"] > button {
         background-color: #1E293B !important;
@@ -160,17 +189,8 @@ st.markdown("""
         font-size: 14px !important;
     }
 
-    div[data-baseweb="select"] {
-        background-color: #1E293B !important;
-        border-radius: 8px !important;
-    }
-
-    div[data-baseweb="select"] > div {
-        background-color: #1E293B !important;
-        color: #FFFFFF !important;
-        border: 1px solid #3B82F6 !important;
-        border-radius: 8px !important;
-    }
+    div[data-baseweb="select"] { background-color: #1E293B !important; border-radius: 8px !important; }
+    div[data-baseweb="select"] > div { background-color: #1E293B !important; color: #FFFFFF !important; border: 1px solid #3B82F6 !important; border-radius: 8px !important; }
 
     .stop-card {
         background-color: #1E1E1E;
@@ -255,12 +275,10 @@ def elabora_dataframe_db(df):
         
     return df.sort_values(by="POSIZIONE").reset_index(drop=True)
 
-# Sostituiamo il salvataggio locale con la scrittura diretta su Google Sheets
 def salva_db_su_google_sheets(df):
     try:
         if sheet_db:
             sheet_db.clear()
-            # Inserisce le intestazioni e i valori del DataFrame
             data_to_update = [df.columns.values.tolist()] + df.astype(str).values.tolist()
             sheet_db.update(data_to_update)
     except Exception as e:
@@ -284,28 +302,14 @@ def salva_giro_su_disco(df):
     except Exception as e:
         st.error(f"Errore nel salvataggio del giro: {e}")
 
-def carica_giro_da_disco():
-    if os.path.exists(FILE_GIRO_PERSISTENTE):
-        try:
-            df = pd.read_json(FILE_GIRO_PERSISTENTE, orient="records")
-            if not df.empty:
-                df['POSIZIONE'] = range(1, len(df) + 1)
-                return df
-        except Exception:
-            pass
-    return pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
-
 # Caricamento effettivo dei dati se vuoti
 if st.session_state.db_clienti.empty:
     st.session_state.db_clienti = carica_db_da_google_sheets()
 
-if st.session_state.giro_corrente.empty:
-    st.session_state.giro_corrente = carica_giro_da_disco()
-
 # ==========================================
-# SCHERMATA 0: WELCOME / HOME PAGE GRAFICA A TUTTO SCHERMO
+# SCHERMATA 0: WELCOME / HOME PAGE
 # ==========================================
-if st.session_state.pagina_attiva == "welcome":
+if not st.session_state.autenticato and st.session_state.pagina_attiva == "welcome":
     img_path = "vango_splash.png"
     if os.path.exists(img_path):
         with open(img_path, "rb") as image_file:
@@ -315,10 +319,8 @@ if st.session_state.pagina_attiva == "welcome":
         <style>
             .hero-fullscreen {{
                 position: fixed;
-                top: 0;
-                left: 0;
-                width: 100vw;
-                height: 100vh;
+                top: 0; left: 0;
+                width: 100vw; height: 100vh;
                 background-image: url("data:image/png;base64,{encoded_string}");
                 background-size: cover;
                 background-position: left center;
@@ -330,8 +332,7 @@ if st.session_state.pagina_attiva == "welcome":
             }}
             .hero-btn-overlay {{
                 position: absolute;
-                bottom: 6%;
-                left: 50%;
+                bottom: 6%; left: 50%;
                 transform: translateX(-50%);
                 background: rgba(18, 18, 18, 0.4) !important;
                 backdrop-filter: blur(8px);
@@ -342,8 +343,7 @@ if st.session_state.pagina_attiva == "welcome":
                 font-weight: bold;
                 text-decoration: none !important;
                 text-align: center;
-                width: 85%;
-                max-width: 400px;
+                width: 85%; max-width: 400px;
                 font-size: 16px;
                 border: 2px solid rgba(96, 165, 250, 0.8) !important;
                 box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
@@ -356,7 +356,6 @@ if st.session_state.pagina_attiva == "welcome":
                 color: #FFFFFF !important;
             }}
         </style>
-
         <div class="hero-fullscreen">
             <a href="?nav=login" target="_self" class="hero-btn-overlay">ENTRA IN VanGo</a>
         </div>
@@ -370,7 +369,7 @@ if st.session_state.pagina_attiva == "welcome":
 # ==========================================
 # SCHERMATA DI LOGIN
 # ==========================================
-elif st.session_state.pagina_attiva == "login" or not st.session_state.autenticato:
+elif not st.session_state.autenticato and (st.session_state.pagina_attiva == "login" or not sessione_salvata["autenticato"]):
     st.markdown("<div style='margin-top: 40px;'></div>", unsafe_allow_html=True)
     
     icon_path = "icovg.png"
@@ -397,6 +396,8 @@ elif st.session_state.pagina_attiva == "login" or not st.session_state.autentica
             submit_login = st.form_submit_button("ACCEDI", use_container_width=True, type="primary")
 
             if submit_login:
+                # Ricarica freschi gli utenti da Google Sheets al momento del login
+                st.session_state.utenti_sistema = carica_utenti_da_sheets()
                 utenti_validi = st.session_state.utenti_sistema
                 username_input = username_input.strip()
 
@@ -405,6 +406,8 @@ elif st.session_state.pagina_attiva == "login" or not st.session_state.autentica
                     st.session_state.utente_corrente = username_input
                     st.session_state.is_admin = (username_input.lower() == "admin")
                     st.session_state.pagina_attiva = "giro"
+                    
+                    salva_sessione(True, username_input, st.session_state.is_admin)
                     st.rerun()
                 else:
                     st.error("❌ Utente o password errati.")
@@ -428,6 +431,20 @@ else:
         ''', unsafe_allow_html=True)
     else:
         st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 22px; margin-bottom: 5px; margin-top: 0px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
+
+    # --- BARRA SUPERIORE / INFO UTENTE E TASTO LOGOUT ---
+    col_info_u, col_logout_u = st.columns([3, 1])
+    with col_info_u:
+        st.markdown(f"<p style='color: #94A3B8; font-size: 13px; margin: 0;'>👤 Utente: <b style='color: #60A5FA;'>{st.session_state.get('utente_corrente', '')}</b></p>", unsafe_allow_html=True)
+    with col_logout_u:
+        if st.button("🚪 LOGOUT", use_container_width=True, key="btn_logout_principale"):
+            st.session_state.autenticato = False
+            st.session_state.utente_corrente = ""
+            st.session_state.is_admin = False
+            st.session_state.pagina_attiva = "login"
+            if os.path.exists(FILE_SESSIONE_PERSISTENTE):
+                os.remove(FILE_SESSIONE_PERSISTENTE)
+            st.rerun()
 
     st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
 
@@ -613,9 +630,8 @@ else:
     elif st.session_state.pagina_attiva == "db":
         st.subheader("📁 Inserisci Clienti nel Giro")
         
-        # PROTETTO: Solo l'Admin vede i pulsanti e l'area di caricamento file/reset
         if st.session_state.is_admin:
-            caricamento_file = st.file_uploader("Carica Database su Google Sheets (Excel o CSV)", type=["xlsx", "csv"])
+            caricamento_file = st.file_uploader("Carica Database Clienti su Google Sheets (Excel o CSV)", type=["xlsx", "csv"])
             
             if caricamento_file is not None:
                 try:
@@ -686,8 +702,7 @@ else:
                     st.success("Clienti aggiunti al giro con successo!")
                     st.session_state.pagina_attiva = "giro"
                     st.rerun()
-                    
-            # PROTETTO: Solo l'Admin può visualizzare/modificare l'intera anagrafica
+                
             if st.session_state.is_admin:
                 st.markdown("---")
                 with st.expander("👀 Visualizza o Modifica Anagrafica Clienti intera"):
@@ -708,40 +723,34 @@ else:
     # SCHERMATA 3: GESTIONE UTENTI (SOLO ADMIN)
     # ==========================================
     elif st.session_state.pagina_attiva == "utenti" and st.session_state.is_admin:
-        st.subheader("🔑 Gestione Utenti Registrati")
-        st.markdown("<p style='color: #94A3B8; font-size: 14px;'>Aggiungi o rimuovi gli account autorizzati ad accedere all'app.</p>", unsafe_allow_html=True)
+        st.subheader("🔑 Gestione Utenti da Google Sheets")
+        st.markdown("<p style='color: #94A3B8; font-size: 14px;'>Gestisci gli account autorizzati direttamente dal foglio Google dedicato.</p>", unsafe_allow_html=True)
 
-        with st.form("form_nuovo_utente"):
-            st.markdown("### ➕ Aggiungi Nuovo Utente")
-            nuovo_user = st.text_input("Nome Utente")
-            nuova_pass = st.text_input("Password", type="password")
-            btn_aggiungi = st.form_submit_button("Crea Utente", use_container_width=True, type="primary")
+        # Carica utenze attuali in formato DataFrame per l'editor
+        dict_u = carica_utenti_da_sheets()
+        df_utenti_attuali = pd.DataFrame(list(dict_u.items()), columns=["USERNAME", "PASSWORD"])
 
-            if btn_aggiungi:
-                nuovo_user = nuovo_user.strip()
-                if not nuovo_user or not nuova_pass:
-                    st.error("Inserisci sia il nome utente che la password.")
-                elif nuovo_user in st.session_state.utenti_sistema:
-                    st.warning(f"L'utente '{nuovo_user}' esiste già.")
-                else:
-                    st.session_state.utenti_sistema[nuovo_user] = nuova_pass
-                    salva_utenti(st.session_state.utenti_sistema)
-                    st.success(f"Utente '{nuovo_user}' creato con successo!")
-                    st.rerun()
+        edited_utenti = st.data_editor(
+            df_utenti_attuali,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="editor_utenti_sheets"
+        )
 
-        st.markdown("---")
-        st.markdown("### 📋 Elenco Utenti Attivi")
-        
-        for usr in list(st.session_state.utenti_sistema.keys()):
-            col_u1, col_u2 = st.columns([3, 1])
-            with col_u1:
-                st.text(f"👤 {usr}")
-            with col_u2:
-                if usr.lower() != "admin":
-                    if st.button("🗑️ Elimina", key=f"del_{usr}", use_container_width=True):
-                        del st.session_state.utenti_sistema[usr]
-                        salva_utenti(st.session_state.utenti_sistema)
-                        st.success(f"Utente '{usr}' eliminato.")
-                        st.rerun()
-                else:
-                    st.markdown("<span style='color: #60A5FA; font-size: 12px;'>Protetto</span>", unsafe_allow_html=True)
+        if st.button("💾 SALVA MODIFICHE UTENTI SU GOOGLE SHEETS", use_container_width=True, type="primary"):
+            # Converte l'editor in un dizionario pulito
+            nuovo_dict = {}
+            for _, row in edited_utenti.iterrows():
+                u = str(row["USERNAME"]).strip()
+                p = str(row["PASSWORD"]).strip()
+                if u and u.lower() != "nan":
+                    nuovo_dict[u] = p
+            
+            # Assicura che l'admin non venga cancellato per errore
+            if "admin" not in nuovo_dict:
+                nuovo_dict["admin"] = "vango2026"
+
+            salva_utenti_su_sheets(nuovo_dict)
+            st.session_state.utenti_sistema = nuovo_dict
+            st.success("Tabella utenti aggiornata e salvata su Google Sheets con successo!")
+            st.rerun()
