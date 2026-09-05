@@ -13,6 +13,7 @@ st.set_page_config(
 )
 
 FILE_GIRO_PERSISTENTE = "giro_salvato.json"
+FILE_DB_PERSISTENTE = "database_salvato.xlsx"
 
 # Inizializzazione prioritaria delle variabili di sessione
 if 'pagina_attiva' not in st.session_state:
@@ -201,13 +202,28 @@ def elabora_dataframe_db(df):
         
     return df.sort_values(by="POSIZIONE").reset_index(drop=True)
 
+def salva_db_su_disco(df):
+    try:
+        df.to_excel(FILE_DB_PERSISTENTE, index=False)
+    except Exception as e:
+        st.error(f"Errore nel salvataggio del database: {e}")
+
 def carica_db_predefinito():
+    if os.path.exists(FILE_DB_PERSISTENTE):
+        try:
+            df = pd.read_excel(FILE_DB_PERSISTENTE)
+            return elabora_dataframe_db(df)
+        except Exception:
+            pass
+
     nomi_file_possibili = ["database.xlsx", "database.csv", "database"]
     for file_path in nomi_file_possibili:
         if os.path.exists(file_path):
             try:
                 df = pd.read_csv(file_path) if file_path.endswith('.csv') else pd.read_excel(file_path)
-                return elabora_dataframe_db(df)
+                df_elaborato = elabora_dataframe_db(df)
+                salva_db_su_disco(df_elaborato)
+                return df_elaborato
             except Exception:
                 pass
     return pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'])
@@ -492,7 +508,6 @@ else:
         
         if caricamento_file is not None:
             try:
-                # Salvataggio automatico sul server come database predefinito
                 estensione = ".csv" if caricamento_file.name.endswith('.csv') else ".xlsx"
                 file_salvataggio = "database.csv" if estensione == ".csv" else "database.xlsx"
                 
@@ -505,6 +520,7 @@ else:
                     df_up = pd.read_excel(file_salvataggio)
                 
                 st.session_state.db_clienti = elabora_dataframe_db(df_up)
+                salva_db_su_disco(st.session_state.db_clienti)
                 st.session_state.clienti_selezionati_m = []
                 
                 st.success(f"File caricato e salvato sul server! ({len(st.session_state.db_clienti)} clienti trovati)")
@@ -513,6 +529,8 @@ else:
                 st.error(f"Errore nella lettura/salvataggio del file: {e}")
 
         if st.button("RESET DATABASE", use_container_width=True):
+            if os.path.exists(FILE_DB_PERSISTENTE):
+                os.remove(FILE_DB_PERSISTENTE)
             st.session_state.db_clienti = carica_db_predefinito()
             st.session_state.clienti_selezionati_m = []
             st.success("Database ricaricato correttamente dal server!")
@@ -572,6 +590,10 @@ else:
                     use_container_width=True,
                     key="db_editor_switch"
                 )
-                st.session_state.db_clienti = edited_db
+                # Controlla se ci sono modifiche e salva automaticamente su disco
+                if not edited_db.equals(st.session_state.db_clienti):
+                    st.session_state.db_clienti = elabora_dataframe_db(edited_db)
+                    salva_db_su_disco(st.session_state.db_clienti)
+                    st.rerun()
         else:
             st.warning("Nessun cliente in memoria. Carica il file Excel tramite il pulsante sopra per iniziare.")
