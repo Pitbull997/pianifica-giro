@@ -101,7 +101,7 @@ def scarica_db_da_github():
         df = pd.read_csv(url_github)
         return df
     except Exception as e:
-        st.warning("⚠️ Impossibile connettersi a GitHub in questo momento. Assicurati che l'URL raw sia corretto.")
+        st.warning("⚠️ Impossibile connettersi a GitHub. Assicurati che l'URL raw sia corretto o carica i dati da admin.")
         return pd.DataFrame(columns=['CLIENTE', 'VIA', 'COMUNE', 'ORA', 'Q.ta'])
 
 def salva_giro_su_disco(df):
@@ -114,7 +114,6 @@ if not st.session_state.logged_in:
     st.markdown("<h2 style='text-align: center;'>🚐 VanGo - Accesso</h2>", unsafe_allow_html=True)
     st.markdown("<p style='text-align: center; color: #94A3B8;'>Inserisci le credenziali per accedere al terminale di bordo.</p>", unsafe_allow_html=True)
     
-    # Box per centrare e strutturare il login in modo pulito
     col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
     with col_l2:
         with st.form("form_login"):
@@ -135,22 +134,31 @@ if not st.session_state.logged_in:
                     st.session_state.username = input_user
                     st.session_state.ruolo = "autista"
                     
-                    with st.spinner("Sincronizzazione database da GitHub in corso..."):
-                        st.session_state.giro_corrente = scarica_db_da_github()
+                    # Sincronizzazione automatica all'accesso dell'autista
+                    st.session_state.giro_corrente = scarica_db_da_github()
                     st.rerun()
                 else:
                     st.error("❌ Credenziali errate. Riprova.")
     
-    st.stop()  # Blocca l'esecuzione finché non si effettua il login
+    st.stop()
 
 # ==========================================
-# 4. BARRA LATERALE (INFO UTENTE & LOGOUT)
+# 4. BARRA LATERALE (INFO UTENTE & GESTIONE)
 # ==========================================
 with st.sidebar:
     st.markdown(f"👤 Utente: **{st.session_state.username}**")
     st.markdown(f"🛡️ Profilo: **{st.session_state.ruolo.upper()}**")
     st.markdown("---")
     
+    # Se è autista, mettiamo un comodo pulsante di aggiornamento in sidebar
+    if st.session_state.ruolo == "autista":
+        if st.button("🔄 Sincronizza da GitHub", use_container_width=True):
+            with st.spinner("Aggiornamento in corso..."):
+                st.session_state.giro_corrente = scarica_db_da_github()
+            st.success("Aggiornato!")
+            st.rerun()
+        st.markdown("---")
+
     if st.button("🚪 Esci / Logout", use_container_width=True):
         st.session_state.logged_in = False
         st.session_state.username = ""
@@ -159,35 +167,21 @@ with st.sidebar:
         st.rerun()
 
 # ==========================================
-# 5. BLOCCO DATABASE: ADMIN VS AUTISTA
+# 5. GESTIONE DATABASE (SOLO PER ADMIN)
 # ==========================================
-st.subheader("📁 Gestione Database")
-
 if st.session_state.ruolo == "admin":
-    st.success("Pannello Admin attivo: puoi caricare file Excel/CSV locali.")
-    
-    uploaded_file = st.file_uploader("Carica nuovo file Excel/CSV", type=["xlsx", "csv"])
-    if uploaded_file is not None:
-        if uploaded_file.name.endswith('.csv'):
-            st.session_state.giro_corrente = pd.read_csv(uploaded_file)
-        else:
-            st.session_state.giro_corrente = pd.read_excel(uploaded_file)
-        st.success("Database caricato con successo!")
-        st.rerun()
-
-elif st.session_state.ruolo == "autista":
-    st.info("ℹ️ Profilo Autista: Database sincronizzato automaticamente in sola lettura da GitHub.")
-    
-    if st.button("🔄 Aggiorna dati da GitHub", use_container_width=True):
-        with st.spinner("Scaricamento aggiornamenti in corso..."):
-            st.session_state.giro_corrente = scarica_db_da_github()
-        st.success("Database aggiornato correttamente!")
-        st.rerun()
-
-st.markdown("---")
+    with st.expander("📁 Pannello Admin: Gestione Database", expanded=False):
+        uploaded_file = st.file_uploader("Carica nuovo file Excel/CSV", type=["xlsx", "csv"])
+        if uploaded_file is not None:
+            if uploaded_file.name.endswith('.csv'):
+                st.session_state.giro_corrente = pd.read_csv(uploaded_file)
+            else:
+                st.session_state.giro_corrente = pd.read_excel(uploaded_file)
+            st.success("Database caricato con successo!")
+            st.rerun()
 
 # ==========================================
-# 6. SEZIONE OPERATIVA: GIRO CONSEGNE
+# 6. SEZIONE OPERATIVA: GIRO CONSEGNE (DIRETTA)
 # ==========================================
 st.subheader("🚐 Giro Consegne Attivo")
 
@@ -210,7 +204,6 @@ if tot_clienti > 0:
         st.rerun()
     st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
 
-    # Generazione link Google Maps per tutto il percorso
     addresses = [f"{r.get('VIA', '')}, {r.get('COMUNE', '')}" for _, r in st.session_state.giro_corrente.iterrows()]
     if len(addresses) == 1:
         maps_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(addresses[0])}"
@@ -271,7 +264,6 @@ if tot_clienti > 0:
 
         st.markdown("---")
         
-        # Visualizzazione dettagliata per modifica quantità o navigazione singola tappa
         for idx in range(tot_clienti):
             row = st.session_state.giro_corrente.iloc[idx]
             
@@ -313,4 +305,4 @@ if tot_clienti > 0:
             </a>
         ''', unsafe_allow_html=True)
 else:
-    st.info("Nessuna fermata disponibile nel giro. Sincronizza il database da GitHub o carica i dati dal pannello Admin.")
+    st.info("Nessuna fermata disponibile nel giro. Assicurati che il link RAW di GitHub punti a un file valido o accedi come Admin per caricarne uno.")
