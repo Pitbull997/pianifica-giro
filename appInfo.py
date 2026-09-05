@@ -206,49 +206,56 @@ def carica_giro_utente_da_sheets(nome_utente):
     return df_vuoto
 
 def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
-    try:
-        if sheet_giro:
-            # Pausa di sicurezza di 1 secondo per bloccare gli errori 429 di Google Sheets
-            time.sleep(1.0)
-            
-            data_totale = sheet_giro.get_all_records()
-            df_tutti = pd.DataFrame(data_totale) if data_totale else pd.DataFrame(columns=['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
-            
-            if not df_tutti.empty:
-                df_tutti.columns = df_tutti.columns.str.strip().str.upper()
-                if 'Q.TA' in df_tutti.columns:
-                    df_tutti = df_tutti.rename(columns={'Q.TA': 'Q.ta'})
-                df_tutti = df_tutti[df_tutti['UTENTE'].astype(str).str.strip().str.lower() != nome_utente.strip().lower()]
-            
-            if not df_nuovo_giro.empty:
-                df_agg = df_nuovo_giro.copy()
-                df_agg['UTENTE'] = nome_utente
-                df_agg['POSIZIONE'] = range(1, len(df_agg) + 1)
-                cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']
-                for c in cols_ordine:
-                    if c not in df_agg.columns:
-                        df_agg[c] = ""
-                df_agg = df_agg[cols_ordine]
+    for tentativo in range(5):
+        try:
+            if sheet_giro:
+                time.sleep(1.5 * (tentativo + 1))
                 
-                if df_tutti.empty:
-                    df_tutti = df_agg
-                else:
+                data_totale = sheet_giro.get_all_records()
+                df_tutti = pd.DataFrame(data_totale) if data_totale else pd.DataFrame(columns=['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
+                
+                if not df_tutti.empty:
+                    df_tutti.columns = df_tutti.columns.str.strip().str.upper()
+                    if 'Q.TA' in df_tutti.columns:
+                        df_tutti = df_tutti.rename(columns={'Q.TA': 'Q.ta'})
+                    df_tutti = df_tutti[df_tutti['UTENTE'].astype(str).str.strip().str.lower() != nome_utente.strip().lower()]
+                
+                if not df_nuovo_giro.empty:
+                    df_agg = df_nuovo_giro.copy()
+                    df_agg['UTENTE'] = nome_utente
+                    df_agg['POSIZIONE'] = range(1, len(df_agg) + 1)
+                    cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']
                     for c in cols_ordine:
-                        if c not in df_tutti.columns:
-                            df_tutti[c] = ""
-                    df_tutti = pd.concat([df_tutti[cols_ordine], df_agg[cols_ordine]], ignore_index=True)
-            
-            sheet_giro.clear()
-            intestazioni = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']
-            if df_tutti.empty:
-                sheet_giro.update([intestazioni])
+                        if c not in df_agg.columns:
+                            df_agg[c] = ""
+                    df_agg = df_agg[cols_ordine]
+                    
+                    if df_tutti.empty:
+                        df_tutti = df_agg
+                    else:
+                        for c in cols_ordine:
+                            if c not in df_tutti.columns:
+                                df_tutti[c] = ""
+                        df_tutti = pd.concat([df_tutti[cols_ordine], df_agg[cols_ordine]], ignore_index=True)
+                
+                sheet_giro.clear()
+                intestazioni = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']
+                if df_tutti.empty:
+                    sheet_giro.update([intestazioni])
+                else:
+                    data_to_update = [intestazioni] + df_tutti.astype(str).values.tolist()
+                    sheet_giro.update(data_to_update)
+                
+                st.cache_data.clear()
+                return
+        except Exception as e:
+            if "429" in str(e) and tentativo < 4:
+                continue
+            elif tentativo == 4:
+                st.error(f"Errore nel salvataggio del giro su Google Sheets dopo vari tentativi: {e}")
             else:
-                data_to_update = [intestazioni] + df_tutti.astype(str).values.tolist()
-                sheet_giro.update(data_to_update)
-            
-            st.cache_data.clear()
-    except Exception as e:
-        st.error(f"Errore nel salvataggio del giro su Google Sheets: {e}")
+                st.error(f"Errore nel salvataggio del giro su Google Sheets: {e}")
+                break
 
 # Inizializzazione dati di sessione
 sessione_salvata = carica_sessione()
