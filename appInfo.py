@@ -34,7 +34,7 @@ if 'clienti_selezionati_m' not in st.session_state:
 if 'vista_pulita' not in st.session_state:
     st.session_state.vista_pulita = False
 
-# CSS Avanzato - Forzatura Dark Mode & Grafica Splash Originale con Tasti Fixati
+# CSS Avanzato - Forzatura Dark Mode & Overlay dei tasti stile app nativa
 st.markdown("""
 <style>
     .stApp, body, html {
@@ -53,18 +53,21 @@ st.markdown("""
         max-width: 100% !important;
     }
 
-    /* Stile per la schermata Splash originale a tutto schermo */
-    .splash-container {
+    /* Container della schermata di benvenuto identico all'immagine */
+    .splash-wrapper {
         position: relative;
         width: 100%;
-        min-height: 85vh;
-        background-image: url("app/static/vango_splash.png");
-        background-size: cover;
-        background-position: center;
-        display: flex;
-        flex-direction: column;
-        justify-content: flex-end;
-        padding: 20px;
+        max-width: 480px;
+        margin: 0 auto;
+        border-radius: 20px;
+        overflow: hidden;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+    }
+    
+    .splash-wrapper img {
+        width: 100%;
+        height: auto;
+        display: block;
     }
 
     .logo-container {
@@ -104,6 +107,18 @@ st.markdown("""
         border: 1px solid #475569 !important;
         border-radius: 8px !important;
         font-weight: bold !important;
+    }
+
+    /* Stile personalizzato per il bottone principale simile a "ENTRA IN VanGo" */
+    .btn-entra div[data-testid="stButton"] > button {
+        background: linear-gradient(135deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.9) 100%) !important;
+        color: #FFFFFF !important;
+        border: 1px solid rgba(96, 165, 250, 0.5) !important;
+        border-radius: 30px !important;
+        height: 52px !important;
+        font-size: 16px !important;
+        font-weight: bold !important;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
     }
 
     .btn-active div[data-testid="stButton"] > button {
@@ -264,35 +279,59 @@ if st.session_state.db_clienti.empty:
 if st.session_state.giro_corrente.empty:
     st.session_state.giro_corrente = carica_giro_da_disco()
 
+# Stato per mostrare o nascondere i campi di login quando si preme il tasto "ENTRA IN VanGo"
+if 'mostra_login' not in st.session_state:
+    st.session_state.mostra_login = False
+
 # ==========================================
-# SCHERMATA 0: WELCOME / SPLASH CON TASTI IN PRIMO PIANO
+# SCHERMATA 0: WELCOME / SPLASH CON TASTO SIMILE ALL'IMMAGINE
 # ==========================================
 if st.session_state.pagina_attiva == "welcome" and not st.session_state.autenticato:
     img_path = "vango_splash.png"
     
-    # Mostriamo l'immagine splash originale e subito sotto i campi e pulsanti di accesso ben visibili
+    st.markdown("<div class='splash-wrapper'>", unsafe_allow_html=True)
     if os.path.exists(img_path):
         st.image(img_path, use_container_width=True)
     else:
         st.warning("⚠️ Immagine 'vango_splash.png' non trovata nella cartella.")
-
-    st.markdown("<div style='background-color: #18181b; padding: 16px; border-radius: 12px; border: 1px solid #334155; margin-top: 10px;'>", unsafe_allow_html=True)
-    st.markdown("<h3 style='text-align: center; color: white; margin-top: 0px; margin-bottom: 12px; font-size: 18px;'>🔐 Accesso Area Guidatore</h3>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
     
-    user_input = st.text_input("Utente", key="login_user", placeholder="Inserisci utente")
-    pass_input = st.text_input("Password", type="password", key="login_pass", placeholder="Inserisci password")
+    st.markdown("<div style='max-width: 480px; margin: 15px auto; padding: 0 10px;'>", unsafe_allow_html=True)
     
-    st.markdown("<div style='margin-top: 8px;'></div>", unsafe_allow_html=True)
-    
-    if st.button("ACCEDI AL GIRO", use_container_width=True, type="primary"):
-        # Credenziali configurate (Username: driver, Password: vango2026)
-        if user_input == "driver" and pass_input == "vango2026":
-            st.session_state.autenticato = True
-            st.session_state.pagina_attiva = "giro"
+    if not st.session_state.mostra_login:
+        # Mostra il pulsante principale identico al design richiesto
+        st.markdown('<div class="btn-entra">', unsafe_allow_html=True)
+        if st.button("ENTRA IN VanGo", use_container_width=True):
+            st.session_state.mostra_login = True
             st.rerun()
-        else:
-            st.error("❌ Utente o password errati!")
-            
+        st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        # Quando viene premuto, compaiono i campi puliti per inserire le credenziali
+        st.markdown("<div style='background-color: #18181b; padding: 16px; border-radius: 12px; border: 1px solid #334155;'>", unsafe_allow_html=True)
+        st.markdown("<h4 style='text-align: center; color: white; margin-top: 0px; margin-bottom: 10px; font-size: 16px;'>🔐 Inserisci Credenziali</h4>", unsafe_allow_html=True)
+        
+        user_input = st.text_input("Utente", key="login_user", placeholder="Es. driver")
+        pass_input = st.text_input("Password", type="password", key="login_pass", placeholder="••••••••")
+        
+        st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+        
+        col_L1, col_L2 = st.columns(2)
+        with col_L1:
+            if st.button("Indietro", use_container_width=True):
+                st.session_state.mostra_login = False
+                st.rerun()
+        with col_L2:
+            if st.button("ACCEDI", use_container_width=True, type="primary"):
+                # Credenziali di default (Username: driver, Password: vango2026)
+                if user_input == "driver" and pass_input == "vango2026":
+                    st.session_state.autenticato = True
+                    st.session_state.pagina_attiva = "giro"
+                    st.rerun()
+                else:
+                    st.error("❌ Utente o password errati!")
+                    
+        st.markdown("</div>", unsafe_allow_html=True)
+        
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ==========================================
@@ -550,7 +589,7 @@ elif st.session_state.autenticato:
                     
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
-                    st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, novos_clienti if 'novos_clienti' in locals() else nuovi_clienti], ignore_index=True)
+                    st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
                     st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
                     
                     salva_giro_su_disco(st.session_state.giro_corrente)
