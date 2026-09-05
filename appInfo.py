@@ -15,7 +15,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-FILE_GIRO_PERSISTENTE = "giro_salvato.json"
 FILE_SESSIONE_PERSISTENTE = "sessione_salvata.json"
 
 # Inizializzazione Connessione Google Sheets tramite Streamlit Secrets
@@ -30,7 +29,7 @@ def init_google_sheets():
     client = gspread.authorize(creds)
     return client
 
-# Connessione al foglio Google
+# Connessione al foglio Google e alle relative schede
 try:
     client_gs = init_google_sheets()
     sh = client_gs.open("VanGo Database")
@@ -39,10 +38,15 @@ try:
         sheet_utenti = sh.worksheet("Utenti") # Seconda scheda: Utenti
     except Exception:
         sheet_utenti = None
+    try:
+        sheet_giro = sh.worksheet("GiroAttivo") # Terza scheda: Giro Attivo
+    except Exception:
+        sheet_giro = None
 except Exception as e:
     st.error(f"⚠️ Errore di connessione a Google Sheets: {e}")
     sheet_db = None
     sheet_utenti = None
+    sheet_giro = None
 
 # Funzioni per la sessione persistente di login
 def carica_sessione():
@@ -70,7 +74,6 @@ def carica_utenti_da_sheets():
             if data:
                 dict_utenti = {}
                 for row in data:
-                    # Normalizza le chiavi nel caso di spazi o maiuscole
                     row_clean = {str(k).strip().upper(): str(v).strip() for k, v in row.items()}
                     usr = row_clean.get("USERNAME", "")
                     pwd = row_clean.get("PASSWORD", "")
@@ -91,7 +94,108 @@ def salva_utenti_su_sheets(dict_utenti):
     except Exception as e:
         st.error(f"Errore nel salvataggio utenti su Google Sheets: {e}")
 
-# Inizializzazione prioritaria delle variabili di sessione leggendo dal file persistente
+# Funzioni di utilità per i dati
+def pulisci_orario(valore):
+    if pd.isna(valore):
+        return ""
+    val_str = str(valore).strip()
+    if 'days' in val_str:
+        val_str = val_str.split()[-1]
+    if ' ' in val_str:
+        val_str = val_str.split()[-1]
+    if len(val_str) >= 5:
+        return val_str[:5]
+    return val_str
+
+def elabora_dataframe_db(df):
+    if df.empty:
+        return pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'])
+    
+    df.columns = df.columns.str.strip().str.upper()
+    
+    if 'POSIZIONE' in df.columns:
+        df['POSIZIONE'] = pd.to_numeric(df['POSIZIONE'], errors='coerce').fillna(0).astype(int)
+    else:
+        df['POSIZIONE'] = range(1, len(df) + 1)
+        
+    if 'QTA_DEFAULT' in df.columns:
+        df['QTA_DEFAULT'] = pd.to_numeric(df['QTA_DEFAULT'], errors='coerce').fillna(0).astype(int)
+    else:
+        df['QTA_DEFAULT'] = 0
+
+    for col in ['ZONA', 'CLIENTE', 'COMUNE', 'VIA']:
+        if col in df.columns:
+            df[col] = df[col].fillna("").astype(str).str.strip()
+        else:
+            df[col] = ""
+
+    if 'ORA' in df.columns:
+        df['ORA'] = df['ORA'].apply(pulisci_orario)
+    else:
+        df['ORA'] = ""
+        
+    return df.sort_values(by="POSIZIONE").reset_index(drop=True)
+
+def salva_db_su_google_sheets(df):
+    try:
+        if sheet_db:
+            sheet_db.clear()
+            data_to_update = [df.columns.values.tolist()] + df.astype(str).values.tolist()
+            sheet_db.update(data_to_update)
+    except Exception as e:
+        st.error(f"Errore nel salvataggio su Google Sheets: {e}")
+
+def carica_db_da_google_sheets():
+    try:
+        if sheet_db:
+            data = sheet_db.get_all_records()
+            if data:
+                df = pd.DataFrame(data)
+                return elabora_dataframe_db(df)
+    except Exception as e:
+        st.error(f"Errore di lettura da Google Sheets: {e}")
+    return pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'])
+
+# --- Gestione Giro su Google Sheets ---
+def carica_giro_da_sheets():
+    cols_giro = ['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']
+    try:
+        if sheet_giro:
+            data = sheet_giro.get_all_records()
+            if data:
+                df = pd.DataFrame(data)
+                df.columns = df.columns.str.strip().str.upper()
+                # Gestione compatibilità nomi colonna quantità
+                if 'Q.TA' in df.columns and 'Q.TA' not in cols_giro:
+                    df = df.rename(columns={'Q.TA': 'Q.ta'})
+                
+                # Verifica che ci siano tutte le colonne necessarie
+                for c in cols_giro:
+                    if c not in df.columns:
+                        df[c] = ""
+                
+                df = df[cols_giro]
+                if not df.empty and len(df.dropna(how='all')) > 0:
+                    df['POSIZIONE'] = [str(i) for i in range(1, len(df) + 1)]
+                    return df
+    except Exception as e:
+        st.error(f"Errore di lettura del giro da Google Sheets: {e}")
+    return pd.DataFrame(columns=cols_giro)
+
+def salva_giro_su_sheets(df):
+    try:
+        if sheet_giro:
+            sheet_giro.clear()
+            if df.empty:
+                # Lascia almeno le intestazioni pulite sul foglio
+                sheet_giro.update([['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']])
+            else:
+                data_to_update = [list(df.columns)] + df.astype(str).values.tolist()
+                sheet_giro.update(data_to_update)
+    except Exception as e:
+        st.error(f"Errore nel salvataggio del giro su Google Sheets: {e}")
+
+# Inizializzazione dati di sessione
 sessione_salvata = carica_sessione()
 
 if 'pagina_attiva' not in st.session_state:
@@ -107,23 +211,13 @@ if 'is_admin' not in st.session_state:
     st.session_state.is_admin = sessione_salvata["is_admin"]
 
 if 'db_clienti' not in st.session_state:
-    st.session_state.db_clienti = pd.DataFrame()
+    st.session_state.db_clienti = carica_db_da_google_sheets()
 
 if 'utenti_sistema' not in st.session_state:
     st.session_state.utenti_sistema = carica_utenti_da_sheets()
 
 if 'giro_corrente' not in st.session_state:
-    def carica_giro_da_disco():
-        if os.path.exists(FILE_GIRO_PERSISTENTE):
-            try:
-                df = pd.read_json(FILE_GIRO_PERSISTENTE, orient="records")
-                if not df.empty:
-                    df['POSIZIONE'] = range(1, len(df) + 1)
-                    return df
-            except Exception:
-                pass
-        return pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
-    st.session_state.giro_corrente = carica_giro_da_disco()
+    st.session_state.giro_corrente = carica_giro_da_sheets()
 
 if 'clienti_selezionati_m' not in st.session_state:
     st.session_state.clienti_selezionati_m = []
@@ -233,79 +327,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Funzioni di utilità per i dati
-def pulisci_orario(valore):
-    if pd.isna(valore):
-        return ""
-    val_str = str(valore).strip()
-    if 'days' in val_str:
-        val_str = val_str.split()[-1]
-    if ' ' in val_str:
-        val_str = val_str.split()[-1]
-    if len(val_str) >= 5:
-        return val_str[:5]
-    return val_str
-
-def elabora_dataframe_db(df):
-    if df.empty:
-        return pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'])
-    
-    df.columns = df.columns.str.strip().str.upper()
-    
-    if 'POSIZIONE' in df.columns:
-        df['POSIZIONE'] = pd.to_numeric(df['POSIZIONE'], errors='coerce').fillna(0).astype(int)
-    else:
-        df['POSIZIONE'] = range(1, len(df) + 1)
-        
-    if 'QTA_DEFAULT' in df.columns:
-        df['QTA_DEFAULT'] = pd.to_numeric(df['QTA_DEFAULT'], errors='coerce').fillna(0).astype(int)
-    else:
-        df['QTA_DEFAULT'] = 0
-
-    for col in ['ZONA', 'CLIENTE', 'COMUNE', 'VIA']:
-        if col in df.columns:
-            df[col] = df[col].fillna("").astype(str).str.strip()
-        else:
-            df[col] = ""
-
-    if 'ORA' in df.columns:
-        df['ORA'] = df['ORA'].apply(pulisci_orario)
-    else:
-        df['ORA'] = ""
-        
-    return df.sort_values(by="POSIZIONE").reset_index(drop=True)
-
-def salva_db_su_google_sheets(df):
-    try:
-        if sheet_db:
-            sheet_db.clear()
-            data_to_update = [df.columns.values.tolist()] + df.astype(str).values.tolist()
-            sheet_db.update(data_to_update)
-    except Exception as e:
-        st.error(f"Errore nel salvataggio su Google Sheets: {e}")
-
-def carica_db_da_google_sheets():
-    try:
-        if sheet_db:
-            data = sheet_db.get_all_records()
-            if data:
-                df = pd.DataFrame(data)
-                return elabora_dataframe_db(df)
-    except Exception as e:
-        st.error(f"Errore di lettura da Google Sheets: {e}")
-    
-    return pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'])
-
-def salva_giro_su_disco(df):
-    try:
-        df.to_json(FILE_GIRO_PERSISTENTE, orient="records", date_format="iso")
-    except Exception as e:
-        st.error(f"Errore nel salvataggio del giro: {e}")
-
-# Caricamento effettivo dei dati se vuoti
-if st.session_state.db_clienti.empty:
-    st.session_state.db_clienti = carica_db_da_google_sheets()
-
 # ==========================================
 # SCHERMATA 0: WELCOME / HOME PAGE
 # ==========================================
@@ -396,7 +417,6 @@ elif not st.session_state.autenticato and (st.session_state.pagina_attiva == "lo
             submit_login = st.form_submit_button("ACCEDI", use_container_width=True, type="primary")
 
             if submit_login:
-                # Ricarica freschi gli utenti da Google Sheets al momento del login
                 st.session_state.utenti_sistema = carica_utenti_da_sheets()
                 utenti_validi = st.session_state.utenti_sistema
                 username_input = username_input.strip()
@@ -486,7 +506,8 @@ else:
         if st.button("🔄 INVERTI SEQUENZA", use_container_width=True, key="btn_inverti"):
             if not st.session_state.giro_corrente.empty:
                 st.session_state.giro_corrente = st.session_state.giro_corrente.iloc[::-1].reset_index(drop=True)
-                salva_giro_su_disco(st.session_state.giro_corrente)
+                st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
+                salva_giro_su_sheets(st.session_state.giro_corrente)
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -495,7 +516,7 @@ else:
         if st.button("🗑️ SVUOTA GIRO", use_container_width=True, key="btn_svuota"):
             if not st.session_state.giro_corrente.empty:
                 st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
-                salva_giro_su_disco(st.session_state.giro_corrente)
+                salva_giro_su_sheets(st.session_state.giro_corrente)
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -586,7 +607,7 @@ else:
                         )
                         if nuova_qta != int(row['Q.ta']):
                             st.session_state.giro_corrente.at[idx, 'Q.ta'] = nuova_qta
-                            salva_giro_su_disco(st.session_state.giro_corrente)
+                            salva_giro_su_sheets(st.session_state.giro_corrente)
                             st.rerun()
 
                     with col_c3:
@@ -608,7 +629,7 @@ else:
                             df_nuovo['POSIZIONE'] = [str(i) for i in range(1, len(df_nuovo) + 1)]
                             
                             st.session_state.giro_corrente = df_nuovo
-                            salva_giro_su_disco(st.session_state.giro_corrente)
+                            salva_giro_su_sheets(st.session_state.giro_corrente)
                             st.rerun()
 
                     st.markdown("<hr style='margin: 10px 0; border-color: #262626;'>", unsafe_allow_html=True)
@@ -694,12 +715,12 @@ else:
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
                     st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
-                    st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
+                    st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
                     
-                    salva_giro_su_disco(st.session_state.giro_corrente)
+                    salva_giro_su_sheets(st.session_state.giro_corrente)
                     st.session_state.clienti_selezionati_m = []
                     
-                    st.success("Clienti aggiunti al giro con successo!")
+                    st.success("Clienti aggiunti al giro con successo e salvati su Google Sheets!")
                     st.session_state.pagina_attiva = "giro"
                     st.rerun()
                 
@@ -726,7 +747,6 @@ else:
         st.subheader("🔑 Gestione Utenti da Google Sheets")
         st.markdown("<p style='color: #94A3B8; font-size: 14px;'>Gestisci gli account autorizzati direttamente dal foglio Google dedicato.</p>", unsafe_allow_html=True)
 
-        # Carica utenze attuali in formato DataFrame per l'editor
         dict_u = carica_utenti_da_sheets()
         df_utenti_attuali = pd.DataFrame(list(dict_u.items()), columns=["USERNAME", "PASSWORD"])
 
@@ -738,7 +758,6 @@ else:
         )
 
         if st.button("💾 SALVA MODIFICHE UTENTI SU GOOGLE SHEETS", use_container_width=True, type="primary"):
-            # Converte l'editor in un dizionario pulito
             nuovo_dict = {}
             for _, row in edited_utenti.iterrows():
                 u = str(row["USERNAME"]).strip()
@@ -746,7 +765,6 @@ else:
                 if u and u.lower() != "nan":
                     nuovo_dict[u] = p
             
-            # Assicura che l'admin non venga cancellato per errore
             if "admin" not in nuovo_dict:
                 nuovo_dict["admin"] = "vango2026"
 
