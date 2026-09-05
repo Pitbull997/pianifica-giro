@@ -177,29 +177,24 @@ def pulisci_orario(valore):
     return val_str
 
 def elabora_dataframe_db(df):
-    # Pulisce i nomi delle colonne rimuovendo spazi e convertendole in maiuscolo
     df.columns = df.columns.str.strip().str.upper()
     
-    # Conversione sicura POSIZIONE
     if 'POSIZIONE' in df.columns:
         df['POSIZIONE'] = pd.to_numeric(df['POSIZIONE'], errors='coerce').fillna(0).astype(int)
     else:
         df['POSIZIONE'] = range(1, len(df) + 1)
         
-    # Conversione sicura QTA_DEFAULT
     if 'QTA_DEFAULT' in df.columns:
         df['QTA_DEFAULT'] = pd.to_numeric(df['QTA_DEFAULT'], errors='coerce').fillna(0).astype(int)
     else:
         df['QTA_DEFAULT'] = 0
 
-    # Gestione stringhe per evitare errori di tipo
     for col in ['ZONA', 'CLIENTE', 'COMUNE', 'VIA']:
         if col in df.columns:
             df[col] = df[col].fillna("").astype(str)
         else:
             df[col] = ""
 
-    # Pulizia orario
     if 'ORA' in df.columns:
         df['ORA'] = df['ORA'].apply(pulisci_orario)
     else:
@@ -214,7 +209,7 @@ def carica_db_predefinito():
             try:
                 df = pd.read_csv(file_path) if file_path.endswith('.csv') else pd.read_excel(file_path)
                 return elabora_dataframe_db(df)
-            except Exception as e:
+            except Exception:
                 pass
     return pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'])
 
@@ -503,11 +498,21 @@ else:
                 else:
                     df_up = pd.read_excel(caricamento_file)
                 
+                # Forza il ricaricamento pulito nel session state azzerando eventuali cache precedenti
                 st.session_state.db_clienti = elabora_dataframe_db(df_up)
+                st.session_state.clienti_selezionati_m = []
+                
                 st.success(f"Database caricato con successo! ({len(st.session_state.db_clienti)} clienti trovati)")
                 st.rerun()
             except Exception as e:
                 st.error(f"Errore nella lettura del file: {e}")
+
+        # Pulsante di emergenza per forzare il reset della cache del DB
+        if st.button("🔄ricarica DB da zero", use_container_width=True):
+            st.session_state.db_clienti = carica_db_predefinito()
+            st.session_state.clienti_selezionati_m = []
+            st.success("Database ricaricato dai file locali!")
+            st.rerun()
 
         if not st.session_state.db_clienti.empty:
             lista_completa = st.session_state.db_clienti['CLIENTE'].dropna().tolist()
@@ -551,7 +556,7 @@ else:
                     nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
                     
                     qta_dict = dict(zip(df_edit_colli['CLIENTE'], df_edit_colli['Q.ta']))
-                    nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(qta_dict)
+                    nuovi_clienti['Q.ta'] = nuovis_clienti['CLIENTE'].map(qta_dict) if 'nuovis_clienti' in locals() else nuovi_clienti['CLIENTE'].map(qta_dict)
                     
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
