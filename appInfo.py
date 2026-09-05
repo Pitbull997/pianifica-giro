@@ -156,80 +156,41 @@ def carica_db_da_google_sheets():
         st.error(f"Errore di lettura da Google Sheets: {e}")
     return pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'])
 
-# --- Gestione Giro per singolo utente su Google Sheets ---
-def carica_giro_utente_da_sheets(nome_utente):
+# --- Gestione Giro su Google Sheets ---
+def carica_giro_da_sheets():
     cols_giro = ['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']
-    df_vuoto = pd.DataFrame(columns=cols_giro)
     try:
         if sheet_giro:
             data = sheet_giro.get_all_records()
             if data:
                 df = pd.DataFrame(data)
                 df.columns = df.columns.str.strip().str.upper()
+                # Gestione compatibilità nomi colonna quantità
+                if 'Q.TA' in df.columns and 'Q.TA' not in cols_giro:
+                    df = df.rename(columns={'Q.TA': 'Q.ta'})
                 
-                # Verifica presenza colonna UTENTE
-                if 'UTENTE' not in df.columns:
-                    return df_vuoto
-                
-                # Filtra solo le righe dell'utente corrente
-                df_utente = df[df['UTENTE'].astype(str).str.strip().str.lower() == nome_utente.strip().lower()].copy()
-                
-                if 'Q.TA' in df_utente.columns and 'Q.TA' not in cols_giro:
-                    df_utente = df_utente.rename(columns={'Q.TA': 'Q.ta'})
-                
+                # Verifica che ci siano tutte le colonne necessarie
                 for c in cols_giro:
-                    if c not in df_utente.columns:
-                        df_utente[c] = ""
+                    if c not in df.columns:
+                        df[c] = ""
                 
-                df_utente = df_utente[cols_giro]
-                if not df_utente.empty and len(df_utente.dropna(how='all')) > 0:
-                    df_utente['POSIZIONE'] = [str(i) for i in range(1, len(df_utente) + 1)]
-                    return df_utente.reset_index(drop=True)
+                df = df[cols_giro]
+                if not df.empty and len(df.dropna(how='all')) > 0:
+                    df['POSIZIONE'] = [str(i) for i in range(1, len(df) + 1)]
+                    return df
     except Exception as e:
         st.error(f"Errore di lettura del giro da Google Sheets: {e}")
-    return df_vuoto
+    return pd.DataFrame(columns=cols_giro)
 
-def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
+def salva_giro_su_sheets(df):
     try:
         if sheet_giro:
-            # Legge tutto il foglio esistente per preservare i giri degli altri autisti
-            data_totale = sheet_giro.get_all_records()
-            df_tutti = pd.DataFrame(data_totale) if data_totale else pd.DataFrame(columns=['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
-            
-            if not df_tutti.empty:
-                df_tutti.columns = df_tutti.columns.str.strip().str.upper()
-                if 'Q.TA' in df_tutti.columns:
-                    df_tutti = df_tutti.rename(columns={'Q.TA': 'Q.ta'})
-                # Rimuove il vecchio giro dell'utente corrente
-                df_tutti = df_tutti[df_tutti['UTENTE'].astype(str).str.strip().str.lower() != nome_utente.strip().lower()]
-            
-            # Prepara il nuovo giro per l'utente corrente
-            if not df_nuovo_giro.empty:
-                df_agg = df_nuovo_giro.copy()
-                df_agg['UTENTE'] = nome_utente
-                df_agg['POSIZIONE'] = range(1, len(df_agg) + 1)
-                cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']
-                for c in cols_ordine:
-                    if c not in df_agg.columns:
-                        df_agg[c] = ""
-                df_agg = df_agg[cols_ordine]
-                
-                if df_tutti.empty:
-                    df_tutti = df_agg
-                else:
-                    # Uniforma le colonne prima del concat
-                    for c in cols_ordine:
-                        if c not in df_tutti.columns:
-                            df_tutti[c] = ""
-                    df_tutti = pd.concat([df_tutti[cols_ordine], df_agg[cols_ordine]], ignore_index=True)
-            
-            # Salva tutto su Google Sheets
             sheet_giro.clear()
-            intestazioni = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']
-            if df_tutti.empty:
-                sheet_giro.update([intestazioni])
+            if df.empty:
+                # Lascia almeno le intestazioni pulite sul foglio
+                sheet_giro.update([['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']])
             else:
-                data_to_update = [intestazioni] + df_tutti.astype(str).values.tolist()
+                data_to_update = [list(df.columns)] + df.astype(str).values.tolist()
                 sheet_giro.update(data_to_update)
     except Exception as e:
         st.error(f"Errore nel salvataggio del giro su Google Sheets: {e}")
@@ -255,13 +216,8 @@ if 'db_clienti' not in st.session_state:
 if 'utenti_sistema' not in st.session_state:
     st.session_state.utenti_sistema = carica_utenti_da_sheets()
 
-# Carica il giro specifico dell'utente appena fa il login
-if 'giro_corrente' not in st.session_state or st.session_state.get('ultimo_utente_caricato') != st.session_state.utente_corrente:
-    if st.session_state.utente_corrente:
-        st.session_state.giro_corrente = carica_giro_utente_da_sheets(st.session_state.utente_corrente)
-        st.session_state.ultimo_utente_caricato = st.session_state.utente_corrente
-    else:
-        st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
+if 'giro_corrente' not in st.session_state:
+    st.session_state.giro_corrente = carica_giro_da_sheets()
 
 if 'clienti_selezionati_m' not in st.session_state:
     st.session_state.clienti_selezionati_m = []
@@ -471,10 +427,6 @@ elif not st.session_state.autenticato and (st.session_state.pagina_attiva == "lo
                     st.session_state.is_admin = (username_input.lower() == "admin")
                     st.session_state.pagina_attiva = "giro"
                     
-                    # Carica subito il giro specifico dell'utente
-                    st.session_state.giro_corrente = carica_giro_utente_da_sheets(username_input)
-                    st.session_state.ultimo_utente_caricato = username_input
-                    
                     salva_sessione(True, username_input, st.session_state.is_admin)
                     st.rerun()
                 else:
@@ -555,7 +507,7 @@ else:
             if not st.session_state.giro_corrente.empty:
                 st.session_state.giro_corrente = st.session_state.giro_corrente.iloc[::-1].reset_index(drop=True)
                 st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
-                salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
+                salva_giro_su_sheets(st.session_state.giro_corrente)
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -564,7 +516,7 @@ else:
         if st.button("🗑️ SVUOTA GIRO", use_container_width=True, key="btn_svuota"):
             if not st.session_state.giro_corrente.empty:
                 st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
-                salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
+                salva_giro_su_sheets(st.session_state.giro_corrente)
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -655,7 +607,7 @@ else:
                         )
                         if nuova_qta != int(row['Q.ta']):
                             st.session_state.giro_corrente.at[idx, 'Q.ta'] = nuova_qta
-                            salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
+                            salva_giro_su_sheets(st.session_state.giro_corrente)
                             st.rerun()
 
                     with col_c3:
@@ -677,7 +629,7 @@ else:
                             df_nuovo['POSIZIONE'] = [str(i) for i in range(1, len(df_nuovo) + 1)]
                             
                             st.session_state.giro_corrente = df_nuovo
-                            salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
+                            salva_giro_su_sheets(st.session_state.giro_corrente)
                             st.rerun()
 
                     st.markdown("<hr style='margin: 10px 0; border-color: #262626;'>", unsafe_allow_html=True)
@@ -691,13 +643,13 @@ else:
                     </a>
                 ''', unsafe_allow_html=True)
         else:
-            st.info("Nessuna fermata nel tuo giro corrente. Clicca in alto su '📁 CLIENTI' per aggiungerne.")
+            st.info("Nessuna fermata nel giro corrente. Clicca in alto su '📁 CLIENTI' per aggiungerne.")
 
     # ==========================================
     # SCHERMATA 2: INSERISCI CLIENTE
     # ==========================================
     elif st.session_state.pagina_attiva == "db":
-        st.subheader("📁 Inserisci Clienti nel Tuo Giro")
+        st.subheader("📁 Inserisci Clienti nel Giro")
         
         if st.session_state.is_admin:
             caricamento_file = st.file_uploader("Carica Database Clienti su Google Sheets (Excel o CSV)", type=["xlsx", "csv"])
@@ -733,7 +685,7 @@ else:
                 st.session_state.clienti_selezionati_m = st.session_state.widget_multiselect
 
             clienti_selezionati = st.multiselect(
-                "Cerca e seleziona i clienti per le tue consegne:",
+                "Cerca e seleziona i clienti per le consegne:",
                 options=lista_completa,
                 default=st.session_state.clienti_selezionati_m,
                 key="widget_multiselect",
@@ -754,21 +706,21 @@ else:
                     key="editor_colli_scelti"
                 )
 
-                if st.button("➕ CONFERMA E AGGIUNGI AL MIO GIRO", use_container_width=True, type="primary"):
+                if st.button("➕ CONFERMA E AGGIUNGI AL GIRO", use_container_width=True, type="primary"):
                     nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
                     
                     qta_dict = dict(zip(df_edit_colli['CLIENTE'], df_edit_colli['Q.ta']))
-                    nuovi_clienti['Q.ta'] = nouveaux = nuovi_clienti['CLIENTE'].map(qta_dict)
+                    nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(qta_dict)
                     
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
                     st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
                     st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
                     
-                    salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
+                    salva_giro_su_sheets(st.session_state.giro_corrente)
                     st.session_state.clienti_selezionati_m = []
                     
-                    st.success("Clienti aggiunti al tuo giro e salvati su Google Sheets!")
+                    st.success("Clienti aggiunti al giro con successo e salvati su Google Sheets!")
                     st.session_state.pagina_attiva = "giro"
                     st.rerun()
                 
@@ -786,7 +738,7 @@ else:
                         salva_db_su_google_sheets(st.session_state.db_clienti)
                         st.rerun()
         else:
-            st.warning("Nessun cliente trovato su Google Sheets.")
+            st.warning("Nessun cliente trovato su Google Sheets. Assicurati che il foglio 'VanGo Database' esista e contenga i dati.")
 
     # ==========================================
     # SCHERMATA 3: GESTIONE UTENTI (SOLO ADMIN)
