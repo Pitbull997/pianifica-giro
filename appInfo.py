@@ -15,7 +15,7 @@ st.set_page_config(
 
 FILE_GIRO_PERSISTENTE = "giro_salvato.json"
 
-# Inizializzazione prioritaria delle variabili di sessione (RISOLVE IL NAME ERROR)
+# Inizializzazione prioritaria delle variabili di sessione
 if 'pagina_attiva' not in st.session_state:
     st.session_state.pagina_attiva = "welcome"
 
@@ -44,7 +44,6 @@ st.markdown("""
         color: #FFFFFF !important;
     }
 
-    /* Nasconde header e padding di Streamlit nella schermata welcome o ovunque serva purezza */
     header {visibility: hidden;}
     .stMainBlockContainer {
         padding: 0rem !important;
@@ -56,7 +55,6 @@ st.markdown("""
         max-width: 100% !important;
     }
 
-    /* Stile per rimpicciolire e centrare l'icona in cima */
     .logo-container {
         display: flex;
         justify-content: center;
@@ -64,12 +62,11 @@ st.markdown("""
         margin-bottom: 10px;
     }
     .logo-container img {
-        width: 140px !important; /* Puoi regolare questa misura se la vuoi ancora più piccola o più grande */
+        width: 140px !important;
         max-width: 100%;
         height: auto;
     }
 
-    /* Compattamento spaziatura verticale tra le righe di bottoni */
     div[data-testid="stHorizontalBlock"] {
         gap: 0.5rem !important;
         margin-bottom: -0.5rem !important;
@@ -286,7 +283,6 @@ if st.session_state.pagina_attiva == "welcome":
 # APPLICAZIONE PRINCIPALE
 # ==========================================
 else:
-    # Mostra l'icona ridotta e centrata tramite HTML
     icon_path = "icovg.png"
     if os.path.exists(icon_path):
         with open(icon_path, "rb") as icon_file:
