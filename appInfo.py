@@ -34,7 +34,13 @@ def init_google_sheets():
 try:
     client_gs = init_google_sheets()
     sh = client_gs.open("VanGo Database")
-    sheet_db = sh.get_worksheet(0) # Prima scheda: Database Clienti
+    
+    # CORRETTO: Punta direttamente alla scheda "Foglio1" visibile nel tuo file
+    try:
+        sheet_db = sh.worksheet("Foglio1")
+    except Exception:
+        sheet_db = sh.get_worksheet(0) # Fallback di sicurezza sulla prima scheda
+        
     try:
         sheet_utenti = sh.worksheet("Utenti") # Seconda scheda: Utenti
     except Exception:
@@ -155,6 +161,12 @@ def salva_db_su_google_sheets(df):
 def carica_db_da_google_sheets_cached():
     try:
         if sheet_db:
+            valori_grezzi = sheet_db.get_all_values()
+            if not valori_grezzi:
+                intestazioni_default = ['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT']
+                sheet_db.update([intestazioni_default])
+                return pd.DataFrame(columns=intestazioni_default)
+            
             data = sheet_db.get_all_records()
             if data:
                 df = pd.DataFrame(data)
@@ -810,6 +822,10 @@ else:
                         st.rerun()
         else:
             st.warning("Nessun cliente trovato su Google Sheets.")
+            if st.button("🔄 Forza Aggiornamento / Svuota Cache", use_container_width=True):
+                st.cache_data.clear()
+                st.session_state.db_clienti = carica_db_da_google_sheets()
+                st.rerun()
 
     # ==========================================
     # SCHERMATA 3: GESTIONE UTENTI (SOLO ADMIN)
