@@ -163,14 +163,49 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Funzioni di utilità
+# Funzioni di utilità blindate per la lettura del DB
 def pulisci_orario(valore):
+    if pd.isna(valore):
+        return ""
     val_str = str(valore).strip()
     if 'days' in val_str:
+        val_str = val_str.split()[-1]
+    if ' ' in val_str:
         val_str = val_str.split()[-1]
     if len(val_str) >= 5:
         return val_str[:5]
     return val_str
+
+def elabora_dataframe_db(df):
+    # Pulisce i nomi delle colonne rimuovendo spazi e convertendole in maiuscolo
+    df.columns = df.columns.str.strip().str.upper()
+    
+    # Conversione sicura POSIZIONE
+    if 'POSIZIONE' in df.columns:
+        df['POSIZIONE'] = pd.to_numeric(df['POSIZIONE'], errors='coerce').fillna(0).astype(int)
+    else:
+        df['POSIZIONE'] = range(1, len(df) + 1)
+        
+    # Conversione sicura QTA_DEFAULT
+    if 'QTA_DEFAULT' in df.columns:
+        df['QTA_DEFAULT'] = pd.to_numeric(df['QTA_DEFAULT'], errors='coerce').fillna(0).astype(int)
+    else:
+        df['QTA_DEFAULT'] = 0
+
+    # Gestione stringhe per evitare errori di tipo
+    for col in ['ZONA', 'CLIENTE', 'COMUNE', 'VIA']:
+        if col in df.columns:
+            df[col] = df[col].fillna("").astype(str)
+        else:
+            df[col] = ""
+
+    # Pulizia orario
+    if 'ORA' in df.columns:
+        df['ORA'] = df['ORA'].apply(pulisci_orario)
+    else:
+        df['ORA'] = ""
+        
+    return df.sort_values(by="POSIZIONE").reset_index(drop=True)
 
 def carica_db_predefinito():
     nomi_file_possibili = ["database.xlsx", "database.csv", "database"]
@@ -178,16 +213,9 @@ def carica_db_predefinito():
         if os.path.exists(file_path):
             try:
                 df = pd.read_csv(file_path) if file_path.endswith('.csv') else pd.read_excel(file_path)
-                df.columns = df.columns.str.strip().str.upper()
-                df['POSIZIONE'] = pd.to_numeric(df['POSIZIONE'], errors='coerce').fillna(0).astype(int)
-                df['QTA_DEFAULT'] = pd.to_numeric(df['QTA_DEFAULT'], errors='coerce').fillna(0).astype(int)
-                df['CLIENTE'] = df['CLIENTE'].astype(str)
-                df['COMUNE'] = df['COMUNE'].astype(str)
-                df['VIA'] = df['VIA'].astype(str)
-                df['ORA'] = df['ORA'].apply(pulisci_orario)
-                return df.sort_values(by="POSIZIONE").reset_index(drop=True)
+                return elabora_dataframe_db(df)
             except Exception as e:
-                st.error(f"Errore caricamento {file_path}: {e}")
+                pass
     return pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'])
 
 def salva_giro_su_disco(df):
@@ -466,8 +494,7 @@ else:
     elif st.session_state.pagina_attiva == "db":
         st.subheader("📁 Inserisci Clienti nel Giro")
         
-        # Pulsante per caricare il file direttamente da interfaccia app
-        caricamento_file = st.file_uploader("Carica nuovo Database (Excel o CSV)", type=["xlsx", "csv"])
+        caricamento_file = st.file_uploader("Carica Database (Excel o CSV)", type=["xlsx", "csv"])
         
         if caricamento_file is not None:
             try:
@@ -476,16 +503,8 @@ else:
                 else:
                     df_up = pd.read_excel(caricamento_file)
                 
-                df_up.columns = df_up.columns.str.strip().str.upper()
-                df_up['POSIZIONE'] = pd.to_numeric(df_up['POSIZIONE'], errors='coerce').fillna(0).astype(int)
-                df_up['QTA_DEFAULT'] = pd.to_numeric(df_up['QTA_DEFAULT'], errors='coerce').fillna(0).astype(int)
-                df_up['CLIENTE'] = df_up['CLIENTE'].astype(str)
-                df_up['COMUNE'] = df_up['COMUNE'].astype(str)
-                df_up['VIA'] = df_up['VIA'].astype(str)
-                df_up['ORA'] = df_up['ORA'].apply(pulisci_orario)
-                
-                st.session_state.db_clienti = df_up.sort_values(by="POSIZIONE").reset_index(drop=True)
-                st.success("Database caricato con successo!")
+                st.session_state.db_clienti = elabora_dataframe_db(df_up)
+                st.success(f"Database caricato con successo! ({len(st.session_state.db_clienti)} clienti trovati)")
                 st.rerun()
             except Exception as e:
                 st.error(f"Errore nella lettura del file: {e}")
@@ -556,4 +575,4 @@ else:
                 )
                 st.session_state.db_clienti = edited_db
         else:
-            st.warning("Nessun cliente in memoria. Carica un file Excel o CSV tramite il pulsante sopra per iniziare.")
+            st.warning("Nessun cliente in memoria. Carica il file Excel tramite il pulsante sopra per iniziare.")
