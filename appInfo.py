@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import urllib.parse
+import requests
 import os
 import base64
 import json
@@ -8,14 +9,13 @@ import time
 import gspread
 from google.oauth2.service_account import Credentials
 
-# Ottimizzazione percorso
+# Import opzionale per OR-Tools (gestione graceful se non installato)
 try:
-    from ortools.constraint_solver import pywrapcp, routing_enums_pb2
-    ORTOOLS_DISPONIBILE = True
+    from ortools.constraint_solver import routing_enums_pb2
+    from ortools.constraint_solver import pywrapcp
+    ORTOGG_DISPONIBILE = True
 except ImportError:
-    ORTOOLS_DISPONIBILE = False
-
-import requests
+    ORTOGG_DISPONIBILE = False
 
 # Configurazione Pagina
 st.set_page_config(
@@ -47,14 +47,14 @@ try:
     try:
         sheet_db = sh.worksheet("Foglio1")
     except Exception:
-        sheet_db = sh.get_worksheet(0) # Fallback di sicurezza sulla prima scheda
+        sheet_db = sh.get_worksheet(0)
         
     try:
-        sheet_utenti = sh.worksheet("Utenti") # Seconda scheda: Utenti
+        sheet_utenti = sh.worksheet("Utenti")
     except Exception:
         sheet_utenti = None
     try:
-        sheet_giro = sh.worksheet("GiroAttivo") # Terza scheda: Giro Attivo
+        sheet_giro = sh.worksheet("GiroAttivo")
     except Exception:
         sheet_giro = None
 except Exception as e:
@@ -62,193 +62,6 @@ except Exception as e:
     sheet_db = None
     sheet_utenti = None
     sheet_giro = None
-
-
-# ============================================================
-# OTTIMIZZAZIONE DEL GIRO
-# ============================================================
-@st.cache_data(ttl=86400, show_spinner=False)
-def geocodifica_indirizzi(indirizzi):
-    """Converte gli indirizzi in coordinate usando Nominatim/OSM."""
-    risultati = []
-    session = requests.Session()
-    session.headers.update({"User-Agent": "VanGo Route Optimizer/1.0"})
-
-    for indirizzo in indirizzi:
-        try:
-            r = session.get(
-                "https://nominatim.openstreetmap.org/search",
-                params={"q": f"{indirizzo}, Italia", "format": "json", "limit": 1},
-                timeout=10
-            )
-            r.raise_for_status()
-            dati = r.json()
-            if dati:
-                risultati.append((float(dati[0]["lat"]), float(dati[0]["lon"])))
-            else:
-                risultati.append(None)
-        except Exception:
-            risultati.append(None)
-        time.sleep(1.0)
-
-    return risultati
-
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def matrice_tempi_osrm(coordinate):
-    """Calcola una matrice di tempi stradali con OSRM."""
-    if not coordinate or any(c is None for c in coordinate):
-        return None
-
-    coords = ";".join(f"{lon},{lat}" for lat, lon in coordinate)
-
-    try:
-        url = f"https://router.project-osrm.org/table/v1/driving/{coords}"
-        r = requests.get(
-            url,
-            params={"annotations": "duration"},
-            timeout=30
-        )
-        r.raise_for_status()
-        dati = r.json()
-        return dati.get("durations")
-    except Exception:
-        return None
-
-
-BASE_VANGO = "Via Enrico Fermi, 10, Burago di Molgora, Italia"
-
-def ottimizza_ordine_giro(df_giro, partenza=BASE_VANGO, ritorno_partenza=True):
-    """
-    Ottimizza l'ordine delle fermate.
-    Se OR-Tools non è disponibile, usa un fallback greedy + 2-opt
-    basato sulla matrice stradale.
-    """
-    if df_giro.empty or len(df_giro) <= 2:
-        return df_giro.copy()
-
-    if partenza:
-        indirizzi = [partenza] + [
-            f"{r['VIA']}, {r['COMUNE']}" for _, r in df_giro.iterrows()
-        ]
-    else:
-        # Senza deposito, usa la prima fermata come punto iniziale.
-        indirizzi = [
-            f"{r['VIA']}, {r['COMUNE']}" for _, r in df_giro.iterrows()
-        ]
-
-    coordinate = geocodifica_indirizzi(tuple(indirizzi))
-
-    if any(c is None for c in coordinate):
-        raise ValueError(
-            "Non sono riuscito a geocodificare tutti gli indirizzi. "
-            "Controlla VIA e COMUNE."
-        )
-
-    matrice = matrice_tempi_osrm(tuple(coordinate))
-    if not matrice:
-        raise ValueError("Non è stato possibile ottenere i tempi stradali.")
-
-    # Arrotondamento e sostituzione dei valori mancanti.
-    n = len(matrice)
-    costi = []
-    for i in range(n):
-        riga = []
-        for j in range(n):
-            valore = matrice[i][j]
-            if valore is None:
-                valore = 10**9
-            riga.append(int(round(valore)))
-        costi.append(riga)
-
-    if ORTOOLS_DISPONIBILE:
-        manager = pywrapcp.RoutingIndexManager(
-            n,
-            1,
-            0
-        )
-        routing = pywrapcp.RoutingModel(manager)
-
-        def transit_callback(from_index, to_index):
-            f = manager.IndexToNode(from_index)
-            t = manager.IndexToNode(to_index)
-            return costi[f][t]
-
-        transit_idx = routing.RegisterTransitCallback(transit_callback)
-        routing.SetArcCostEvaluatorOfAllVehicles(transit_idx)
-
-        search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-        search_parameters.first_solution_strategy = (
-            routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-        )
-        search_parameters.local_search_metaheuristic = (
-            routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-        )
-        search_parameters.time_limit.seconds = 5
-
-        if not ritorno_partenza:
-            routing.solver().Add(
-                routing.NextVar(routing.Start(0)).Var()
-            )
-
-        soluzione = routing.SolveWithParameters(search_parameters)
-
-        if not soluzione:
-            raise ValueError("L'ottimizzatore non ha trovato un percorso.")
-
-        ordem = []
-        index = routing.Start(0)
-        while not routing.IsEnd(index):
-            node = manager.IndexToNode(index)
-            if node != 0 or not partenza:
-                ordem.append(node)
-            index = soluzione.Value(routing.NextVar(index))
-
-        # Se c'è un deposito separato, node 0 è la partenza.
-        indici_clienti = [i - 1 for i in ordem] if partenza else ordem
-    else:
-        # Fallback: nearest-neighbor + 2-opt.
-        start = 0
-        non_visitati = set(range(1, n)) if partenza else set(range(n))
-        percorso = [start]
-
-        while non_visitati:
-            ultimo = percorso[-1]
-            prossimo = min(non_visitati, key=lambda j: costi[ultimo][j])
-            percorso.append(prossimo)
-            non_visitati.remove(prossimo)
-
-        def costo(percorso_local):
-            totale = sum(
-                costi[percorso_local[i]][percorso_local[i + 1]]
-                for i in range(len(percorso_local) - 1)
-            )
-            if partenza and ritorno_partenza:
-                totale += costi[percorso_local[-1]][0]
-            return totale
-
-        migliorato = True
-        while migliorato:
-            migliorato = False
-            best = costo(percorso)
-            for i in range(1, len(percorso) - 2):
-                for j in range(i + 1, len(percorso)):
-                    candidato = percorso[:i] + percorso[i:j][::-1] + percorso[j:]
-                    c = costo(candidato)
-                    if c < best:
-                        percorso = candidato
-                        best = c
-                        migliorato = True
-                        break
-                if migliorato:
-                    break
-
-        indici_clienti = [i - 1 for i in percorso[1:]] if partenza else percorso
-
-    risultato = df_giro.iloc[indici_clienti].copy().reset_index(drop=True)
-    risultato["POSIZIONE"] = [str(i) for i in range(1, len(risultato) + 1)]
-    return risultato
-
 
 # Funzioni per la sessione persistente di login
 def carica_sessione():
@@ -267,7 +80,7 @@ def salva_sessione(autenticato, utente, is_admin):
     except Exception as e:
         st.error(f"Errore nel salvataggio della sessione: {e}")
 
-# Funzioni per caricare e salvare gli utenti da Google Sheets (TTL ottimizzato a 300s)
+# Funzioni per utenti
 @st.cache_data(ttl=300, show_spinner=False)
 def carica_utenti_da_sheets():
     utenti_default = {"admin": "vango2026", "autista": "consegne2026"}
@@ -299,7 +112,6 @@ def salva_utenti_su_sheets(dict_utenti):
     except Exception as e:
         st.error(f"Errore nel salvataggio utenti su Google Sheets: {e}")
 
-# Funzioni di utilità per i dati
 def pulisci_orario(valore):
     if pd.isna(valore):
         return ""
@@ -352,7 +164,6 @@ def salva_db_su_google_sheets(df):
     except Exception as e:
         st.error(f"Errore nel salvataggio su Google Sheets: {e}")
 
-# Database Clienti con TTL ottimizzato a 300s
 @st.cache_data(ttl=300, show_spinner=False)
 def carica_db_da_google_sheets_cached():
     try:
@@ -374,7 +185,6 @@ def carica_db_da_google_sheets_cached():
 def carica_db_da_google_sheets():
     return carica_db_da_google_sheets_cached()
 
-# --- Gestione Giro per singolo utente su Google Sheets (TTL ottimizzato a 120s) ---
 @st.cache_data(ttl=120, show_spinner=False)
 def carica_tutti_i_giri_da_sheets():
     try:
@@ -464,6 +274,165 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
             else:
                 st.error(f"Errore nel salvataggio del giro su Google Sheets: {e}")
                 break
+
+# --- OTTIMIZZAZIONE GIRO CON BASE FISSA ---
+BASE_VANGO = "Via Enrico Fermi, 10, Burago di Molgora, Italia"
+NOME_BASE_VANGO = "DOLCIARIA ACQUAVIVA"
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def geocodifica_indirizzi(indirizzi):
+    """Converte gli indirizzi in coordinate usando Nominatim."""
+    risultati = {}
+    headers = {"User-Agent": "VanGo/1.0 (route-planner)"}
+
+    for indirizzo in indirizzi:
+        try:
+            r = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={
+                    "q": indirizzo,
+                    "format": "json",
+                    "limit": 1,
+                    "countrycodes": "it",
+                },
+                headers=headers,
+                timeout=10,
+            )
+            r.raise_for_status()
+            dati = r.json()
+            if dati:
+                risultati[indirizzo] = (float(dati[0]["lat"]), float(dati[0]["lon"]))
+            time.sleep(1.0)
+        except Exception:
+            risultati[indirizzo] = None
+
+    return risultati
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def matrice_tempi_osrm(coordinate):
+    """Calcola una matrice dei tempi stradali tramite OSRM."""
+    n = len(coordinate)
+    matrice = [[0] * n for _ in range(n)]
+
+    if n == 0:
+        return matrice
+
+    coord_string = ";".join(f"{lon},{lat}" for lat, lon in coordinate)
+
+    try:
+        url = f"https://router.project-osrm.org/table/v1/driving/{coord_string}"
+        r = requests.get(
+            url,
+            params={"annotations": "duration"},
+            headers={"User-Agent": "VanGo/1.0 (route-planner)"},
+            timeout=30,
+        )
+        r.raise_for_status()
+        dati = r.json()
+        durations = dati.get("durations")
+
+        if not durations:
+            return None
+
+        for i in range(n):
+            for j in range(n):
+                if durations[i][j] is not None:
+                    matrice[i][j] = max(0, int(round(durations[i][j])))
+                elif i != j:
+                    matrice[i][j] = 10**9
+
+        return matrice
+    except Exception:
+        return None
+
+
+def ottimizza_giro_ortools(df_giro):
+    """
+    Ottimizza il giro partendo e tornando sempre alla base VanGo:
+    DOLCIARIA ACQUAVIVA -> clienti -> DOLCIARIA ACQUAVIVA.
+    """
+    if df_giro.empty or len(df_giro) <= 1:
+        return df_giro.copy()
+
+    if not ORTOGG_DISPONIBILE:
+        st.warning("Libreria OR-Tools non installata. Aggiungi 'ortools' a requirements.txt.")
+        return df_giro.copy()
+
+    try:
+        indirizzi_clienti = [
+            f"{str(r['VIA']).strip()}, {str(r['COMUNE']).strip()}, Italia"
+            for _, r in df_giro.iterrows()
+        ]
+        indirizzi = [BASE_VANGO] + indirizzi_clienti
+
+        with st.spinner("📍 Calcolo distanze stradali..."):
+            coordinate_map = geocodifica_indirizzi(tuple(indirizzi))
+
+        mancanti = [a for a in indirizzi if not coordinate_map.get(a)]
+        if mancanti:
+            st.warning(
+                "Non riesco a geolocalizzare tutti gli indirizzi. "
+                "Controlla VIA/COMUNE e riprova."
+            )
+            return df_giro.copy()
+
+        coordinate = [coordinate_map[a] for a in indirizzi]
+
+        with st.spinner("🛣️ Calcolo tempi di percorrenza..."):
+            matrice = matrice_tempi_osrm(tuple(coordinate))
+
+        if matrice is None:
+            st.warning("Il servizio di calcolo stradale non ha risposto. Giro non modificato.")
+            return df_giro.copy()
+
+        # Nodo 0 = base fissa. Nodi 1..N = clienti.
+        n = len(indirizzi)
+        manager = pywrapcp.RoutingIndexManager(n, 1, 0)
+        routing = pywrapcp.RoutingModel(manager)
+
+        def tempo_callback(from_index, to_index):
+            from_node = manager.IndexToNode(from_index)
+            to_node = manager.IndexToNode(to_index)
+            return int(matrice[from_node][to_node])
+
+        transit_callback_index = routing.RegisterTransitCallback(tempo_callback)
+        routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+
+        search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+        search_parameters.first_solution_strategy = (
+            routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+        )
+        search_parameters.local_search_metaheuristic = (
+            routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+        )
+        search_parameters.time_limit.seconds = 10
+
+        solution = routing.SolveWithParameters(search_parameters)
+
+        if not solution:
+            st.warning("OR-Tools non ha trovato un percorso valido.")
+            return df_giro.copy()
+
+        index = routing.Start(0)
+        ordine_clienti = []
+
+        while not routing.IsEnd(index):
+            node = manager.IndexToNode(index)
+            if node != 0:
+                ordine_clienti.append(node - 1)
+            index = solution.Value(routing.NextVar(index))
+
+        if len(ordine_clienti) != len(df_giro):
+            st.warning("Percorso incompleto: mantengo l'ordine originale.")
+            return df_giro.copy()
+
+        return df_giro.iloc[ordine_clienti].reset_index(drop=True)
+
+    except Exception as e:
+        st.error(f"Errore durante l'ottimizzazione: {e}")
+        return df_giro.copy()
+
 
 # Inizializzazione dati di sessione
 sessione_salvata = carica_sessione()
@@ -773,36 +742,12 @@ else:
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
+    # --- 3 COLONNE PER I PULSANTI D'AZIONE (INVERTI, OTTIMIZZA, SVUOTA) ---
     col_act1, col_act2, col_act3 = st.columns(3)
 
     with col_act1:
         st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-        if st.button("🧠 OTTIMIZZA GIRO", use_container_width=True, key="btn_ottimizza"):
-            if st.session_state.giro_corrente.empty or len(st.session_state.giro_corrente) < 2:
-                st.warning("Servono almeno 2 fermate per ottimizzare il giro.")
-            else:
-                with st.spinner("🧠 Calcolo del percorso più efficiente..."):
-                    try:
-                        nuovo_giro = ottimizza_ordine_giro(
-                            st.session_state.giro_corrente,
-                            partenza=BASE_VANGO,
-                            ritorno_partenza=True
-                        )
-                        st.session_state.giro_corrente = nuovo_giro
-                        salva_giro_utente_su_sheets(
-                            st.session_state.utente_corrente,
-                            nuovo_giro
-                        )
-                        st.success("✅ Giro ottimizzato!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Errore durante l'ottimizzazione: {e}")
-        st.markdown('</div>', unsafe_allow_html=True)
-        st.caption("📍 Partenza/ritorno: DOLCIARIA ACQUAVIVA — Via Enrico Fermi, 10, Burago di Molgora")
-
-    with col_act2:
-        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-        if st.button("🔄 INVERTI SEQUENZA", use_container_width=True, key="btn_inverti"):
+        if st.button("🔄 INVERTI", use_container_width=True, key="btn_inverti"):
             if not st.session_state.giro_corrente.empty:
                 st.session_state.giro_corrente = st.session_state.giro_corrente.iloc[::-1].reset_index(drop=True)
                 st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
@@ -810,15 +755,28 @@ else:
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
+    with col_act2:
+        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
+        if st.button("🤖 OTTIMIZZA", use_container_width=True, key="btn_ottimizza"):
+            if not st.session_state.giro_corrente.empty:
+                with st.spinner("🤖 Ottimizzazione percorso in corso..."):
+                    st.session_state.giro_corrente = ottimizza_giro_ortools(st.session_state.giro_corrente)
+                    st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
+                    salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
+                st.success("Giro ottimizzato con successo!")
+                st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
     with col_act3:
         st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-        if st.button("🗑️ SVUOTA GIRO", use_container_width=True, key="btn_svuota"):
+        if st.button("🗑️ SVUOTA", use_container_width=True, key="btn_svuota"):
             if not st.session_state.giro_corrente.empty:
                 st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
                 salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
+    st.caption(f"🏭 Base fissa: {NOME_BASE_VANGO} — {BASE_VANGO}")
     st.markdown("<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
 
     # ==========================================
@@ -846,18 +804,20 @@ else:
         if not st.session_state.giro_corrente.empty:
             st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
             
-            addresses = [f"{r['VIA']}, {r['COMUNE']}" for _, r in st.session_state.giro_corrente.iterrows()]
-            if len(addresses) == 1:
-                maps_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(addresses[0])}"
+            addresses = [
+                f"{r['VIA']}, {r['COMUNE']}, Italia"
+                for _, r in st.session_state.giro_corrente.iterrows()
+            ]
+
+            # Google Maps parte sempre dalla base VanGo e torna alla base.
+            origin = urllib.parse.quote(BASE_VANGO)
+            destination = urllib.parse.quote(BASE_VANGO)
+
+            if addresses:
+                waypoints = "/".join(urllib.parse.quote(a) for a in addresses)
+                maps_url = f"https://www.google.com/maps/dir/{origin}/{waypoints}/{destination}"
             else:
-                origin = urllib.parse.quote(addresses[0])
-                destination = urllib.parse.quote(addresses[-1])
-                
-                if len(addresses) > 2:
-                    waypoints = "/".join([urllib.parse.quote(a) for a in addresses[1:-1]])
-                    maps_url = f"https://www.google.com/maps/dir/{origin}/{waypoints}/{destination}"
-                else:
-                    maps_url = f"https://www.google.com/maps/dir/{origin}/{destination}"
+                maps_url = f"https://www.google.com/maps/dir/{origin}/{destination}"
 
             if st.session_state.vista_pulita:
                 st.markdown(f"<p style='color: #94A3B8; font-size: 14px; margin-bottom: 15px;'>{tot_clienti} indirizzi trovati nel giro.</p>", unsafe_allow_html=True)
@@ -954,7 +914,6 @@ else:
     elif st.session_state.pagina_attiva == "db":
         st.subheader("📁 Inserisci Clienti nel Tuo Giro")
         
-        # Pulsante universale per forzare l'aggiornamento e svuotare la cache
         if st.button("🔄 Forza Aggiornamento / Svuota Cache", use_container_width=True):
             st.cache_data.clear()
             st.session_state.db_clienti = carica_db_da_google_sheets()
