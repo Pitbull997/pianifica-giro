@@ -15,8 +15,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-FILE_SESSIONE_PERSISTENTE = "sessione_salvata.json"
-
 # Inizializzazione Connessione Google Sheets tramite Streamlit Secrets
 @st.cache_resource
 def init_google_sheets():
@@ -47,23 +45,6 @@ except Exception as e:
     sheet_db = None
     sheet_utenti = None
     sheet_giro = None
-
-# --- Gestione Sessione Multi-Utente Persistente ---
-def carica_sessione():
-    if os.path.exists(FILE_SESSIONE_PERSISTENTE):
-        try:
-            with open(FILE_SESSIONE_PERSISTENTE, "r") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {"utenti_salvati": {}, "utente_attivo": ""}
-
-def salva_sessione(utenti_salvati, utente_attivo):
-    try:
-        with open(FILE_SESSIONE_PERSISTENTE, "w") as f:
-            json.dump({"utenti_salvati": utenti_salvati, "utente_attivo": utente_attivo}, f)
-    except Exception as e:
-        st.error(f"Errore nel salvataggio della sessione: {e}")
 
 # Funzioni per caricare e salvare gli utenti da Google Sheets
 def carica_utenti_da_sheets():
@@ -227,19 +208,18 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
     except Exception as e:
         st.error(f"Errore nel salvataggio del giro su Google Sheets: {e}")
 
-# Inizializzazione dati di sessione persistente multi-utente
-dati_sessione = carica_sessione()
-utenti_salvati_dispositivo = dati_sessione.get("utenti_salvati", {})
-utente_attivo_salvato = dati_sessione.get("utente_attivo", "")
+# --- Gestione Sessione Isolata per Dispositivo tramite URL Query Params ---
+# Leggiamo l'utente direttamente dai parametri della URL del browser di quel singolo dispositivo
+utente_da_url = st.query_params.get("user", "")
 
 if 'utenti_salvati' not in st.session_state:
-    st.session_state.utenti_salvati = utenti_salvati_dispositivo
+    st.session_state.utenti_salvati = {}
 
 if 'utente_corrente' not in st.session_state:
-    st.session_state.utente_corrente = utente_attivo_salvato
+    st.session_state.utente_corrente = utente_da_url
 
 if 'autenticato' not in st.session_state:
-    st.session_state.autenticato = bool(utente_attivo_salvato and utente_attivo_salvato in st.session_state.utenti_salvati)
+    st.session_state.autenticato = bool(utente_da_url)
 
 if 'is_admin' not in st.session_state:
     st.session_state.is_admin = (st.session_state.utente_corrente.lower() == "admin")
@@ -253,7 +233,7 @@ if 'db_clienti' not in st.session_state:
 if 'utenti_sistema' not in st.session_state:
     st.session_state.utenti_sistema = carica_utenti_da_sheets()
 
-# Caricamento automatico del giro dell'utente loggato
+# Caricamento automatico del giro dell'utente loggato su questo dispositivo
 if 'giro_corrente' not in st.session_state or st.session_state.get('ultimo_utente_caricato') != st.session_state.utente_corrente:
     if st.session_state.utente_corrente:
         st.session_state.giro_corrente = carica_giro_utente_da_sheets(st.session_state.utente_corrente)
@@ -270,7 +250,6 @@ if 'vista_pulita' not in st.session_state:
 # Gestione navigazione tramite parametri URL
 if "nav" in st.query_params and st.query_params["nav"] == "login":
     st.session_state.pagina_attiva = "login"
-    st.query_params.clear()
 
 # CSS Avanzato
 st.markdown("""
@@ -430,7 +409,7 @@ if not st.session_state.autenticato and st.session_state.pagina_attiva == "welco
             st.rerun()
 
 # ==========================================
-# SCHERMATA DI LOGIN / SELETTORE UTENTI
+# SCHERMATA DI LOGIN
 # ==========================================
 elif not st.session_state.autenticato and st.session_state.pagina_attiva == "login":
     st.markdown("<div style='margin-top: 20px;'></div>", unsafe_allow_html=True)
@@ -449,20 +428,7 @@ elif not st.session_state.autenticato and st.session_state.pagina_attiva == "log
 
     col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
     with col_l2:
-        if st.session_state.utenti_salvati:
-            st.markdown("<p style='text-align: center; color: #60A5FA; font-weight: bold;'>Account registrati su questo dispositivo:</p>", unsafe_allow_html=True)
-            for usr_salvato in list(st.session_state.utenti_salvati.keys()):
-                if st.button(f"👤 Accedi come {usr_salvato.capitalize()}", use_container_width=True):
-                    st.session_state.autenticato = True
-                    st.session_state.utente_corrente = usr_salvato
-                    st.session_state.is_admin = (usr_salvato.lower() == "admin")
-                    st.session_state.pagina_attiva = "giro"
-                    
-                    salva_sessione(st.session_state.utenti_salvati, usr_salvato)
-                    st.rerun()
-            st.markdown("<hr style='border-color: #334155;'>", unsafe_allow_html=True)
-
-        st.markdown("<p style='text-align: center; color: #94A3B8; font-size: 14px; margin-bottom: 20px;'>Inserisci le credenziali per aggiungere o accedere a un account</p>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center; color: #94A3B8; font-size: 14px; margin-bottom: 20px;'>Inserisci le tue credenziali</p>", unsafe_allow_html=True)
 
         with st.form("form_login"):
             username_input = st.text_input("Utente")
@@ -477,17 +443,17 @@ elif not st.session_state.autenticato and st.session_state.pagina_attiva == "log
                 username_pulito = username_input.strip().lower()
 
                 if username_pulito in utenti_validi and utenti_validi[username_pulito] == password_input:
+                    # Salviamo l'utente direttamente nei parametri della URL di questo specifico dispositivo
+                    st.query_params["user"] = username_pulito
+                    
                     st.session_state.autenticato = True
                     st.session_state.utente_corrente = username_pulito
                     st.session_state.is_admin = (username_pulito == "admin")
                     st.session_state.pagina_attiva = "giro"
                     
-                    st.session_state.utenti_salvati[username_pulito] = True
-                    
                     st.session_state.giro_corrente = carica_giro_utente_da_sheets(username_pulito)
                     st.session_state.ultimo_utente_caricato = username_pulito
                     
-                    salva_sessione(st.session_state.utenti_salvati, username_pulito)
                     st.rerun()
                 else:
                     st.error("❌ Utente o password errati.")
@@ -512,19 +478,14 @@ else:
     else:
         st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 22px; margin-bottom: 5px; margin-top: 0px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
 
-    col_info_u, col_sw_acc, col_logout_u = st.columns([2, 1.2, 1])
+    col_info_u, col_logout_u = st.columns([3, 1])
     with col_info_u:
         st.markdown(f"<p style='color: #94A3B8; font-size: 13px; margin: 0;'>👤 <b style='color: #60A5FA;'>{st.session_state.get('utente_corrente', '').capitalize()}</b></p>", unsafe_allow_html=True)
-    with col_sw_acc:
-        if st.button("👥 CAMBIA", use_container_width=True, key="btn_cambia_account"):
-            st.session_state.autenticato = False
-            st.session_state.pagina_attiva = "login"
-            st.rerun()
     with col_logout_u:
         if st.button("🚪 ESCI", use_container_width=True, key="btn_logout_principale"):
-            curr_user = st.session_state.get('utente_corrente', '')
-            if curr_user in st.session_state.utenti_salvati:
-                del st.session_state.utenti_salvati[curr_user]
+            # Rimuoviamo l'utente dai parametri URL di questo dispositivo
+            if "user" in st.query_params:
+                del st.query_params["user"]
 
             st.session_state.autenticato = False
             st.session_state.utente_corrente = ""
@@ -532,16 +493,6 @@ else:
             st.session_state.pagina_attiva = "login"
             st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
             st.session_state.ultimo_utente_caricato = ""
-            
-            if st.session_state.utenti_salvati:
-                primo_rimasto = list(st.session_state.utenti_salvati.keys())[0]
-                salva_sessione(st.session_state.utenti_salvati, primo_rimasto)
-            else:
-                if os.path.exists(FILE_SESSIONE_PERSISTENTE):
-                    try:
-                        os.remove(FILE_SESSIONE_PERSISTENTE)
-                    except Exception:
-                        pass
             st.rerun()
 
     st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
@@ -791,7 +742,7 @@ else:
                     
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
-                    st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
+                    st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, novos_clienti if 'novos_clienti' in locals() else nuovi_clienti], ignore_index=True)
                     st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
                     
                     salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
