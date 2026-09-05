@@ -8,6 +8,14 @@ import time
 import gspread
 from google.oauth2.service_account import Credentials
 
+# Import opzionale per OR-Tools (gestione graceful se non installato)
+try:
+    from ortools.constraint_solver import routing_enums_pb2
+    from ortools.constraint_solver import pywrapcp
+    ORTOGG_DISPONIBILE = True
+except ImportError:
+    ORTOGG_DISPONIBILE = False
+
 # Configurazione Pagina
 st.set_page_config(
     page_title="VanGo - Giro Consegne",
@@ -266,23 +274,61 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
                 st.error(f"Errore nel salvataggio del giro su Google Sheets: {e}")
                 break
 
-# --- FUNZIONE DI OTTIMIZZAZIONE INTERNA (SENZA LIBRERIE ESTERNE) ---
+# --- FUNZIONE DI OTTIMIZZAZIONE CON GOOGLE OR-TOOLS (A COSTO ZERO) ---
 def ottimizza_giro_ortools(df_giro):
     if len(df_giro) <= 2:
-        return df_giro
+        return df_giro # Non serve ottimizzare se ci sono 0, 1 o 2 fermate
     
+    if not ORTOGG_DISPONIBILE:
+        st.warning("Libreria OR-Tools non installata. Impossibile eseguire l'ottimizzazione automatica.")
+        return df_giro
+
     try:
-        # Euristica intelligente basata sul raggruppamento per comune
-        df_lato = df_giro.copy()
-        df_lato['ORIG_INDEX'] = range(len(df_lato))
+        n = len(df_giro)
         
-        # Ordina per comune per tenere vicine le consegne nello stesso comune
-        df_lato = df_lato.sort_values(by=['COMUNE', 'ORIG_INDEX']).reset_index(drop=True)
-        df_lato = df_lato.drop(columns=['ORIG_INDEX'])
+        comuni = df_giro['COMUNE'].tolist()
+        vie = df_giro['VIA'].tolist()
         
-        return df_lato
+        distance_matrix = [[0] * n for _ in range(n)]
+        for i in range(n):
+            for j in range(n):
+                if i == j:
+                    distance_matrix[i][j] = 0
+                else:
+                    dist = 0
+                    if comuni[i] != comuni[j]:
+                        dist += 100  # cambio comune costa di più
+                    dist += abs(i - j) * 5
+                    distance_matrix[i][j] = dist
+
+        manager = pywrapcp.RoutingIndexManager(n, 1, 0)
+        routing = pywrapcp.RoutingModel(manager)
+
+        def distance_callback(from_index, to_index):
+            from_node = manager.IndexToNode(from_index)
+            to_node = manager.IndexToNode(to_index)
+            return distance_matrix[from_node][to_node]
+
+        transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+        routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+
+        search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+        search_parameters.first_solution_strategy = (
+            routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+        )
+
+        solution = routing.SolveWithParameters(search_parameters)
+        if solution:
+            index = routing.Start(0)
+            percorso_indici = []
+            while not routing.IsEnd(index):
+                percorso_indici.append(manager.IndexToNode(index))
+                index = solution.Value(routing.NextVar(index))
+            
+            df_ottimizzato = df_giro.iloc[percorso_indici].reset_index(drop=True)
+            return df_ottimizzato
     except Exception as e:
-        st.error(f"Errore durante l'ottimizzazione: {e}")
+        st.error(f"Errore durante l'ottimizzazione OR-Tools: {e}")
     
     return df_giro
 
