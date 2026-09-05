@@ -34,7 +34,12 @@ if 'clienti_selezionati_m' not in st.session_state:
 if 'vista_pulita' not in st.session_state:
     st.session_state.vista_pulita = False
 
-# CSS Avanzato - Forzatura Dark Mode & Overlay dei tasti stile app nativa
+# Gestione navigazione tramite parametri URL
+if "nav" in st.query_params and st.query_params["nav"] == "login":
+    st.session_state.pagina_attiva = "login"
+    st.query_params.clear()
+
+# CSS Avanzato - Forzatura Dark Mode & Fix UI Mobile a Schermo Intero
 st.markdown("""
 <style>
     .stApp, body, html {
@@ -48,26 +53,9 @@ st.markdown("""
         max-width: 100% !important;
     }
     .block-container {
-        padding-top: 0rem !important;
+        padding-top: 0.5rem !important;
         padding-bottom: 1rem !important;
         max-width: 100% !important;
-    }
-
-    /* Container della schermata di benvenuto identico all'immagine */
-    .splash-wrapper {
-        position: relative;
-        width: 100%;
-        max-width: 480px;
-        margin: 0 auto;
-        border-radius: 20px;
-        overflow: hidden;
-        box-shadow: 0 10px 25px rgba(0,0,0,0.5);
-    }
-    
-    .splash-wrapper img {
-        width: 100%;
-        height: auto;
-        display: block;
     }
 
     .logo-container {
@@ -107,18 +95,6 @@ st.markdown("""
         border: 1px solid #475569 !important;
         border-radius: 8px !important;
         font-weight: bold !important;
-    }
-
-    /* Stile personalizzato per il bottone principale simile a "ENTRA IN VanGo" */
-    .btn-entra div[data-testid="stButton"] > button {
-        background: linear-gradient(135deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.9) 100%) !important;
-        color: #FFFFFF !important;
-        border: 1px solid rgba(96, 165, 250, 0.5) !important;
-        border-radius: 30px !important;
-        height: 52px !important;
-        font-size: 16px !important;
-        font-weight: bold !important;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
     }
 
     .btn-active div[data-testid="stButton"] > button {
@@ -279,65 +255,121 @@ if st.session_state.db_clienti.empty:
 if st.session_state.giro_corrente.empty:
     st.session_state.giro_corrente = carica_giro_da_disco()
 
-# Stato per mostrare o nascondere i campi di login quando si preme il tasto "ENTRA IN VanGo"
-if 'mostra_login' not in st.session_state:
-    st.session_state.mostra_login = False
-
 # ==========================================
-# SCHERMATA 0: WELCOME / SPLASH CON TASTO SIMILE ALL'IMMAGINE
+# SCHERMATA 0: WELCOME / HOME PAGE GRAFICA A TUTTO SCHERMO
 # ==========================================
-if st.session_state.pagina_attiva == "welcome" and not st.session_state.autenticato:
+if st.session_state.pagina_attiva == "welcome":
     img_path = "vango_splash.png"
-    
-    st.markdown("<div class='splash-wrapper'>", unsafe_allow_html=True)
     if os.path.exists(img_path):
-        st.image(img_path, use_container_width=True)
+        with open(img_path, "rb") as image_file:
+            encoded_string = base64.b64encode(image_file.read()).decode()
+        
+        st.markdown(f"""
+        <style>
+            .hero-fullscreen {{
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100vw;
+                height: 100vh;
+                background-image: url("data:image/png;base64,{encoded_string}");
+                background-size: cover;
+                background-position: left center;
+                background-repeat: no-repeat;
+                z-index: 99999;
+                display: flex;
+                justify-content: center;
+                align-items: flex-end;
+            }}
+            .hero-btn-overlay {{
+                position: absolute;
+                bottom: 6%;
+                left: 50%;
+                transform: translateX(-50%);
+                background: rgba(18, 18, 18, 0.4) !important;
+                backdrop-filter: blur(8px);
+                -webkit-backdrop-filter: blur(8px);
+                color: #FFFFFF !important;
+                padding: 14px 20px;
+                border-radius: 30px;
+                font-weight: bold;
+                text-decoration: none !important;
+                text-align: center;
+                width: 85%;
+                max-width: 400px;
+                font-size: 16px;
+                border: 2px solid rgba(96, 165, 250, 0.8) !important;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+                z-index: 100000;
+                transition: all 0.3s ease;
+            }}
+            .hero-btn-overlay:hover {{
+                background: rgba(37, 99, 235, 0.7) !important;
+                border-color: #60A5FA !important;
+                color: #FFFFFF !important;
+            }}
+        </style>
+
+        <div class="hero-fullscreen">
+            <a href="?nav=login" target="_self" class="hero-btn-overlay">ENTRA IN VanGo</a>
+        </div>
+        """, unsafe_allow_html=True)
     else:
         st.warning("⚠️ Immagine 'vango_splash.png' non trovata nella cartella.")
-    st.markdown("</div>", unsafe_allow_html=True)
-    
-    st.markdown("<div style='max-width: 480px; margin: 15px auto; padding: 0 10px;'>", unsafe_allow_html=True)
-    
-    if not st.session_state.mostra_login:
-        # Mostra il pulsante principale identico al design richiesto
-        st.markdown('<div class="btn-entra">', unsafe_allow_html=True)
-        if st.button("ENTRA IN VanGo", use_container_width=True):
-            st.session_state.mostra_login = True
+        if st.button("ENTRA IN VanGo", use_container_width=True, type="primary"):
+            st.session_state.pagina_attiva = "login"
             st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
+
+# ==========================================
+# SCHERMATA DI LOGIN
+# ==========================================
+elif st.session_state.pagina_attiva == "login" or not st.session_state.autenticato:
+    st.markdown("<div style='margin-top: 40px;'></div>", unsafe_allow_html=True)
+    
+    icon_path = "icovg.png"
+    if os.path.exists(icon_path):
+        with open(icon_path, "rb") as icon_file:
+            encoded_icon = base64.b64encode(icon_file.read()).decode()
+        st.markdown(f'''
+            <div class="logo-container">
+                <img src="data:image/png;base64,{encoded_icon}" alt="VanGo Logo">
+            </div>
+        ''', unsafe_allow_html=True)
     else:
-        # Quando viene premuto, compaiono i campi puliti per inserire le credenziali
-        st.markdown("<div style='background-color: #18181b; padding: 16px; border-radius: 12px; border: 1px solid #334155;'>", unsafe_allow_html=True)
-        st.markdown("<h4 style='text-align: center; color: white; margin-top: 0px; margin-bottom: 10px; font-size: 16px;'>🔐 Inserisci Credenziali</h4>", unsafe_allow_html=True)
-        
-        user_input = st.text_input("Utente", key="login_user", placeholder="Es. driver")
-        pass_input = st.text_input("Password", type="password", key="login_pass", placeholder="••••••••")
-        
-        st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
-        
-        col_L1, col_L2 = st.columns(2)
-        with col_L1:
-            if st.button("Indietro", use_container_width=True):
-                st.session_state.mostra_login = False
-                st.rerun()
-        with col_L2:
-            if st.button("ACCEDI", use_container_width=True, type="primary"):
-                # Credenziali di default (Username: driver, Password: vango2026)
-                if user_input == "driver" and pass_input == "vango2026":
+        st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 26px;'>🚐 ACCESSO VANGO</h1>", unsafe_allow_html=True)
+
+    st.markdown("<p style='text-align: center; color: #94A3B8; font-size: 14px; margin-bottom: 30px;'>Inserisci le credenziali per accedere al sistema</p>", unsafe_allow_html=True)
+
+    # Contenitore centratura form login
+    col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
+    with col_l2:
+        with st.form("form_login"):
+            username_input = st.text_input("Utente")
+            password_input = st.text_input("Password", type="password")
+            
+            st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+            submit_login = st.form_submit_button("ACCEDI", use_container_width=True, type="primary")
+
+            if submit_login:
+                # Modifica qui le credenziali desiderate
+                UTENTE_CORRETTO = "admin"
+                PASSWORD_CORRETTA = "vango2026"
+
+                if username_input == UTENTE_CORRETTO and password_input == PASSWORD_CORRETTA:
                     st.session_state.autenticato = True
                     st.session_state.pagina_attiva = "giro"
                     st.rerun()
                 else:
-                    st.error("❌ Utente o password errati!")
-                    
-        st.markdown("</div>", unsafe_allow_html=True)
-        
-    st.markdown("</div>", unsafe_allow_html=True)
+                    st.error("❌ Utente o password errati.")
+
+        if st.button("⬅️ Torna alla Home", use_container_width=True):
+            st.session_state.pagina_attiva = "welcome"
+            st.rerun()
 
 # ==========================================
-# APPLICAZIONE PRINCIPALE (Solo se autenticato)
+# APPLICAZIONE PRINCIPALE (ACCESSO CONSENTITO)
 # ==========================================
-elif st.session_state.autenticato:
+else:
     icon_path = "icovg.png"
     if os.path.exists(icon_path):
         with open(icon_path, "rb") as icon_file:
