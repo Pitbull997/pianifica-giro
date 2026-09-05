@@ -799,7 +799,7 @@ else:
                     
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']] if 'POSIZIONE' in nuovi_clienti.columns else nuovi_clienti[['CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
-                    st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuevos_clienti] if 'nuevos_clienti' in locals() else [st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
+                    st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
                     st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
                     
                     salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
