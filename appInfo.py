@@ -48,15 +48,21 @@ except Exception as e:
     sheet_utenti = None
     sheet_giro = None
 
-# Funzioni per la sessione persistente di login
+# Funzioni per la sessione persistente di login (Corretta per evitare KeyError)
 def carica_sessione():
+    default_session = {"autenticato": False, "utente": "", "is_admin": False}
     if os.path.exists(FILE_SESSIONE_PERSISTENTE):
         try:
             with open(FILE_SESSIONE_PERSISTENTE, "r") as f:
-                return json.load(f)
+                data = json.load(f)
+                if isinstance(data, dict):
+                    for k in default_session:
+                        if k not in data:
+                            data[k] = default_session[k]
+                    return data
         except Exception:
             pass
-    return {"autenticato": False, "utente": "", "is_admin": False}
+    return default_session
 
 def salva_sessione(autenticato, utente, is_admin):
     try:
@@ -165,11 +171,9 @@ def carica_giro_da_sheets():
             if data:
                 df = pd.DataFrame(data)
                 df.columns = df.columns.str.strip().str.upper()
-                # Gestione compatibilità nomi colonna quantità
                 if 'Q.TA' in df.columns and 'Q.TA' not in cols_giro:
                     df = df.rename(columns={'Q.TA': 'Q.ta'})
                 
-                # Verifica che ci siano tutte le colonne necessarie
                 for c in cols_giro:
                     if c not in df.columns:
                         df[c] = ""
@@ -187,7 +191,6 @@ def salva_giro_su_sheets(df):
         if sheet_giro:
             sheet_giro.clear()
             if df.empty:
-                # Lascia almeno le intestazioni pulite sul foglio
                 sheet_giro.update([['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']])
             else:
                 data_to_update = [list(df.columns)] + df.astype(str).values.tolist()
@@ -199,16 +202,16 @@ def salva_giro_su_sheets(df):
 sessione_salvata = carica_sessione()
 
 if 'pagina_attiva' not in st.session_state:
-    st.session_state.pagina_attiva = "giro" if sessione_salvata["autenticato"] else "welcome"
+    st.session_state.pagina_attiva = "giro" if sessione_salvata.get("autenticato", False) else "welcome"
 
 if 'autenticato' not in st.session_state:
-    st.session_state.autenticato = sessione_salvata["autenticato"]
+    st.session_state.autenticato = sessione_salvata.get("autenticato", False)
 
 if 'utente_corrente' not in st.session_state:
-    st.session_state.utente_corrente = sessione_salvata["utente"]
+    st.session_state.utente_corrente = sessione_salvata.get("utente", "")
 
 if 'is_admin' not in st.session_state:
-    st.session_state.is_admin = sessione_salvata["is_admin"]
+    st.session_state.is_admin = sessione_salvata.get("is_admin", False)
 
 if 'db_clienti' not in st.session_state:
     st.session_state.db_clienti = carica_db_da_google_sheets()
@@ -390,7 +393,7 @@ if not st.session_state.autenticato and st.session_state.pagina_attiva == "welco
 # ==========================================
 # SCHERMATA DI LOGIN
 # ==========================================
-elif not st.session_state.autenticato and (st.session_state.pagina_attiva == "login" or not sessione_salvata["autenticato"]):
+elif not st.session_state.autenticato and (st.session_state.pagina_attiva == "login" or not sessione_salvata.get("autenticato", False)):
     st.markdown("<div style='margin-top: 40px;'></div>", unsafe_allow_html=True)
     
     icon_path = "icovg.png"
