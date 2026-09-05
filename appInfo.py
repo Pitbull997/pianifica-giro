@@ -34,13 +34,7 @@ if 'clienti_selezionati_m' not in st.session_state:
 if 'vista_pulita' not in st.session_state:
     st.session_state.vista_pulita = False
 
-# Gestione navigazione tramite parametri URL (se già autenticato)
-if "nav" in st.query_params and st.query_params["nav"] == "giro":
-    if st.session_state.autenticato:
-        st.session_state.pagina_attiva = "giro"
-    st.query_params.clear()
-
-# CSS Avanzato - Forzatura Dark Mode & Fix UI Mobile a Schermo Intero
+# CSS Avanzato - Forzatura Dark Mode & Grafica Splash Originale con Tasti Fixati
 st.markdown("""
 <style>
     .stApp, body, html {
@@ -54,9 +48,23 @@ st.markdown("""
         max-width: 100% !important;
     }
     .block-container {
-        padding-top: 0.5rem !important;
+        padding-top: 0rem !important;
         padding-bottom: 1rem !important;
         max-width: 100% !important;
+    }
+
+    /* Stile per la schermata Splash originale a tutto schermo */
+    .splash-container {
+        position: relative;
+        width: 100%;
+        min-height: 85vh;
+        background-image: url("app/static/vango_splash.png");
+        background-size: cover;
+        background-position: center;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        padding: 20px;
     }
 
     .logo-container {
@@ -257,83 +265,35 @@ if st.session_state.giro_corrente.empty:
     st.session_state.giro_corrente = carica_giro_da_disco()
 
 # ==========================================
-# SCHERMATA 0: WELCOME / LOGIN PAGE A TUTTO SCHERMO
+# SCHERMATA 0: WELCOME / SPLASH CON TASTI IN PRIMO PIANO
 # ==========================================
 if st.session_state.pagina_attiva == "welcome" and not st.session_state.autenticato:
     img_path = "vango_splash.png"
+    
+    # Mostriamo l'immagine splash originale e subito sotto i campi e pulsanti di accesso ben visibili
     if os.path.exists(img_path):
-        with open(img_path, "rb") as image_file:
-            encoded_string = base64.b64encode(image_file.read()).decode()
-        
-        st.markdown(f"""
-        <style>
-            .hero-fullscreen {{
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100vw;
-                height: 100vh;
-                background-image: url("data:image/png;base64,{encoded_string}");
-                background-size: cover;
-                background-position: left center;
-                background-repeat: no-repeat;
-                z-index: 99999;
-                display: flex;
-                flex-direction: column;
-                justify-content: flex-end;
-                align-items: center;
-                padding-bottom: 5%;
-            }}
-            .login-box {{
-                background: rgba(18, 18, 18, 0.75) !important;
-                backdrop-filter: blur(10px);
-                -webkit-backdrop-filter: blur(10px);
-                padding: 20px 25px;
-                border-radius: 20px;
-                width: 85%;
-                max-width: 380px;
-                border: 2px solid rgba(96, 165, 250, 0.8) !important;
-                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
-                z-index: 100000;
-            }}
-        </style>
-
-        <div class="hero-fullscreen">
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Container Streamlit sovrapposto tramite layout nativo centrato nella schermata di login
-        st.markdown("<div style='position: fixed; bottom: 4vh; left: 50%; transform: translateX(-50%); width: 85%; max-width: 380px; z-index: 100001;'>", unsafe_allow_html=True)
-        
-        with st.container():
-            st.markdown("<h3 style='text-align: center; color: white; margin-bottom: 10px; font-size: 20px;'>🔐 Accesso VanGo</h3>", unsafe_allow_html=True)
-            user_input = st.text_input("Utente", key="login_user", placeholder="Inserisci utente")
-            pass_input = st.text_input("Password", type="password", key="login_pass", placeholder="Inserisci password")
-            
-            st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
-            if st.button("ACCEDI", use_container_width=True, type="primary"):
-                # Credenziali configurate (Modificabili a piacimento)
-                if user_input == "driver" and pass_input == "vango2026":
-                    st.session_state.autenticato = True
-                    st.session_state.pagina_attiva = "giro"
-                    st.rerun()
-                else:
-                    st.error("❌ Utente o password errati!")
-        
-        st.markdown("</div>", unsafe_allow_html=True)
-
+        st.image(img_path, use_container_width=True)
     else:
         st.warning("⚠️ Immagine 'vango_splash.png' non trovata nella cartella.")
-        st.subheader("🔐 Accesso VanGo")
-        user_input = st.text_input("Utente", key="login_user_fallback")
-        pass_input = st.text_input("Password", type="password", key="login_pass_fallback")
-        if st.button("ACCEDI", use_container_width=True, type="primary"):
-            if user_input == "driver" and pass_input == "vango2026":
-                st.session_state.autenticato = True
-                st.session_state.pagina_attiva = "giro"
-                st.rerun()
-            else:
-                st.error("❌ Utente o password errati!")
+
+    st.markdown("<div style='background-color: #18181b; padding: 16px; border-radius: 12px; border: 1px solid #334155; margin-top: 10px;'>", unsafe_allow_html=True)
+    st.markdown("<h3 style='text-align: center; color: white; margin-top: 0px; margin-bottom: 12px; font-size: 18px;'>🔐 Accesso Area Guidatore</h3>", unsafe_allow_html=True)
+    
+    user_input = st.text_input("Utente", key="login_user", placeholder="Inserisci utente")
+    pass_input = st.text_input("Password", type="password", key="login_pass", placeholder="Inserisci password")
+    
+    st.markdown("<div style='margin-top: 8px;'></div>", unsafe_allow_html=True)
+    
+    if st.button("ACCEDI AL GIRO", use_container_width=True, type="primary"):
+        # Credenziali configurate (Username: driver, Password: vango2026)
+        if user_input == "driver" and pass_input == "vango2026":
+            st.session_state.autenticato = True
+            st.session_state.pagina_attiva = "giro"
+            st.rerun()
+        else:
+            st.error("❌ Utente o password errati!")
+            
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # ==========================================
 # APPLICAZIONE PRINCIPALE (Solo se autenticato)
@@ -590,7 +550,7 @@ elif st.session_state.autenticato:
                     
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
-                    st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
+                    st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, novos_clienti if 'novos_clienti' in locals() else nuovi_clienti], ignore_index=True)
                     st.session_state.giro_corrente['POSIZIONE'] = range(1, len(st.session_state.giro_corrente) + 1)
                     
                     salva_giro_su_disco(st.session_state.giro_corrente)
