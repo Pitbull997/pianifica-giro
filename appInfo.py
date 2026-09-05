@@ -284,12 +284,8 @@ def ottimizza_giro_ortools(df_giro):
         return df_giro
 
     try:
-        # Generiamo una matrice di distanza euristica basata su stringhe/comuni o hash simbolico
-        # In mancanza di coordinate GPS precise salvate nel DB, usiamo una distanza basata sulla similarità alfabetica/comune o indice di posizione come fallback, 
-        # oppure stimiamo la distanza basata sulla lunghezza dei nomi via/comune o un ordinamento intelligente per Comune.
         n = len(df_giro)
         
-        # Creiamo una finta matrice di distanza basata sull'alfabeto dei Comuni per raggruppare le consegne nello stesso comune
         comuni = df_giro['COMUNE'].tolist()
         vie = df_giro['VIA'].tolist()
         
@@ -301,8 +297,7 @@ def ottimizza_giro_ortools(df_giro):
                 else:
                     dist = 0
                     if comuni[i] != comuni[j]:
-                        dist += 100  cambio comune costa di più
-                    # Differenza basata sulla via o indice
+                        dist += 100  # cambio comune costa di più
                     dist += abs(i - j) * 5
                     distance_matrix[i][j] = dist
 
