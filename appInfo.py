@@ -4,6 +4,8 @@ import urllib.parse
 import os
 import base64
 import json
+import gspread
+from google.oauth2.service_account import Credentials
 
 # Configurazione Pagina
 st.set_page_config(
@@ -14,8 +16,27 @@ st.set_page_config(
 )
 
 FILE_GIRO_PERSISTENTE = "giro_salvato.json"
-FILE_DB_PERSISTENTE = "database_salvato.xlsx"
 FILE_UTENTI_PERSISTENTE = "utenti_salvati.json"
+
+# Inizializzazione Connessione Google Sheets tramite Streamlit Secrets
+@st.cache_resource
+def init_google_sheets():
+    scope = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+    client = gspread.authorize(creds)
+    return client
+
+# Connessione al foglio Google (Assicurati che il file si chiami "VanGo Database" su Google Drive)
+try:
+    client_gs = init_google_sheets()
+    sheet_db = client_gs.open("VanGo Database").sheet1
+except Exception as e:
+    st.error(f"⚠️ Errore di connessione a Google Sheets: {e}")
+    sheet_db = None
 
 # Inizializzazione prioritaria delle variabili di sessione
 if 'pagina_attiva' not in st.session_state:
@@ -192,7 +213,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Funzioni di utilità blindate per la lettura del DB
+# Funzioni di utilità per i dati
 def pulisci_orario(valore):
     if pd.isna(valore):
         return ""
@@ -206,6 +227,9 @@ def pulisci_orario(valore):
     return val_str
 
 def elabora_dataframe_db(df):
+    if df.empty:
+        return pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'])
+    
     df.columns = df.columns.str.strip().str.upper()
     
     if 'POSIZIONE' in df.columns:
@@ -231,30 +255,27 @@ def elabora_dataframe_db(df):
         
     return df.sort_values(by="POSIZIONE").reset_index(drop=True)
 
-def salva_db_su_disco(df):
+# Sostituiamo il salvataggio locale con la scrittura diretta su Google Sheets
+def salva_db_su_google_sheets(df):
     try:
-        df.to_excel(FILE_DB_PERSISTENTE, index=False)
+        if sheet_db:
+            sheet_db.clear()
+            # Inserisce le intestazioni e i valori del DataFrame
+            data_to_update = [df.columns.values.tolist()] + df.astype(str).values.tolist()
+            sheet_db.update(data_to_update)
     except Exception as e:
-        st.error(f"Errore nel salvataggio del database: {e}")
+        st.error(f"Errore nel salvataggio su Google Sheets: {e}")
 
-def carica_db_predefinito():
-    if os.path.exists(FILE_DB_PERSISTENTE):
-        try:
-            df = pd.read_excel(FILE_DB_PERSISTENTE)
-            return elabora_dataframe_db(df)
-        except Exception:
-            pass
-
-    nomi_file_possibili = ["database.xlsx", "database.csv", "database"]
-    for file_path in nomi_file_possibili:
-        if os.path.exists(file_path):
-            try:
-                df = pd.read_csv(file_path) if file_path.endswith('.csv') else pd.read_excel(file_path)
-                df_elaborato = elabora_dataframe_db(df)
-                salva_db_su_disco(df_elaborato)
-                return df_elaborato
-            except Exception:
-                pass
+def carica_db_da_google_sheets():
+    try:
+        if sheet_db:
+            data = sheet_db.get_all_records()
+            if data:
+                df = pd.DataFrame(data)
+                return elabora_dataframe_db(df)
+    except Exception as e:
+        st.error(f"Errore di lettura da Google Sheets: {e}")
+    
     return pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'])
 
 def salva_giro_su_disco(df):
@@ -276,7 +297,7 @@ def carica_giro_da_disco():
 
 # Caricamento effettivo dei dati se vuoti
 if st.session_state.db_clienti.empty:
-    st.session_state.db_clienti = carica_db_predefinito()
+    st.session_state.db_clienti = carica_db_da_google_sheets()
 
 if st.session_state.giro_corrente.empty:
     st.session_state.giro_corrente = carica_giro_da_disco()
@@ -594,36 +615,28 @@ else:
         
         # PROTETTO: Solo l'Admin vede i pulsanti e l'area di caricamento file/reset
         if st.session_state.is_admin:
-            caricamento_file = st.file_uploader("Carica Database (Excel o CSV)", type=["xlsx", "csv"])
+            caricamento_file = st.file_uploader("Carica Database su Google Sheets (Excel o CSV)", type=["xlsx", "csv"])
             
             if caricamento_file is not None:
                 try:
-                    estensione = ".csv" if caricamento_file.name.endswith('.csv') else ".xlsx"
-                    file_salvataggio = "database.csv" if estensione == ".csv" else "database.xlsx"
-                    
-                    with open(file_salvataggio, "wb") as f:
-                        f.write(caricamento_file.getbuffer())
-
-                    if estensione == '.csv':
-                        df_up = pd.read_csv(file_salvataggio)
+                    if caricamento_file.name.endswith('.csv'):
+                        df_up = pd.read_csv(caricamento_file)
                     else:
-                        df_up = pd.read_excel(file_salvataggio)
+                        df_up = pd.read_excel(caricamento_file)
                     
                     st.session_state.db_clienti = elabora_dataframe_db(df_up)
-                    salva_db_su_disco(st.session_state.db_clienti)
+                    salva_db_su_google_sheets(st.session_state.db_clienti)
                     st.session_state.clienti_selezionati_m = []
                     
-                    st.success(f"File caricato e salvato sul server! ({len(st.session_state.db_clienti)} clienti trovati)")
+                    st.success(f"Database caricato e sincronizzato su Google Sheets! ({len(st.session_state.db_clienti)} clienti)")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Errore nella lettura/salvataggio del file: {e}")
+                    st.error(f"Errore nel caricamento del file: {e}")
 
-            if st.button("RESET DATABASE", use_container_width=True):
-                if os.path.exists(FILE_DB_PERSISTENTE):
-                    os.remove(FILE_DB_PERSISTENTE)
-                st.session_state.db_clienti = carica_db_predefinito()
+            if st.button("🔄 RICARICA DA GOOGLE SHEETS", use_container_width=True):
+                st.session_state.db_clienti = carica_db_da_google_sheets()
                 st.session_state.clienti_selezionati_m = []
-                st.success("Database ricaricato correttamente dal server!")
+                st.success("Database ricaricato correttamente da Google Sheets!")
                 st.rerun()
             
             st.markdown("---")
@@ -686,10 +699,10 @@ else:
                     )
                     if not edited_db.equals(st.session_state.db_clienti):
                         st.session_state.db_clienti = elabora_dataframe_db(edited_db)
-                        salva_db_su_disco(st.session_state.db_clienti)
+                        salva_db_su_google_sheets(st.session_state.db_clienti)
                         st.rerun()
         else:
-            st.warning("Nessun cliente in memoria. Chiedi all'amministratore di caricare il file Excel per iniziare.")
+            st.warning("Nessun cliente trovato su Google Sheets. Assicurati che il foglio 'VanGo Database' esista e contenga i dati.")
 
     # ==========================================
     # SCHERMATA 3: GESTIONE UTENTI (SOLO ADMIN)
