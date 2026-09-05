@@ -66,7 +66,7 @@ def salva_sessione(autenticato, utente, is_admin):
     except Exception as e:
         st.error(f"Errore nel salvataggio della sessione: {e}")
 
-# Funzioni per caricare e salvare gli utenti da Google Sheets (con cache a breve scadenza per evitare 429)
+# Funzioni per caricare e salvare gli utenti da Google Sheets
 @st.cache_data(ttl=60, show_spinner=False)
 def carica_utenti_da_sheets():
     utenti_default = {"admin": "vango2026", "autista": "consegne2026"}
@@ -90,7 +90,7 @@ def carica_utenti_da_sheets():
 def salva_utenti_su_sheets(dict_utenti):
     try:
         if sheet_utenti:
-            time.sleep(0.5)
+            time.sleep(1.0)
             sheet_utenti.clear()
             data_to_update = [["USERNAME", "PASSWORD"]] + [[u, p] for u, p in dict_utenti.items()]
             sheet_utenti.update(data_to_update)
@@ -143,7 +143,7 @@ def elabora_dataframe_db(df):
 def salva_db_su_google_sheets(df):
     try:
         if sheet_db:
-            time.sleep(0.5)
+            time.sleep(1.0)
             sheet_db.clear()
             data_to_update = [df.columns.values.tolist()] + df.astype(str).values.tolist()
             sheet_db.update(data_to_update)
@@ -208,8 +208,8 @@ def carica_giro_utente_da_sheets(nome_utente):
 def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
     try:
         if sheet_giro:
-            # Pausa di sicurezza per proteggere la quota di scrittura (evita errore 429)
-            time.sleep(0.5)
+            # Pausa di sicurezza di 1 secondo per bloccare gli errori 429 di Google Sheets
+            time.sleep(1.0)
             
             data_totale = sheet_giro.get_all_records()
             df_tutti = pd.DataFrame(data_totale) if data_totale else pd.DataFrame(columns=['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
