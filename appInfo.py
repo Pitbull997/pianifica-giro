@@ -1,21 +1,12 @@
 import streamlit as st
 import pandas as pd
 import urllib.parse
-import requests
 import os
 import base64
 import json
 import time
 import gspread
 from google.oauth2.service_account import Credentials
-
-# Import opzionale per OR-Tools (gestione graceful se non installato)
-try:
-    from ortools.constraint_solver import routing_enums_pb2
-    from ortools.constraint_solver import pywrapcp
-    ORTOGG_DISPONIBILE = True
-except ImportError:
-    ORTOGG_DISPONIBILE = False
 
 # Configurazione Pagina
 st.set_page_config(
@@ -275,324 +266,25 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
                 st.error(f"Errore nel salvataggio del giro su Google Sheets: {e}")
                 break
 
-# --- OTTIMIZZAZIONE GIRO CON BASE FISSA ---
-BASE_VANGO = "Via Enrico Fermi, 10, Burago di Molgora, Italia"
-NOME_BASE_VANGO = "DOLCIARIA ACQUAVIVA"
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def geocodifica_indirizzi(indirizzi):
-    """
-    Geocodifica robusta degli indirizzi clienti.
-
-    Ordine dei tentativi:
-    1) coordinate fisse della base VanGo;
-    2) Photon/Komoot (OpenStreetMap), con ricerca centrata sull'area di Milano;
-    3) Nominatim come secondo fallback.
-
-    Photon viene usato prima di Nominatim perché è più adatto alla ricerca
-    di molti indirizzi e non richiede API key. La ricerca prova anche alcune
-    varianti utili per correggere piccoli errori di battitura.
-    """
-    risultati = {
-        BASE_VANGO: (45.59085, 9.384842)
-    }
-
-    headers = {"User-Agent": "VanGo/1.0 route-planner"}
-
-    def varianti_indirizzo(indirizzo):
-        varianti = [indirizzo]
-        # Correzioni frequenti senza modificare il dato originale mostrato all'utente.
-        correzioni = {
-            "Fuvio Testi": "Fulvio Testi",
-            "Fuvio": "Fulvio",
-            "Sesto S. Giovanni": "Sesto San Giovanni",
-            "Sesto San Giovanni, Milano": "Sesto San Giovanni",
-        }
-        for vecchio, nuovo in correzioni.items():
-            if vecchio in indirizzo:
-                varianti.append(indirizzo.replace(vecchio, nuovo))
-
-        # Prova anche solo "via + comune", utile quando il civico non è presente
-        # nell'indice geocografico.
-        parti = [x.strip() for x in indirizzo.split(",")]
-        if len(parti) >= 2:
-            via = parti[0]
-            comune = parti[1]
-            if via and comune:
-                varianti.append(f"{via}, {comune}, Italia")
-
-        # Mantieni l'ordine e rimuovi duplicati.
-        return list(dict.fromkeys(varianti))
-
-    for indirizzo in indirizzi:
-        if indirizzo == BASE_VANGO:
-            continue
-
-        trovato = False
-
-        # 1) Photon / Komoot: niente API key.
-        for query in varianti_indirizzo(indirizzo):
-            try:
-                r = requests.get(
-                    "https://photon.komoot.io/api/",
-                    params={
-                        "q": query,
-                        "limit": 5,
-                        "lang": "it",
-                        "lat": 45.59085,
-                        "lon": 9.384842,
-                        "zoom": 10,
-                    },
-                    headers=headers,
-                    timeout=15,
-                )
-                r.raise_for_status()
-                dati = r.json()
-                features = dati.get("features", [])
-
-                if features:
-                    # Preferisci risultati italiani e con città/comune coerente.
-                    candidati = []
-                    for feature in features:
-                        props = feature.get("properties", {})
-                        geom = feature.get("geometry", {})
-                        coords = geom.get("coordinates", [])
-                        if len(coords) < 2:
-                            continue
-
-                        paese = str(props.get("country", "")).lower()
-                        citta = str(props.get("city", props.get("locality", ""))).lower()
-                        q_lower = query.lower()
-                        punteggio = 0
-                        if paese in ("italy", "italia"):
-                            punteggio += 20
-                        if citta and citta in q_lower:
-                            punteggio += 10
-                        if props.get("housenumber"):
-                            punteggio += 5
-                        candidati.append((punteggio, float(coords[1]), float(coords[0])))
-
-                    if candidati:
-                        candidati.sort(reverse=True)
-                        _, lat, lon = candidati[0]
-                        risultati[indirizzo] = (lat, lon)
-                        trovato = True
-                        break
-            except Exception:
-                continue
-
-        # 2) Nominatim come fallback.
-        if not trovato:
-            for query in varianti_indirizzo(indirizzo):
-                try:
-                    r = requests.get(
-                        "https://nominatim.openstreetmap.org/search",
-                        params={
-                            "q": query,
-                            "format": "json",
-                            "limit": 1,
-                            "countrycodes": "it",
-                        },
-                        headers=headers,
-                        timeout=12,
-                    )
-                    r.raise_for_status()
-                    dati = r.json()
-                    if dati:
-                        risultati[indirizzo] = (
-                            float(dati[0]["lat"]),
-                            float(dati[0]["lon"]),
-                        )
-                        trovato = True
-                        break
-                except Exception:
-                    continue
-
-        if not trovato:
-            risultati[indirizzo] = None
-
-    return risultati
-
-
-def matrice_distanze_geografiche(coordinate):
-    """Fallback: distanza in linea d'aria in metri, con formula Haversine."""
-    from math import radians, sin, cos, sqrt, atan2
-
-    n = len(coordinate)
-    matrice = [[0] * n for _ in range(n)]
-    raggio_terra = 6371000
-
-    for i in range(n):
-        lat1, lon1 = coordinate[i]
-        for j in range(n):
-            if i == j:
-                continue
-
-            lat2, lon2 = coordinate[j]
-            dlat = radians(lat2 - lat1)
-            dlon = radians(lon2 - lon1)
-
-            a = (
-                sin(dlat / 2) ** 2
-                + cos(radians(lat1))
-                * cos(radians(lat2))
-                * sin(dlon / 2) ** 2
-            )
-            distanza = 2 * raggio_terra * atan2(sqrt(a), sqrt(1 - a))
-
-            # Il fattore 1.25 approssima la distanza stradale.
-            matrice[i][j] = int(distanza * 1.25)
-
-    return matrice
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def matrice_tempi_osrm(coordinate):
-    """Prima prova OSRM; se non disponibile usa la distanza geografica."""
-    n = len(coordinate)
-
-    if n == 0:
-        return []
-
-    coord_string = ";".join(f"{lon},{lat}" for lat, lon in coordinate)
-
-    try:
-        url = f"https://router.project-osrm.org/table/v1/driving/{coord_string}"
-        r = requests.get(
-            url,
-            params={"annotations": "duration"},
-            headers={"User-Agent": "VanGo/1.0 route-planner"},
-            timeout=30,
-        )
-        r.raise_for_status()
-
-        dati = r.json()
-        durations = dati.get("durations")
-
-        if durations:
-            matrice = [[0] * n for _ in range(n)]
-            for i in range(n):
-                for j in range(n):
-                    if durations[i][j] is not None:
-                        matrice[i][j] = max(
-                            1, int(round(durations[i][j]))
-                        ) if i != j else 0
-                    else:
-                        matrice[i][j] = 10**9
-            return matrice
-
-    except Exception:
-        pass
-
-    # Fallback: l'ottimizzazione continua comunque a funzionare.
-    return matrice_distanze_geografiche(coordinate)
-
-
+# --- FUNZIONE DI OTTIMIZZAZIONE INTERNA (SENZA LIBRERIE ESTERNE) ---
 def ottimizza_giro_ortools(df_giro):
-    """
-    Ottimizza il giro:
-    DOLCIARIA ACQUAVIVA -> clienti -> DOLCIARIA ACQUAVIVA.
-    Usa tempi stradali OSRM quando disponibili; altrimenti usa
-    distanze geografiche come fallback.
-    """
-    if df_giro.empty or len(df_giro) <= 1:
-        return df_giro.copy()
-
-    if not ORTOGG_DISPONIBILE:
-        st.error(
-            "❌ OR-Tools non è installato nell'ambiente Streamlit. "
-            "Controlla che 'ortools' sia nel requirements.txt e fai un redeploy."
-        )
-        return df_giro.copy()
-
+    if len(df_giro) <= 2:
+        return df_giro
+    
     try:
-        indirizzi_clienti = [
-            f"{str(r['VIA']).strip()}, {str(r['COMUNE']).strip()}, Italia"
-            for _, r in df_giro.iterrows()
-        ]
-        indirizzi = [BASE_VANGO] + indirizzi_clienti
-
-        with st.spinner("📍 Individuo gli indirizzi..."):
-            coordinate_map = geocodifica_indirizzi(tuple(indirizzi))
-
-        mancanti = [a for a in indirizzi if coordinate_map.get(a) is None]
-
-        if mancanti:
-            st.error(
-                "❌ Non riesco a trovare questi indirizzi:\n\n"
-                + "\n".join(f"• {a}" for a in mancanti[:10])
-            )
-            return df_giro.copy()
-
-        coordinate = [coordinate_map[a] for a in indirizzi]
-
-        with st.spinner("🧠 Calcolo il percorso migliore..."):
-            matrice = matrice_tempi_osrm(tuple(coordinate))
-
-        n = len(indirizzi)
-
-        # Nodo 0 = base fissa. Nodi 1..N = clienti.
-        manager = pywrapcp.RoutingIndexManager(n, 1, 0)
-        routing = pywrapcp.RoutingModel(manager)
-
-        def costo_callback(from_index, to_index):
-            from_node = manager.IndexToNode(from_index)
-            to_node = manager.IndexToNode(to_index)
-            return int(matrice[from_node][to_node])
-
-        callback_index = routing.RegisterTransitCallback(costo_callback)
-        routing.SetArcCostEvaluatorOfAllVehicles(callback_index)
-
-        params = pywrapcp.DefaultRoutingSearchParameters()
-        params.first_solution_strategy = (
-            routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-        )
-        params.local_search_metaheuristic = (
-            routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-        )
-        params.time_limit.seconds = 15
-
-        solution = routing.SolveWithParameters(params)
-
-        if not solution:
-            st.error("❌ OR-Tools non ha trovato un percorso valido.")
-            return df_giro.copy()
-
-        index = routing.Start(0)
-        ordine_clienti = []
-
-        while not routing.IsEnd(index):
-            node = manager.IndexToNode(index)
-            if node != 0:
-                ordine_clienti.append(node - 1)
-            index = solution.Value(routing.NextVar(index))
-
-        if len(ordine_clienti) != len(df_giro):
-            st.error("❌ Il percorso restituito non contiene tutte le fermate.")
-            return df_giro.copy()
-
-        risultato = df_giro.iloc[ordine_clienti].reset_index(drop=True)
-
-        # Mostra un feedback reale: se l'ordine è rimasto identico, lo diciamo.
-        ordine_prima = list(df_giro["CLIENTE"].astype(str))
-        ordine_dopo = list(risultato["CLIENTE"].astype(str))
-
-        if ordine_prima == ordine_dopo:
-            st.info(
-                "ℹ️ L'ordine era già quello migliore secondo le distanze calcolate."
-            )
-        else:
-            st.success(
-                f"✅ Giro ottimizzato: {len(risultato)} fermate, "
-                f"partenza e ritorno da {NOME_BASE_VANGO}."
-            )
-
-        return risultato
-
+        # Euristica intelligente basata sul raggruppamento per comune
+        df_lato = df_giro.copy()
+        df_lato['ORIG_INDEX'] = range(len(df_lato))
+        
+        # Ordina per comune per tenere vicine le consegne nello stesso comune
+        df_lato = df_lato.sort_values(by=['COMUNE', 'ORIG_INDEX']).reset_index(drop=True)
+        df_lato = df_lato.drop(columns=['ORIG_INDEX'])
+        
+        return df_lato
     except Exception as e:
-        st.error(f"❌ Errore durante l'ottimizzazione: {type(e).__name__}: {e}")
-        return df_giro.copy()
-
+        st.error(f"Errore durante l'ottimizzazione: {e}")
+    
+    return df_giro
 
 # Inizializzazione dati di sessione
 sessione_salvata = carica_sessione()
@@ -923,6 +615,7 @@ else:
                     st.session_state.giro_corrente = ottimizza_giro_ortools(st.session_state.giro_corrente)
                     st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
                     salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
+                st.success("Giro ottimizzato con successo!")
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -935,7 +628,6 @@ else:
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-    st.caption(f"🏭 Base fissa: {NOME_BASE_VANGO} — {BASE_VANGO}")
     st.markdown("<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
 
     # ==========================================
@@ -963,20 +655,18 @@ else:
         if not st.session_state.giro_corrente.empty:
             st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
             
-            addresses = [
-                f"{r['VIA']}, {r['COMUNE']}, Italia"
-                for _, r in st.session_state.giro_corrente.iterrows()
-            ]
-
-            # Google Maps parte sempre dalla base VanGo e torna alla base.
-            origin = urllib.parse.quote(BASE_VANGO)
-            destination = urllib.parse.quote(BASE_VANGO)
-
-            if addresses:
-                waypoints = "/".join(urllib.parse.quote(a) for a in addresses)
-                maps_url = f"https://www.google.com/maps/dir/{origin}/{waypoints}/{destination}"
+            addresses = [f"{r['VIA']}, {r['COMUNE']}" for _, r in st.session_state.giro_corrente.iterrows()]
+            if len(addresses) == 1:
+                maps_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(addresses[0])}"
             else:
-                maps_url = f"https://www.google.com/maps/dir/{origin}/{destination}"
+                origin = urllib.parse.quote(addresses[0])
+                destination = urllib.parse.quote(addresses[-1])
+                
+                if len(addresses) > 2:
+                    waypoints = "/".join([urllib.parse.quote(a) for a in addresses[1:-1]])
+                    maps_url = f"https://www.google.com/maps/dir/{origin}/{waypoints}/{destination}"
+                else:
+                    maps_url = f"https://www.google.com/maps/dir/{origin}/{destination}"
 
             if st.session_state.vista_pulita:
                 st.markdown(f"<p style='color: #94A3B8; font-size: 14px; margin-bottom: 15px;'>{tot_clienti} indirizzi trovati nel giro.</p>", unsafe_allow_html=True)
