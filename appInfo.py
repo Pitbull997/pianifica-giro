@@ -190,7 +190,7 @@ def elabora_dataframe_db(df):
 
     for col in ['ZONA', 'CLIENTE', 'COMUNE', 'VIA']:
         if col in df.columns:
-            df[col] = df[col].fillna("").astype(str)
+            df[col] = df[col].fillna("").astype(str).str.strip()
         else:
             df[col] = ""
 
@@ -492,37 +492,34 @@ else:
         
         if caricamento_file is not None:
             try:
-                if caricamento_file.name.endswith('.csv'):
-                    df_up = pd.read_csv(caricamento_file)
+                # Salvataggio automatico sul server come database predefinito
+                estensione = ".csv" if caricamento_file.name.endswith('.csv') else ".xlsx"
+                file_salvataggio = "database.csv" if estensione == ".csv" else "database.xlsx"
+                
+                with open(file_salvataggio, "wb") as f:
+                    f.write(caricamento_file.getbuffer())
+
+                if estensione == '.csv':
+                    df_up = pd.read_csv(file_salvataggio)
                 else:
-                    df_up = pd.read_excel(caricamento_file)
+                    df_up = pd.read_excel(file_salvataggio)
                 
                 st.session_state.db_clienti = elabora_dataframe_db(df_up)
                 st.session_state.clienti_selezionati_m = []
                 
-                st.success(f"Database caricato con successo! ({len(st.session_state.db_clienti)} clienti trovati)")
+                st.success(f"File caricato e salvato sul server! ({len(st.session_state.db_clienti)} clienti trovati)")
                 st.rerun()
             except Exception as e:
-                st.error(f"Errore nella lettura del file: {e}")
+                st.error(f"Errore nella lettura/salvataggio del file: {e}")
 
-        if st.button("🔄 ricarica DB da zero", use_container_width=True):
+        if st.button("RESET DATABASE", use_container_width=True):
             st.session_state.db_clienti = carica_db_predefinito()
             st.session_state.clienti_selezionati_m = []
-            st.success("Database ricaricato dai file locali!")
+            st.success("Database ricaricato correttamente dal server!")
             st.rerun()
 
         if not st.session_state.db_clienti.empty:
             lista_completa = st.session_state.db_clienti['CLIENTE'].dropna().tolist()
-            
-            col_b1, col_b2 = st.columns(2)
-            with col_b1:
-                if st.button("✅ Seleziona Tutti", use_container_width=True):
-                    st.session_state.clienti_selezionati_m = lista_completa
-                    st.rerun()
-            with col_b2:
-                if st.button("❌ Deseleziona Tutti", use_container_width=True):
-                    st.session_state.clienti_selezionati_m = []
-                    st.rerun()
 
             def aggiorna_selezione():
                 st.session_state.clienti_selezionati_m = st.session_state.widget_multiselect
