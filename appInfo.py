@@ -38,14 +38,14 @@ try:
     try:
         sheet_db = sh.worksheet("Foglio1")
     except Exception:
-        sheet_db = sh.get_worksheet(0)
+        sheet_db = sh.get_worksheet(0) # Fallback di sicurezza sulla prima scheda
         
     try:
-        sheet_utenti = sh.worksheet("Utenti")
+        sheet_utenti = sh.worksheet("Utenti") # Seconda scheda: Utenti
     except Exception:
         sheet_utenti = None
     try:
-        sheet_giro = sh.worksheet("GiroAttivo")
+        sheet_giro = sh.worksheet("GiroAttivo") # Terza scheda: Giro Attivo
     except Exception:
         sheet_giro = None
 except Exception as e:
@@ -71,7 +71,7 @@ def salva_sessione(autenticato, utente, is_admin):
     except Exception as e:
         st.error(f"Errore nel salvataggio della sessione: {e}")
 
-# Funzioni per utenti
+# Funzioni per caricare e salvare gli utenti da Google Sheets (TTL ottimizzato a 300s)
 @st.cache_data(ttl=300, show_spinner=False)
 def carica_utenti_da_sheets():
     utenti_default = {"admin": "vango2026", "autista": "consegne2026"}
@@ -103,6 +103,7 @@ def salva_utenti_su_sheets(dict_utenti):
     except Exception as e:
         st.error(f"Errore nel salvataggio utenti su Google Sheets: {e}")
 
+# Funzioni di utilità per i dati
 def pulisci_orario(valore):
     if pd.isna(valore):
         return ""
@@ -155,6 +156,7 @@ def salva_db_su_google_sheets(df):
     except Exception as e:
         st.error(f"Errore nel salvataggio su Google Sheets: {e}")
 
+# Database Clienti con TTL ottimizzato a 300s
 @st.cache_data(ttl=300, show_spinner=False)
 def carica_db_da_google_sheets_cached():
     try:
@@ -176,6 +178,7 @@ def carica_db_da_google_sheets_cached():
 def carica_db_da_google_sheets():
     return carica_db_da_google_sheets_cached()
 
+# --- Gestione Giro per singolo utente su Google Sheets (TTL ottimizzato a 120s) ---
 @st.cache_data(ttl=120, show_spinner=False)
 def carica_tutti_i_giri_da_sheets():
     try:
@@ -265,26 +268,6 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
             else:
                 st.error(f"Errore nel salvataggio del giro su Google Sheets: {e}")
                 break
-
-# --- FUNZIONE DI OTTIMIZZAZIONE INTERNA (SENZA LIBRERIE ESTERNE) ---
-def ottimizza_giro_ortools(df_giro):
-    if len(df_giro) <= 2:
-        return df_giro
-    
-    try:
-        # Euristica intelligente basata sul raggruppamento per comune
-        df_lato = df_giro.copy()
-        df_lato['ORIG_INDEX'] = range(len(df_lato))
-        
-        # Ordina per comune per tenere vicine le consegne nello stesso comune
-        df_lato = df_lato.sort_values(by=['COMUNE', 'ORIG_INDEX']).reset_index(drop=True)
-        df_lato = df_lato.drop(columns=['ORIG_INDEX'])
-        
-        return df_lato
-    except Exception as e:
-        st.error(f"Errore durante l'ottimizzazione: {e}")
-    
-    return df_giro
 
 # Inizializzazione dati di sessione
 sessione_salvata = carica_sessione()
@@ -594,12 +577,11 @@ else:
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
-    # --- 3 COLONNE PER I PULSANTI D'AZIONE (INVERTI, OTTIMIZZA, SVUOTA) ---
-    col_act1, col_act2, col_act3 = st.columns(3)
+    col_act1, col_act2 = st.columns(2)
 
     with col_act1:
         st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-        if st.button("🔄 INVERTI", use_container_width=True, key="btn_inverti"):
+        if st.button("🔄 INVERTI SEQUENZA", use_container_width=True, key="btn_inverti"):
             if not st.session_state.giro_corrente.empty:
                 st.session_state.giro_corrente = st.session_state.giro_corrente.iloc[::-1].reset_index(drop=True)
                 st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
@@ -609,19 +591,7 @@ else:
 
     with col_act2:
         st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-        if st.button("🤖 OTTIMIZZA", use_container_width=True, key="btn_ottimizza"):
-            if not st.session_state.giro_corrente.empty:
-                with st.spinner("🤖 Ottimizzazione percorso in corso..."):
-                    st.session_state.giro_corrente = ottimizza_giro_ortools(st.session_state.giro_corrente)
-                    st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
-                    salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
-                st.success("Giro ottimizzato con successo!")
-                st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with col_act3:
-        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-        if st.button("🗑️ SVUOTA", use_container_width=True, key="btn_svuota"):
+        if st.button("🗑️ SVUOTA GIRO", use_container_width=True, key="btn_svuota"):
             if not st.session_state.giro_corrente.empty:
                 st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
                 salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
@@ -763,6 +733,7 @@ else:
     elif st.session_state.pagina_attiva == "db":
         st.subheader("📁 Inserisci Clienti nel Tuo Giro")
         
+        # Pulsante universale per forzare l'aggiornamento e svuotare la cache
         if st.button("🔄 Forza Aggiornamento / Svuota Cache", use_container_width=True):
             st.cache_data.clear()
             st.session_state.db_clienti = carica_db_da_google_sheets()
