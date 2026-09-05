@@ -449,7 +449,6 @@ elif not st.session_state.autenticato and st.session_state.pagina_attiva == "log
 
     col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
     with col_l2:
-        # Se ci sono utenti già loggati in precedenza su questo dispositivo, mostra l'accesso rapido!
         if st.session_state.utenti_salvati:
             st.markdown("<p style='text-align: center; color: #60A5FA; font-weight: bold;'>Account registrati su questo dispositivo:</p>", unsafe_allow_html=True)
             for usr_salvato in list(st.session_state.utenti_salvati.keys()):
@@ -459,7 +458,6 @@ elif not st.session_state.autenticato and st.session_state.pagina_attiva == "log
                     st.session_state.is_admin = (usr_salvato.lower() == "admin")
                     st.session_state.pagina_attiva = "giro"
                     
-                    # Salva lo stato nel file locale
                     salva_sessione(st.session_state.utenti_salvati, usr_salvato)
                     st.rerun()
             st.markdown("<hr style='border-color: #334155;'>", unsafe_allow_html=True)
@@ -476,7 +474,7 @@ elif not st.session_state.autenticato and st.session_state.pagina_attiva == "log
             if submit_login:
                 st.session_state.utenti_sistema = carica_utenti_da_sheets()
                 utenti_validi = st.session_state.utenti_sistema
-                username_ pulito = username_input.strip().lower()
+                username_pulito = username_input.strip().lower()
 
                 if username_pulito in utenti_validi and utenti_validi[username_pulito] == password_input:
                     st.session_state.autenticato = True
@@ -484,14 +482,11 @@ elif not st.session_state.autenticato and st.session_state.pagina_attiva == "log
                     st.session_state.is_admin = (username_pulito == "admin")
                     st.session_state.pagina_attiva = "giro"
                     
-                    # Salva l'utente tra quelli registrati sul dispositivo
                     st.session_state.utenti_salvati[username_pulito] = True
                     
-                    # Carica il giro specifico dell'utente loggato
                     st.session_state.giro_corrente = carica_giro_utente_da_sheets(username_pulito)
                     st.session_state.ultimo_utente_caricato = username_pulito
                     
-                    # Salva la sessione persistente multi-utente su file
                     salva_sessione(st.session_state.utenti_salvati, username_pulito)
                     st.rerun()
                 else:
@@ -517,19 +512,16 @@ else:
     else:
         st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 22px; margin-bottom: 5px; margin-top: 0px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
 
-    # --- BARRA SUPERIORE / INFO UTENTE E TASTI GESTIONE ACCOUNT ---
     col_info_u, col_sw_acc, col_logout_u = st.columns([2, 1.2, 1])
     with col_info_u:
         st.markdown(f"<p style='color: #94A3B8; font-size: 13px; margin: 0;'>👤 <b style='color: #60A5FA;'>{st.session_state.get('utente_corrente', '').capitalize()}</b></p>", unsafe_allow_html=True)
     with col_sw_acc:
         if st.button("👥 CAMBIA", use_container_width=True, key="btn_cambia_account"):
-            # Torna alla schermata di login mantenendo però salvati gli account sul dispositivo
             st.session_state.autenticato = False
             st.session_state.pagina_attiva = "login"
             st.rerun()
     with col_logout_u:
         if st.button("🚪 ESCI", use_container_width=True, key="btn_logout_principale"):
-            # Rimuove l'utente corrente dai salvati del dispositivo e fa logout pulito
             curr_user = st.session_state.get('utente_corrente', '')
             if curr_user in st.session_state.utenti_salvati:
                 del st.session_state.utenti_salvati[curr_user]
@@ -554,7 +546,6 @@ else:
 
     st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
 
-    # Menu di navigazione dinamico
     if st.session_state.is_admin:
         col_sw1, col_sw2, col_sw3 = st.columns(3)
     else:
