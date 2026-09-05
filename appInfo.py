@@ -34,13 +34,19 @@ def init_google_sheets():
 try:
     client_gs = init_google_sheets()
     sh = client_gs.open("VanGo Database")
-    sheet_db = sh.get_worksheet(0) # Prima scheda: Database Clienti
+    
+    # CORRETTO: Punta direttamente alla scheda "Foglio1" visibile nel tuo file
+    try:
+        sheet_db = sh.worksheet("Foglio1")
+    except Exception:
+        sheet_db = sh.get_worksheet(0) # Fallback di sicurezza sulla prima scheda
+        
     try:
         sheet_utenti = sh.worksheet("Utenti") # Seconda scheda: Utenti
     except Exception:
         sheet_utenti = None
     try:
-        sheet_giro = sh.worksheet("GiroAttivo") # Terza scheda: Giro Attivo condiviso con colonna UTENTE
+        sheet_giro = sh.worksheet("GiroAttivo") # Terza scheda: Giro Attivo
     except Exception:
         sheet_giro = None
 except Exception as e:
@@ -66,8 +72,8 @@ def salva_sessione(autenticato, utente, is_admin):
     except Exception as e:
         st.error(f"Errore nel salvataggio della sessione: {e}")
 
-# Funzioni per caricare e salvare gli utenti da Google Sheets (con TTL bilanciato per evitare errore 429)
-@st.cache_data(ttl=300, show_spinner=False)
+# Funzioni per caricare e salvare gli utenti da Google Sheets
+@st.cache_data(ttl=60, show_spinner=False)
 def carica_utenti_da_sheets():
     utenti_default = {"admin": "vango2026", "autista": "consegne2026"}
     try:
@@ -151,7 +157,7 @@ def salva_db_su_google_sheets(df):
     except Exception as e:
         st.error(f"Errore nel salvataggio su Google Sheets: {e}")
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def carica_db_da_google_sheets_cached():
     try:
         if sheet_db:
@@ -172,8 +178,8 @@ def carica_db_da_google_sheets_cached():
 def carica_db_da_google_sheets():
     return carica_db_da_google_sheets_cached()
 
-# --- Gestione Giro per singolo utente tramite colonna UTENTE su Google Sheets ---
-@st.cache_data(ttl=120, show_spinner=False)
+# --- Gestione Giro per singolo utente su Google Sheets ---
+@st.cache_data(ttl=30, show_spinner=False)
 def carica_tutti_i_giri_da_sheets():
     try:
         if sheet_giro:
@@ -727,15 +733,6 @@ else:
     elif st.session_state.pagina_attiva == "db":
         st.subheader("📁 Inserisci Clienti nel Tuo Giro")
         
-        # Pulsante universale per forzare l'aggiornamento e svuotare la cache
-        if st.button("🔄 Forza Aggiornamento / Svuota Cache", use_container_width=True):
-            st.cache_data.clear()
-            st.session_state.db_clienti = carica_db_da_google_sheets()
-            st.success("Cache svuotata e dati ricaricati con successo!")
-            st.rerun()
-            
-        st.markdown("<br>", unsafe_allow_html=True)
-
         if st.session_state.is_admin:
             caricamento_file = st.file_uploader("Carica Database Clienti su Google Sheets (Excel o CSV)", type=["xlsx", "csv"])
             
@@ -754,6 +751,13 @@ else:
                     st.rerun()
                 except Exception as e:
                     st.error(f"Errore nel caricamento del file: {e}")
+
+            if st.button("🔄 RICARICA DA GOOGLE SHEETS", use_container_width=True):
+                st.cache_data.clear()
+                st.session_state.db_clienti = carica_db_da_google_sheets()
+                st.session_state.clienti_selezionati_m = []
+                st.success("Database ricaricato correttamente da Google Sheets!")
+                st.rerun()
             
             st.markdown("---")
 
@@ -818,6 +822,10 @@ else:
                         st.rerun()
         else:
             st.warning("Nessun cliente trovato su Google Sheets.")
+            if st.button("🔄 Forza Aggiornamento / Svuota Cache", use_container_width=True):
+                st.cache_data.clear()
+                st.session_state.db_clienti = carica_db_da_google_sheets()
+                st.rerun()
 
     # ==========================================
     # SCHERMATA 3: GESTIONE UTENTI (SOLO ADMIN)
