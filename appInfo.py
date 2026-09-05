@@ -35,7 +35,6 @@ try:
     client_gs = init_google_sheets()
     sh = client_gs.open("VanGo Database")
     
-    # CORRETTO: Punta direttamente alla scheda "Foglio1" visibile nel tuo file
     try:
         sheet_db = sh.worksheet("Foglio1")
     except Exception:
@@ -72,8 +71,8 @@ def salva_sessione(autenticato, utente, is_admin):
     except Exception as e:
         st.error(f"Errore nel salvataggio della sessione: {e}")
 
-# Funzioni per caricare e salvare gli utenti da Google Sheets
-@st.cache_data(ttl=60, show_spinner=False)
+# Funzioni per caricare e salvare gli utenti da Google Sheets (TTL ottimizzato a 300s)
+@st.cache_data(ttl=300, show_spinner=False)
 def carica_utenti_da_sheets():
     utenti_default = {"admin": "vango2026", "autista": "consegne2026"}
     try:
@@ -157,7 +156,8 @@ def salva_db_su_google_sheets(df):
     except Exception as e:
         st.error(f"Errore nel salvataggio su Google Sheets: {e}")
 
-@st.cache_data(ttl=60, show_spinner=False)
+# Database Clienti con TTL ottimizzato a 300s
+@st.cache_data(ttl=300, show_spinner=False)
 def carica_db_da_google_sheets_cached():
     try:
         if sheet_db:
@@ -178,8 +178,8 @@ def carica_db_da_google_sheets_cached():
 def carica_db_da_google_sheets():
     return carica_db_da_google_sheets_cached()
 
-# --- Gestione Giro per singolo utente su Google Sheets ---
-@st.cache_data(ttl=30, show_spinner=False)
+# --- Gestione Giro per singolo utente su Google Sheets (TTL ottimizzato a 120s) ---
+@st.cache_data(ttl=120, show_spinner=False)
 def carica_tutti_i_giri_da_sheets():
     try:
         if sheet_giro:
@@ -733,6 +733,15 @@ else:
     elif st.session_state.pagina_attiva == "db":
         st.subheader("📁 Inserisci Clienti nel Tuo Giro")
         
+        # Pulsante universale per forzare l'aggiornamento e svuotare la cache
+        if st.button("🔄 Forza Aggiornamento / Svuota Cache", use_container_width=True):
+            st.cache_data.clear()
+            st.session_state.db_clienti = carica_db_da_google_sheets()
+            st.success("Cache svuotata e dati ricaricati con successo!")
+            st.rerun()
+            
+        st.markdown("<br>", unsafe_allow_html=True)
+        
         if st.session_state.is_admin:
             caricamento_file = st.file_uploader("Carica Database Clienti su Google Sheets (Excel o CSV)", type=["xlsx", "csv"])
             
@@ -751,13 +760,6 @@ else:
                     st.rerun()
                 except Exception as e:
                     st.error(f"Errore nel caricamento del file: {e}")
-
-            if st.button("🔄 RICARICA DA GOOGLE SHEETS", use_container_width=True):
-                st.cache_data.clear()
-                st.session_state.db_clienti = carica_db_da_google_sheets()
-                st.session_state.clienti_selezionati_m = []
-                st.success("Database ricaricato correttamente da Google Sheets!")
-                st.rerun()
             
             st.markdown("---")
 
@@ -797,7 +799,7 @@ else:
                     
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']] if 'POSIZIONE' in nuovi_clienti.columns else nuovi_clienti[['CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
-                    st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
+                    st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuevos_clienti] if 'nuevos_clienti' in locals() else [st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
                     st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
                     
                     salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
@@ -822,10 +824,6 @@ else:
                         st.rerun()
         else:
             st.warning("Nessun cliente trovato su Google Sheets.")
-            if st.button("🔄 Forza Aggiornamento / Svuota Cache", use_container_width=True):
-                st.cache_data.clear()
-                st.session_state.db_clienti = carica_db_da_google_sheets()
-                st.rerun()
 
     # ==========================================
     # SCHERMATA 3: GESTIONE UTENTI (SOLO ADMIN)
