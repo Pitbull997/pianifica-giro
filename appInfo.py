@@ -592,7 +592,7 @@ else:
     elif st.session_state.pagina_attiva == "db":
         st.subheader("📁 Inserisci Clienti nel Giro")
         
-        # PROTETTO: Solo l'Admin può caricare database esterni o resettare il database
+        # PROTETTO: Solo l'Admin vede i pulsanti e l'area di caricamento file/reset
         if st.session_state.is_admin:
             caricamento_file = st.file_uploader("Carica Database (Excel o CSV)", type=["xlsx", "csv"])
             
@@ -627,8 +627,6 @@ else:
                 st.rerun()
             
             st.markdown("---")
-        else:
-            st.info("🔒 Area di caricamento file riservata all'amministratore. Puoi comunque selezionare i clienti qui sotto per comporre il tuo giro.")
 
         if not st.session_state.db_clienti.empty:
             lista_completa = st.session_state.db_clienti['CLIENTE'].dropna().tolist()
