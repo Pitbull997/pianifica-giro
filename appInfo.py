@@ -602,7 +602,8 @@ else:
                 origin = urllib.parse.quote(addresses[0])
                 destination = urllib.parse.quote(addresses[-1])
                 waypoints = "|".join([urllib.parse.quote(a) for a in addresses[1:-1]])
-                maps_url = f"https://www.google.com/maps/dir/?api=1&origin={origin}&destination={destination}&waypoints={waypoints}"
+                # URL ottimizzato per mobile con travelmode=driving
+                maps_url = f"https://www.google.com/maps/dir/?api=1&origin={origin}&destination={destination}&waypoints={waypoints}&travelmode=driving"
 
             if st.session_state.vista_pulita:
                 st.markdown(f"<p style='color: #94A3B8; font-size: 14px; margin-bottom: 15px;'>{tot_clienti} indirizzi trovati nel giro.</p>", unsafe_allow_html=True)
@@ -758,7 +759,7 @@ else:
                     nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
                     
                     qta_dict = dict(zip(df_edit_colli['CLIENTE'], df_edit_colli['Q.ta']))
-                    nuovi_clienti['Q.ta'] = nouveaux = nuovi_clienti['CLIENTE'].map(qta_dict)
+                    nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(qta_dict)
                     
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
