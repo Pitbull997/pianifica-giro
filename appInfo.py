@@ -282,16 +282,47 @@ NOME_BASE_VANGO = "DOLCIARIA ACQUAVIVA"
 @st.cache_data(ttl=86400, show_spinner=False)
 def geocodifica_indirizzi(indirizzi):
     """
-    Geocodifica con 3 livelli:
+    Geocodifica robusta degli indirizzi clienti.
+
+    Ordine dei tentativi:
     1) coordinate fisse della base VanGo;
-    2) Nominatim;
-    3) ArcGIS World Geocoding.
+    2) Photon/Komoot (OpenStreetMap), con ricerca centrata sull'area di Milano;
+    3) Nominatim come secondo fallback.
+
+    Photon viene usato prima di Nominatim perché è più adatto alla ricerca
+    di molti indirizzi e non richiede API key. La ricerca prova anche alcune
+    varianti utili per correggere piccoli errori di battitura.
     """
     risultati = {
-        BASE_VANGO: (45.59085, 9.384842)  # Via Enrico Fermi 10, Burago di Molgora
+        BASE_VANGO: (45.59085, 9.384842)
     }
 
     headers = {"User-Agent": "VanGo/1.0 route-planner"}
+
+    def varianti_indirizzo(indirizzo):
+        varianti = [indirizzo]
+        # Correzioni frequenti senza modificare il dato originale mostrato all'utente.
+        correzioni = {
+            "Fuvio Testi": "Fulvio Testi",
+            "Fuvio": "Fulvio",
+            "Sesto S. Giovanni": "Sesto San Giovanni",
+            "Sesto San Giovanni, Milano": "Sesto San Giovanni",
+        }
+        for vecchio, nuovo in correzioni.items():
+            if vecchio in indirizzo:
+                varianti.append(indirizzo.replace(vecchio, nuovo))
+
+        # Prova anche solo "via + comune", utile quando il civico non è presente
+        # nell'indice geocografico.
+        parti = [x.strip() for x in indirizzo.split(",")]
+        if len(parti) >= 2:
+            via = parti[0]
+            comune = parti[1]
+            if via and comune:
+                varianti.append(f"{via}, {comune}, Italia")
+
+        # Mantieni l'ordine e rimuovi duplicati.
+        return list(dict.fromkeys(varianti))
 
     for indirizzo in indirizzi:
         if indirizzo == BASE_VANGO:
@@ -299,58 +330,84 @@ def geocodifica_indirizzi(indirizzi):
 
         trovato = False
 
-        # Primo tentativo: Nominatim
-        try:
-            r = requests.get(
-                "https://nominatim.openstreetmap.org/search",
-                params={
-                    "q": indirizzo,
-                    "format": "json",
-                    "limit": 1,
-                    "countrycodes": "it",
-                },
-                headers=headers,
-                timeout=12,
-            )
-            r.raise_for_status()
-            dati = r.json()
-            if dati:
-                risultati[indirizzo] = (
-                    float(dati[0]["lat"]),
-                    float(dati[0]["lon"]),
-                )
-                trovato = True
-        except Exception:
-            pass
-
-        # Secondo tentativo: ArcGIS, senza API key.
-        if not trovato:
+        # 1) Photon / Komoot: niente API key.
+        for query in varianti_indirizzo(indirizzo):
             try:
                 r = requests.get(
-                    "https://geocode-api.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates",
+                    "https://photon.komoot.io/api/",
                     params={
-                        "SingleLine": indirizzo,
-                        "f": "json",
-                        "maxLocations": 1,
-                        "forStorage": "false",
+                        "q": query,
+                        "limit": 5,
+                        "lang": "it",
+                        "lat": 45.59085,
+                        "lon": 9.384842,
+                        "zoom": 10,
                     },
                     headers=headers,
-                    timeout=12,
+                    timeout=15,
                 )
                 r.raise_for_status()
                 dati = r.json()
-                candidati = dati.get("candidates", [])
-                if candidati:
-                    loc = candidati[0]["location"]
-                    risultati[indirizzo] = (
-                        float(loc["y"]),
-                        float(loc["x"]),
-                    )
-                    trovato = True
-            except Exception:
-                pass
+                features = dati.get("features", [])
 
-        # Evita di rallentare inutilmente il giro.
+                if features:
+                    # Preferisci risultati italiani e con città/comune coerente.
+                    candidati = []
+                    for feature in features:
+                        props = feature.get("properties", {})
+                        geom = feature.get("geometry", {})
+                        coords = geom.get("coordinates", [])
+                        if len(coords) < 2:
+                            continue
+
+                        paese = str(props.get("country", "")).lower()
+                        citta = str(props.get("city", props.get("locality", ""))).lower()
+                        q_lower = query.lower()
+                        punteggio = 0
+                        if paese in ("italy", "italia"):
+                            punteggio += 20
+                        if citta and citta in q_lower:
+                            punteggio += 10
+                        if props.get("housenumber"):
+                            punteggio += 5
+                        candidati.append((punteggio, float(coords[1]), float(coords[0])))
+
+                    if candidati:
+                        candidati.sort(reverse=True)
+                        _, lat, lon = candidati[0]
+                        risultati[indirizzo] = (lat, lon)
+                        trovato = True
+                        break
+            except Exception:
+                continue
+
+        # 2) Nominatim come fallback.
+        if not trovato:
+            for query in varianti_indirizzo(indirizzo):
+                try:
+                    r = requests.get(
+                        "https://nominatim.openstreetmap.org/search",
+                        params={
+                            "q": query,
+                            "format": "json",
+                            "limit": 1,
+                            "countrycodes": "it",
+                        },
+                        headers=headers,
+                        timeout=12,
+                    )
+                    r.raise_for_status()
+                    dati = r.json()
+                    if dati:
+                        risultati[indirizzo] = (
+                            float(dati[0]["lat"]),
+                            float(dati[0]["lon"]),
+                        )
+                        trovato = True
+                        break
+                except Exception:
+                    continue
+
         if not trovato:
             risultati[indirizzo] = None
 
