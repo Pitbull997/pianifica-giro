@@ -281,11 +281,25 @@ NOME_BASE_VANGO = "DOLCIARIA ACQUAVIVA"
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def geocodifica_indirizzi(indirizzi):
-    """Converte gli indirizzi in coordinate usando Nominatim."""
-    risultati = {}
-    headers = {"User-Agent": "VanGo/1.0 (route-planner)"}
+    """
+    Geocodifica con 3 livelli:
+    1) coordinate fisse della base VanGo;
+    2) Nominatim;
+    3) ArcGIS World Geocoding.
+    """
+    risultati = {
+        BASE_VANGO: (45.59085, 9.384842)  # Via Enrico Fermi 10, Burago di Molgora
+    }
+
+    headers = {"User-Agent": "VanGo/1.0 route-planner"}
 
     for indirizzo in indirizzi:
+        if indirizzo == BASE_VANGO:
+            continue
+
+        trovato = False
+
+        # Primo tentativo: Nominatim
         try:
             r = requests.get(
                 "https://nominatim.openstreetmap.org/search",
@@ -296,27 +310,92 @@ def geocodifica_indirizzi(indirizzi):
                     "countrycodes": "it",
                 },
                 headers=headers,
-                timeout=10,
+                timeout=12,
             )
             r.raise_for_status()
             dati = r.json()
             if dati:
-                risultati[indirizzo] = (float(dati[0]["lat"]), float(dati[0]["lon"]))
-            time.sleep(1.0)
+                risultati[indirizzo] = (
+                    float(dati[0]["lat"]),
+                    float(dati[0]["lon"]),
+                )
+                trovato = True
         except Exception:
+            pass
+
+        # Secondo tentativo: ArcGIS, senza API key.
+        if not trovato:
+            try:
+                r = requests.get(
+                    "https://geocode-api.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates",
+                    params={
+                        "SingleLine": indirizzo,
+                        "f": "json",
+                        "maxLocations": 1,
+                        "forStorage": "false",
+                    },
+                    headers=headers,
+                    timeout=12,
+                )
+                r.raise_for_status()
+                dati = r.json()
+                candidati = dati.get("candidates", [])
+                if candidati:
+                    loc = candidati[0]["location"]
+                    risultati[indirizzo] = (
+                        float(loc["y"]),
+                        float(loc["x"]),
+                    )
+                    trovato = True
+            except Exception:
+                pass
+
+        # Evita di rallentare inutilmente il giro.
+        if not trovato:
             risultati[indirizzo] = None
 
     return risultati
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def matrice_tempi_osrm(coordinate):
-    """Calcola una matrice dei tempi stradali tramite OSRM."""
+def matrice_distanze_geografiche(coordinate):
+    """Fallback: distanza in linea d'aria in metri, con formula Haversine."""
+    from math import radians, sin, cos, sqrt, atan2
+
     n = len(coordinate)
     matrice = [[0] * n for _ in range(n)]
+    raggio_terra = 6371000
+
+    for i in range(n):
+        lat1, lon1 = coordinate[i]
+        for j in range(n):
+            if i == j:
+                continue
+
+            lat2, lon2 = coordinate[j]
+            dlat = radians(lat2 - lat1)
+            dlon = radians(lon2 - lon1)
+
+            a = (
+                sin(dlat / 2) ** 2
+                + cos(radians(lat1))
+                * cos(radians(lat2))
+                * sin(dlon / 2) ** 2
+            )
+            distanza = 2 * raggio_terra * atan2(sqrt(a), sqrt(1 - a))
+
+            # Il fattore 1.25 approssima la distanza stradale.
+            matrice[i][j] = int(distanza * 1.25)
+
+    return matrice
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def matrice_tempi_osrm(coordinate):
+    """Prima prova OSRM; se non disponibile usa la distanza geografica."""
+    n = len(coordinate)
 
     if n == 0:
-        return matrice
+        return []
 
     coord_string = ";".join(f"{lon},{lat}" for lat, lon in coordinate)
 
@@ -325,38 +404,48 @@ def matrice_tempi_osrm(coordinate):
         r = requests.get(
             url,
             params={"annotations": "duration"},
-            headers={"User-Agent": "VanGo/1.0 (route-planner)"},
+            headers={"User-Agent": "VanGo/1.0 route-planner"},
             timeout=30,
         )
         r.raise_for_status()
+
         dati = r.json()
         durations = dati.get("durations")
 
-        if not durations:
-            return None
+        if durations:
+            matrice = [[0] * n for _ in range(n)]
+            for i in range(n):
+                for j in range(n):
+                    if durations[i][j] is not None:
+                        matrice[i][j] = max(
+                            1, int(round(durations[i][j]))
+                        ) if i != j else 0
+                    else:
+                        matrice[i][j] = 10**9
+            return matrice
 
-        for i in range(n):
-            for j in range(n):
-                if durations[i][j] is not None:
-                    matrice[i][j] = max(0, int(round(durations[i][j])))
-                elif i != j:
-                    matrice[i][j] = 10**9
-
-        return matrice
     except Exception:
-        return None
+        pass
+
+    # Fallback: l'ottimizzazione continua comunque a funzionare.
+    return matrice_distanze_geografiche(coordinate)
 
 
 def ottimizza_giro_ortools(df_giro):
     """
-    Ottimizza il giro partendo e tornando sempre alla base VanGo:
+    Ottimizza il giro:
     DOLCIARIA ACQUAVIVA -> clienti -> DOLCIARIA ACQUAVIVA.
+    Usa tempi stradali OSRM quando disponibili; altrimenti usa
+    distanze geografiche come fallback.
     """
     if df_giro.empty or len(df_giro) <= 1:
         return df_giro.copy()
 
     if not ORTOGG_DISPONIBILE:
-        st.warning("Libreria OR-Tools non installata. Aggiungi 'ortools' a requirements.txt.")
+        st.error(
+            "❌ OR-Tools non è installato nell'ambiente Streamlit. "
+            "Controlla che 'ortools' sia nel requirements.txt e fai un redeploy."
+        )
         return df_giro.copy()
 
     try:
@@ -366,52 +455,50 @@ def ottimizza_giro_ortools(df_giro):
         ]
         indirizzi = [BASE_VANGO] + indirizzi_clienti
 
-        with st.spinner("📍 Calcolo distanze stradali..."):
+        with st.spinner("📍 Individuo gli indirizzi..."):
             coordinate_map = geocodifica_indirizzi(tuple(indirizzi))
 
-        mancanti = [a for a in indirizzi if not coordinate_map.get(a)]
+        mancanti = [a for a in indirizzi if coordinate_map.get(a) is None]
+
         if mancanti:
-            st.warning(
-                "Non riesco a geolocalizzare tutti gli indirizzi. "
-                "Controlla VIA/COMUNE e riprova."
+            st.error(
+                "❌ Non riesco a trovare questi indirizzi:\n\n"
+                + "\n".join(f"• {a}" for a in mancanti[:10])
             )
             return df_giro.copy()
 
         coordinate = [coordinate_map[a] for a in indirizzi]
 
-        with st.spinner("🛣️ Calcolo tempi di percorrenza..."):
+        with st.spinner("🧠 Calcolo il percorso migliore..."):
             matrice = matrice_tempi_osrm(tuple(coordinate))
 
-        if matrice is None:
-            st.warning("Il servizio di calcolo stradale non ha risposto. Giro non modificato.")
-            return df_giro.copy()
+        n = len(indirizzi)
 
         # Nodo 0 = base fissa. Nodi 1..N = clienti.
-        n = len(indirizzi)
         manager = pywrapcp.RoutingIndexManager(n, 1, 0)
         routing = pywrapcp.RoutingModel(manager)
 
-        def tempo_callback(from_index, to_index):
+        def costo_callback(from_index, to_index):
             from_node = manager.IndexToNode(from_index)
             to_node = manager.IndexToNode(to_index)
             return int(matrice[from_node][to_node])
 
-        transit_callback_index = routing.RegisterTransitCallback(tempo_callback)
-        routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+        callback_index = routing.RegisterTransitCallback(costo_callback)
+        routing.SetArcCostEvaluatorOfAllVehicles(callback_index)
 
-        search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-        search_parameters.first_solution_strategy = (
+        params = pywrapcp.DefaultRoutingSearchParameters()
+        params.first_solution_strategy = (
             routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
         )
-        search_parameters.local_search_metaheuristic = (
+        params.local_search_metaheuristic = (
             routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
         )
-        search_parameters.time_limit.seconds = 10
+        params.time_limit.seconds = 15
 
-        solution = routing.SolveWithParameters(search_parameters)
+        solution = routing.SolveWithParameters(params)
 
         if not solution:
-            st.warning("OR-Tools non ha trovato un percorso valido.")
+            st.error("❌ OR-Tools non ha trovato un percorso valido.")
             return df_giro.copy()
 
         index = routing.Start(0)
@@ -424,13 +511,29 @@ def ottimizza_giro_ortools(df_giro):
             index = solution.Value(routing.NextVar(index))
 
         if len(ordine_clienti) != len(df_giro):
-            st.warning("Percorso incompleto: mantengo l'ordine originale.")
+            st.error("❌ Il percorso restituito non contiene tutte le fermate.")
             return df_giro.copy()
 
-        return df_giro.iloc[ordine_clienti].reset_index(drop=True)
+        risultato = df_giro.iloc[ordine_clienti].reset_index(drop=True)
+
+        # Mostra un feedback reale: se l'ordine è rimasto identico, lo diciamo.
+        ordine_prima = list(df_giro["CLIENTE"].astype(str))
+        ordine_dopo = list(risultato["CLIENTE"].astype(str))
+
+        if ordine_prima == ordine_dopo:
+            st.info(
+                "ℹ️ L'ordine era già quello migliore secondo le distanze calcolate."
+            )
+        else:
+            st.success(
+                f"✅ Giro ottimizzato: {len(risultato)} fermate, "
+                f"partenza e ritorno da {NOME_BASE_VANGO}."
+            )
+
+        return risultato
 
     except Exception as e:
-        st.error(f"Errore durante l'ottimizzazione: {e}")
+        st.error(f"❌ Errore durante l'ottimizzazione: {type(e).__name__}: {e}")
         return df_giro.copy()
 
 
@@ -763,7 +866,6 @@ else:
                     st.session_state.giro_corrente = ottimizza_giro_ortools(st.session_state.giro_corrente)
                     st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
                     salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
-                st.success("Giro ottimizzato con successo!")
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
