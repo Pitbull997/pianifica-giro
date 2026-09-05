@@ -4,6 +4,7 @@ import urllib.parse
 import os
 import base64
 import json
+import time
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -65,7 +66,8 @@ def salva_sessione(autenticato, utente, is_admin):
     except Exception as e:
         st.error(f"Errore nel salvataggio della sessione: {e}")
 
-# Funzioni per caricare e salvare gli utenti da Google Sheets
+# Funzioni per caricare e salvare gli utenti da Google Sheets (con cache a breve scadenza per evitare 429)
+@st.cache_data(ttl=60, show_spinner=False)
 def carica_utenti_da_sheets():
     utenti_default = {"admin": "vango2026", "autista": "consegne2026"}
     try:
@@ -88,9 +90,11 @@ def carica_utenti_da_sheets():
 def salva_utenti_su_sheets(dict_utenti):
     try:
         if sheet_utenti:
+            time.sleep(0.5)
             sheet_utenti.clear()
             data_to_update = [["USERNAME", "PASSWORD"]] + [[u, p] for u, p in dict_utenti.items()]
             sheet_utenti.update(data_to_update)
+            st.cache_data.clear()
     except Exception as e:
         st.error(f"Errore nel salvataggio utenti su Google Sheets: {e}")
 
@@ -139,13 +143,16 @@ def elabora_dataframe_db(df):
 def salva_db_su_google_sheets(df):
     try:
         if sheet_db:
+            time.sleep(0.5)
             sheet_db.clear()
             data_to_update = [df.columns.values.tolist()] + df.astype(str).values.tolist()
             sheet_db.update(data_to_update)
+            st.cache_data.clear()
     except Exception as e:
         st.error(f"Errore nel salvataggio su Google Sheets: {e}")
 
-def carica_db_da_google_sheets():
+@st.cache_data(ttl=60, show_spinner=False)
+def carica_db_da_google_sheets_cached():
     try:
         if sheet_db:
             data = sheet_db.get_all_records()
@@ -156,33 +163,44 @@ def carica_db_da_google_sheets():
         st.error(f"Errore di lettura da Google Sheets: {e}")
     return pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'])
 
+def carica_db_da_google_sheets():
+    return carica_db_da_google_sheets_cached()
+
 # --- Gestione Giro per singolo utente su Google Sheets ---
-def carica_giro_utente_da_sheets(nome_utente):
-    cols_giro = ['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']
-    df_vuoto = pd.DataFrame(columns=cols_giro)
+@st.cache_data(ttl=30, show_spinner=False)
+def carica_tutti_i_giri_da_sheets():
     try:
         if sheet_giro:
             data = sheet_giro.get_all_records()
             if data:
-                df = pd.DataFrame(data)
-                df.columns = df.columns.str.strip().str.upper()
-                
-                if 'UTENTE' not in df.columns:
-                    return df_vuoto
-                
-                df_utente = df[df['UTENTE'].astype(str).str.strip().str.lower() == nome_utente.strip().lower()].copy()
-                
-                if 'Q.TA' in df_utente.columns and 'Q.TA' not in cols_giro:
-                    df_utente = df_utente.rename(columns={'Q.TA': 'Q.ta'})
-                
-                for c in cols_giro:
-                    if c not in df_utente.columns:
-                        df_utente[c] = ""
-                
-                df_utente = df_utente[cols_giro]
-                if not df_utente.empty and len(df_utente.dropna(how='all')) > 0:
-                    df_utente['POSIZIONE'] = [str(i) for i in range(1, len(df_utente) + 1)]
-                    return df_utente.reset_index(drop=True)
+                return pd.DataFrame(data)
+    except Exception as e:
+        pass
+    return pd.DataFrame(columns=['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
+
+def carica_giro_utente_da_sheets(nome_utente):
+    cols_giro = ['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']
+    df_vuoto = pd.DataFrame(columns=cols_giro)
+    try:
+        df = carica_tutti_i_giri_da_sheets()
+        if not df.empty:
+            df.columns = df.columns.str.strip().str.upper()
+            if 'UTENTE' not in df.columns:
+                return df_vuoto
+            
+            df_utente = df[df['UTENTE'].astype(str).str.strip().str.lower() == nome_utente.strip().lower()].copy()
+            
+            if 'Q.TA' in df_utente.columns and 'Q.TA' not in cols_giro:
+                df_utente = df_utente.rename(columns={'Q.TA': 'Q.ta'})
+            
+            for c in cols_giro:
+                if c not in df_utente.columns:
+                    df_utente[c] = ""
+            
+            df_utente = df_utente[cols_giro]
+            if not df_utente.empty and len(df_utente.dropna(how='all')) > 0:
+                df_utente['POSIZIONE'] = [str(i) for i in range(1, len(df_utente) + 1)]
+                return df_utente.reset_index(drop=True)
     except Exception as e:
         st.error(f"Errore di lettura del giro da Google Sheets: {e}")
     return df_vuoto
@@ -190,6 +208,9 @@ def carica_giro_utente_da_sheets(nome_utente):
 def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
     try:
         if sheet_giro:
+            # Pausa di sicurezza per proteggere la quota di scrittura (evita errore 429)
+            time.sleep(0.5)
+            
             data_totale = sheet_giro.get_all_records()
             df_tutti = pd.DataFrame(data_totale) if data_totale else pd.DataFrame(columns=['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
             
@@ -224,6 +245,8 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
             else:
                 data_to_update = [intestazioni] + df_tutti.astype(str).values.tolist()
                 sheet_giro.update(data_to_update)
+            
+            st.cache_data.clear()
     except Exception as e:
         st.error(f"Errore nel salvataggio del giro su Google Sheets: {e}")
 
@@ -590,7 +613,6 @@ else:
                 origin = urllib.parse.quote(addresses[0])
                 destination = urllib.parse.quote(addresses[-1])
                 
-                # URL concatenato a barre per preservare interamente la sequenza da mobile
                 if len(addresses) > 2:
                     waypoints = "/".join([urllib.parse.quote(a) for a in addresses[1:-1]])
                     maps_url = f"https://www.google.com/maps/dir/{origin}/{waypoints}/{destination}"
@@ -712,6 +734,7 @@ else:
                     st.error(f"Errore nel caricamento del file: {e}")
 
             if st.button("🔄 RICARICA DA GOOGLE SHEETS", use_container_width=True):
+                st.cache_data.clear()
                 st.session_state.db_clienti = carica_db_da_google_sheets()
                 st.session_state.clienti_selezionati_m = []
                 st.success("Database ricaricato correttamente da Google Sheets!")
@@ -753,7 +776,7 @@ else:
                     qta_dict = dict(zip(df_edit_colli['CLIENTE'], df_edit_colli['Q.ta']))
                     nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(qta_dict)
                     
-                    nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
+                    nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']] if 'POSIZIONE' in nuovi_clienti.columns else nuovi_clienti[['CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
                     
                     st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
                     st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
