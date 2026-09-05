@@ -410,7 +410,7 @@ else:
 
     st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
 
-    # Menu di navigazione dinamico (il tasto UTENTI appare solo se loggato come admin)
+    # Menu di navigazione dinamico
     if st.session_state.is_admin:
         col_sw1, col_sw2, col_sw3 = st.columns(3)
     else:
@@ -592,37 +592,43 @@ else:
     elif st.session_state.pagina_attiva == "db":
         st.subheader("📁 Inserisci Clienti nel Giro")
         
-        caricamento_file = st.file_uploader("Carica Database (Excel o CSV)", type=["xlsx", "csv"])
-        
-        if caricamento_file is not None:
-            try:
-                estensione = ".csv" if caricamento_file.name.endswith('.csv') else ".xlsx"
-                file_salvataggio = "database.csv" if estensione == ".csv" else "database.xlsx"
-                
-                with open(file_salvataggio, "wb") as f:
-                    f.write(caricamento_file.getbuffer())
+        # PROTETTO: Solo l'Admin può caricare database esterni o resettare il database
+        if st.session_state.is_admin:
+            caricamento_file = st.file_uploader("Carica Database (Excel o CSV)", type=["xlsx", "csv"])
+            
+            if caricamento_file is not None:
+                try:
+                    estensione = ".csv" if caricamento_file.name.endswith('.csv') else ".xlsx"
+                    file_salvataggio = "database.csv" if estensione == ".csv" else "database.xlsx"
+                    
+                    with open(file_salvataggio, "wb") as f:
+                        f.write(caricamento_file.getbuffer())
 
-                if estensione == '.csv':
-                    df_up = pd.read_csv(file_salvataggio)
-                else:
-                    df_up = pd.read_excel(file_salvataggio)
-                
-                st.session_state.db_clienti = elabora_dataframe_db(df_up)
-                salva_db_su_disco(st.session_state.db_clienti)
+                    if estensione == '.csv':
+                        df_up = pd.read_csv(file_salvataggio)
+                    else:
+                        df_up = pd.read_excel(file_salvataggio)
+                    
+                    st.session_state.db_clienti = elabora_dataframe_db(df_up)
+                    salva_db_su_disco(st.session_state.db_clienti)
+                    st.session_state.clienti_selezionati_m = []
+                    
+                    st.success(f"File caricato e salvato sul server! ({len(st.session_state.db_clienti)} clienti trovati)")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Errore nella lettura/salvataggio del file: {e}")
+
+            if st.button("RESET DATABASE", use_container_width=True):
+                if os.path.exists(FILE_DB_PERSISTENTE):
+                    os.remove(FILE_DB_PERSISTENTE)
+                st.session_state.db_clienti = carica_db_predefinito()
                 st.session_state.clienti_selezionati_m = []
-                
-                st.success(f"File caricato e salvato sul server! ({len(st.session_state.db_clienti)} clienti trovati)")
+                st.success("Database ricaricato correttamente dal server!")
                 st.rerun()
-            except Exception as e:
-                st.error(f"Errore nella lettura/salvataggio del file: {e}")
-
-        if st.button("RESET DATABASE", use_container_width=True):
-            if os.path.exists(FILE_DB_PERSISTENTE):
-                os.remove(FILE_DB_PERSISTENTE)
-            st.session_state.db_clienti = carica_db_predefinito()
-            st.session_state.clienti_selezionati_m = []
-            st.success("Database ricaricato correttamente dal server!")
-            st.rerun()
+            
+            st.markdown("---")
+        else:
+            st.info("🔒 Area di caricamento file riservata all'amministratore. Puoi comunque selezionare i clienti qui sotto per comporre il tuo giro.")
 
         if not st.session_state.db_clienti.empty:
             lista_completa = st.session_state.db_clienti['CLIENTE'].dropna().tolist()
@@ -670,20 +676,22 @@ else:
                     st.session_state.pagina_attiva = "giro"
                     st.rerun()
                     
-            st.markdown("---")
-            with st.expander("👀 Visualizza o Modifica Anagrafica Clienti intera"):
-                edited_db = st.data_editor(
-                    st.session_state.db_clienti,
-                    num_rows="dynamic",
-                    use_container_width=True,
-                    key="db_editor_switch"
-                )
-                if not edited_db.equals(st.session_state.db_clienti):
-                    st.session_state.db_clienti = elabora_dataframe_db(edited_db)
-                    salva_db_su_disco(st.session_state.db_clienti)
-                    st.rerun()
+            # PROTETTO: Solo l'Admin può visualizzare/modificare l'intera anagrafica
+            if st.session_state.is_admin:
+                st.markdown("---")
+                with st.expander("👀 Visualizza o Modifica Anagrafica Clienti intera"):
+                    edited_db = st.data_editor(
+                        st.session_state.db_clienti,
+                        num_rows="dynamic",
+                        use_container_width=True,
+                        key="db_editor_switch"
+                    )
+                    if not edited_db.equals(st.session_state.db_clienti):
+                        st.session_state.db_clienti = elabora_dataframe_db(edited_db)
+                        salva_db_su_disco(st.session_state.db_clienti)
+                        st.rerun()
         else:
-            st.warning("Nessun cliente in memoria. Carica il file Excel tramite il pulsante sopra per iniziare.")
+            st.warning("Nessun cliente in memoria. Chiedi all'amministratore di caricare il file Excel per iniziare.")
 
     # ==========================================
     # SCHERMATA 3: GESTIONE UTENTI (SOLO ADMIN)
