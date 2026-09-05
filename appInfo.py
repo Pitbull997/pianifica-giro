@@ -167,11 +167,9 @@ def carica_giro_utente_da_sheets(nome_utente):
                 df = pd.DataFrame(data)
                 df.columns = df.columns.str.strip().str.upper()
                 
-                # Verifica presenza colonna UTENTE
                 if 'UTENTE' not in df.columns:
                     return df_vuoto
                 
-                # Filtra solo le righe dell'utente corrente
                 df_utente = df[df['UTENTE'].astype(str).str.strip().str.lower() == nome_utente.strip().lower()].copy()
                 
                 if 'Q.TA' in df_utente.columns and 'Q.TA' not in cols_giro:
@@ -192,7 +190,6 @@ def carica_giro_utente_da_sheets(nome_utente):
 def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
     try:
         if sheet_giro:
-            # Legge tutto il foglio esistente per preservare i giri degli altri autisti
             data_totale = sheet_giro.get_all_records()
             df_tutti = pd.DataFrame(data_totale) if data_totale else pd.DataFrame(columns=['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
             
@@ -200,10 +197,8 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
                 df_tutti.columns = df_tutti.columns.str.strip().str.upper()
                 if 'Q.TA' in df_tutti.columns:
                     df_tutti = df_tutti.rename(columns={'Q.TA': 'Q.ta'})
-                # Rimuove il vecchio giro dell'utente corrente
                 df_tutti = df_tutti[df_tutti['UTENTE'].astype(str).str.strip().str.lower() != nome_utente.strip().lower()]
             
-            # Prepara il nuovo giro per l'utente corrente
             if not df_nuovo_giro.empty:
                 df_agg = df_nuovo_giro.copy()
                 df_agg['UTENTE'] = nome_utente
@@ -217,13 +212,11 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
                 if df_tutti.empty:
                     df_tutti = df_agg
                 else:
-                    # Uniforma le colonne prima del concat
                     for c in cols_ordine:
                         if c not in df_tutti.columns:
                             df_tutti[c] = ""
                     df_tutti = pd.concat([df_tutti[cols_ordine], df_agg[cols_ordine]], ignore_index=True)
             
-            # Salva tutto su Google Sheets
             sheet_giro.clear()
             intestazioni = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']
             if df_tutti.empty:
@@ -255,7 +248,6 @@ if 'db_clienti' not in st.session_state:
 if 'utenti_sistema' not in st.session_state:
     st.session_state.utenti_sistema = carica_utenti_da_sheets()
 
-# Carica il giro specifico dell'utente appena fa il login
 if 'giro_corrente' not in st.session_state or st.session_state.get('ultimo_utente_caricato') != st.session_state.utente_corrente:
     if st.session_state.utente_corrente:
         st.session_state.giro_corrente = carica_giro_utente_da_sheets(st.session_state.utente_corrente)
@@ -269,7 +261,6 @@ if 'clienti_selezionati_m' not in st.session_state:
 if 'vista_pulita' not in st.session_state:
     st.session_state.vista_pulita = False
 
-# Gestione navigazione tramite parametri URL
 if "nav" in st.query_params and st.query_params["nav"] == "login":
     st.session_state.pagina_attiva = "login"
     st.query_params.clear()
@@ -471,7 +462,6 @@ elif not st.session_state.autenticato and (st.session_state.pagina_attiva == "lo
                     st.session_state.is_admin = (username_input.lower() == "admin")
                     st.session_state.pagina_attiva = "giro"
                     
-                    # Carica subito il giro specifico dell'utente
                     st.session_state.giro_corrente = carica_giro_utente_da_sheets(username_input)
                     st.session_state.ultimo_utente_caricato = username_input
                     
@@ -500,7 +490,6 @@ else:
     else:
         st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 22px; margin-bottom: 5px; margin-top: 0px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
 
-    # --- BARRA SUPERIORE / INFO UTENTE E TASTO LOGOUT ---
     col_info_u, col_logout_u = st.columns([3, 1])
     with col_info_u:
         st.markdown(f"<p style='color: #94A3B8; font-size: 13px; margin: 0;'>👤 Utente: <b style='color: #60A5FA;'>{st.session_state.get('utente_corrente', '')}</b></p>", unsafe_allow_html=True)
@@ -516,7 +505,6 @@ else:
 
     st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
 
-    # Menu di navigazione dinamico
     if st.session_state.is_admin:
         col_sw1, col_sw2, col_sw3 = st.columns(3)
     else:
@@ -601,9 +589,13 @@ else:
             else:
                 origin = urllib.parse.quote(addresses[0])
                 destination = urllib.parse.quote(addresses[-1])
-                waypoints = "|".join([urllib.parse.quote(a) for a in addresses[1:-1]])
-                # URL ottimizzato per mobile con travelmode=driving
-                maps_url = f"https://www.google.com/maps/dir/?api=1&origin={origin}&destination={destination}&waypoints={waypoints}&travelmode=driving"
+                
+                # URL concatenato a barre per preservare interamente la sequenza da mobile
+                if len(addresses) > 2:
+                    waypoints = "/".join([urllib.parse.quote(a) for a in addresses[1:-1]])
+                    maps_url = f"https://www.google.com/maps/dir/{origin}/{waypoints}/{destination}"
+                else:
+                    maps_url = f"https://www.google.com/maps/dir/{origin}/{destination}"
 
             if st.session_state.vista_pulita:
                 st.markdown(f"<p style='color: #94A3B8; font-size: 14px; margin-bottom: 15px;'>{tot_clienti} indirizzi trovati nel giro.</p>", unsafe_allow_html=True)
