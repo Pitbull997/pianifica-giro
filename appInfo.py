@@ -3,6 +3,7 @@ import pandas as pd
 import urllib.parse
 import os
 import base64
+import json
 
 # Configurazione Pagina
 st.set_page_config(
@@ -14,6 +15,7 @@ st.set_page_config(
 
 FILE_GIRO_PERSISTENTE = "giro_salvato.json"
 FILE_DB_PERSISTENTE = "database_salvato.xlsx"
+FILE_UTENTI_PERSISTENTE = "utenti_salvati.json"
 
 # Inizializzazione prioritaria delle variabili di sessione
 if 'pagina_attiva' not in st.session_state:
@@ -21,6 +23,9 @@ if 'pagina_attiva' not in st.session_state:
 
 if 'autenticato' not in st.session_state:
     st.session_state.autenticato = False
+
+if 'is_admin' not in st.session_state:
+    st.session_state.is_admin = False
 
 if 'db_clienti' not in st.session_state:
     st.session_state.db_clienti = pd.DataFrame()
@@ -33,6 +38,27 @@ if 'clienti_selezionati_m' not in st.session_state:
 
 if 'vista_pulita' not in st.session_state:
     st.session_state.vista_pulita = False
+
+# Gestione utenti persistenti
+def carica_utenti():
+    utenti_default = {"admin": "vango2026", "autista": "consegne2026"}
+    if os.path.exists(FILE_UTENTI_PERSISTENTE):
+        try:
+            with open(FILE_UTENTI_PERSISTENTE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return utenti_default
+
+def salva_utenti(dict_utenti):
+    try:
+        with open(FILE_UTENTI_PERSISTENTE, "w") as f:
+            json.dump(dict_utenti, f, indent=4)
+    except Exception as e:
+        st.error(f"Errore nel salvataggio degli utenti: {e}")
+
+if 'utenti_sistema' not in st.session_state:
+    st.session_state.utenti_sistema = carica_utenti()
 
 # Gestione navigazione tramite parametri URL
 if "nav" in st.query_params and st.query_params["nav"] == "login":
@@ -340,7 +366,6 @@ elif st.session_state.pagina_attiva == "login" or not st.session_state.autentica
 
     st.markdown("<p style='text-align: center; color: #94A3B8; font-size: 14px; margin-bottom: 30px;'>Inserisci le credenziali per accedere al sistema</p>", unsafe_allow_html=True)
 
-    # Contenitore centratura form login
     col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
     with col_l2:
         with st.form("form_login"):
@@ -351,12 +376,13 @@ elif st.session_state.pagina_attiva == "login" or not st.session_state.autentica
             submit_login = st.form_submit_button("ACCEDI", use_container_width=True, type="primary")
 
             if submit_login:
-                # Modifica qui le credenziali desiderate
-                UTENTE_CORRETTO = "admin"
-                PASSWORD_CORRETTA = "vango2026"
+                utenti_validi = st.session_state.utenti_sistema
+                username_input = username_input.strip()
 
-                if username_input == UTENTE_CORRETTO and password_input == PASSWORD_CORRETTA:
+                if username_input in utenti_validi and utenti_validi[username_input] == password_input:
                     st.session_state.autenticato = True
+                    st.session_state.utente_corrente = username_input
+                    st.session_state.is_admin = (username_input.lower() == "admin")
                     st.session_state.pagina_attiva = "giro"
                     st.rerun()
                 else:
@@ -384,12 +410,16 @@ else:
 
     st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
 
-    col_sw1, col_sw2 = st.columns(2)
+    # Menu di navigazione dinamico (il tasto UTENTI appare solo se loggato come admin)
+    if st.session_state.is_admin:
+        col_sw1, col_sw2, col_sw3 = st.columns(3)
+    else:
+        col_sw1, col_sw2 = st.columns(2)
 
     with col_sw1:
         css_class = "btn-active" if st.session_state.pagina_attiva == "giro" else "btn-inactive"
         st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
-        if st.button("📍 GIRO DEL GIORNO", use_container_width=True, key="btn_giro"):
+        if st.button("📍 GIRO", use_container_width=True, key="btn_giro"):
             st.session_state.pagina_attiva = "giro"
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
@@ -397,10 +427,19 @@ else:
     with col_sw2:
         css_class = "btn-active" if st.session_state.pagina_attiva == "db" else "btn-inactive"
         st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
-        if st.button("📁 INSERISCI CLIENTE", use_container_width=True, key="btn_db"):
+        if st.button("📁 CLIENTI", use_container_width=True, key="btn_db"):
             st.session_state.pagina_attiva = "db"
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
+
+    if st.session_state.is_admin:
+        with col_sw3:
+            css_class = "btn-active" if st.session_state.pagina_attiva == "utenti" else "btn-inactive"
+            st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
+            if st.button("🔑 UTENTI", use_container_width=True, key="btn_utenti"):
+                st.session_state.pagina_attiva = "utenti"
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
 
     col_act1, col_act2 = st.columns(2)
 
@@ -545,7 +584,7 @@ else:
                     </a>
                 ''', unsafe_allow_html=True)
         else:
-            st.info("Nessuna fermata nel giro corrente. Clicca in alto su 'INSERISCI CLIENTE' per aggiungerne.")
+            st.info("Nessuna fermata nel giro corrente. Clicca in alto su '📁 CLIENTI' per aggiungerne.")
 
     # ==========================================
     # SCHERMATA 2: INSERISCI CLIENTE
@@ -645,3 +684,45 @@ else:
                     st.rerun()
         else:
             st.warning("Nessun cliente in memoria. Carica il file Excel tramite il pulsante sopra per iniziare.")
+
+    # ==========================================
+    # SCHERMATA 3: GESTIONE UTENTI (SOLO ADMIN)
+    # ==========================================
+    elif st.session_state.pagina_attiva == "utenti" and st.session_state.is_admin:
+        st.subheader("🔑 Gestione Utenti Registrati")
+        st.markdown("<p style='color: #94A3B8; font-size: 14px;'>Aggiungi o rimuovi gli account autorizzati ad accedere all'app.</p>", unsafe_allow_html=True)
+
+        with st.form("form_nuovo_utente"):
+            st.markdown("### ➕ Aggiungi Nuovo Utente")
+            nuovo_user = st.text_input("Nome Utente")
+            nuova_pass = st.text_input("Password", type="password")
+            btn_aggiungi = st.form_submit_button("Crea Utente", use_container_width=True, type="primary")
+
+            if btn_aggiungi:
+                nuovo_user = nuovo_user.strip()
+                if not nuovo_user or not nuova_pass:
+                    st.error("Inserisci sia il nome utente che la password.")
+                elif nuovo_user in st.session_state.utenti_sistema:
+                    st.warning(f"L'utente '{nuovo_user}' esiste già.")
+                else:
+                    st.session_state.utenti_sistema[nuovo_user] = nuova_pass
+                    salva_utenti(st.session_state.utenti_sistema)
+                    st.success(f"Utente '{nuovo_user}' creato con successo!")
+                    st.rerun()
+
+        st.markdown("---")
+        st.markdown("### 📋 Elenco Utenti Attivi")
+        
+        for usr in list(st.session_state.utenti_sistema.keys()):
+            col_u1, col_u2 = st.columns([3, 1])
+            with col_u1:
+                st.text(f"👤 {usr}")
+            with col_u2:
+                if usr.lower() != "admin":
+                    if st.button("🗑️ Elimina", key=f"del_{usr}", use_container_width=True):
+                        del st.session_state.utenti_sistema[usr]
+                        salva_utenti(st.session_state.utenti_sistema)
+                        st.success(f"Utente '{usr}' eliminato.")
+                        st.rerun()
+                else:
+                    st.markdown("<span style='color: #60A5FA; font-size: 12px;'>Protetto</span>", unsafe_allow_html=True)
