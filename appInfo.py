@@ -139,35 +139,83 @@ def elimina_sessione_persistente():
 # ORA viene volutamente IGNORATA dall'ottimizzazione.
 DEPOSITO_VANGO = "Dolciaria Acquaviva, Via Enrico Fermi, 10, Burago di Molgora, MB, Italia"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+PHOTON_URL = "https://photon.komoot.io/api/"
 OSRM_TABLE_URL = "https://router.project-osrm.org/table/v1/driving"
+
+# Coordinate verificate per il deposito fisso di VanGo.
+# In questo modo il deposito non dipende dalla geocodifica pubblica.
+COORDINATE_DEPOSITO_VANGO = (45.59085, 9.384842)
 
 @st.cache_data(ttl=60 * 60 * 24 * 30, show_spinner=False)
 def _geocodifica_free(indirizzo):
-    """Geocodifica un indirizzo con Nominatim/OpenStreetMap.
+    """Geocodifica gratuita e resiliente.
+
+    1) prova Nominatim/OpenStreetMap con piu' forme della stessa ricerca;
+    2) se Nominatim non restituisce risultati, prova Photon/OpenStreetMap.
+
     La cache riduce drasticamente il numero di richieste ripetute.
     """
-    try:
-        headers = {
-            "User-Agent": "VanGo-GiroConsegne/2.0 (route optimization)"
-        }
-        params = {
-            "q": indirizzo,
-            "format": "jsonv2",
-            "limit": 1,
-            "countrycodes": "it",
-        }
-        response = requests.get(NOMINATIM_URL, params=params, headers=headers, timeout=15)
-        response.raise_for_status()
-        risultati = response.json()
-        if not risultati:
-            return None
-        return {
-            "lat": float(risultati[0]["lat"]),
-            "lon": float(risultati[0]["lon"]),
-            "display_name": risultati[0].get("display_name", indirizzo),
-        }
-    except Exception:
+    indirizzo = str(indirizzo or "").strip()
+    if not indirizzo:
         return None
+
+    headers = {
+        "User-Agent": "VanGo-GiroConsegne/2.1 (route optimizer)"
+    }
+
+    # Nominatim: prima la stringa completa, poi versioni semplificate.
+    query_varianti = [indirizzo]
+    if ", Italia" in indirizzo:
+        query_varianti.append(indirizzo.replace(", Italia", ""))
+    if ", Italy" in indirizzo:
+        query_varianti.append(indirizzo.replace(", Italy", ""))
+
+    for query in dict.fromkeys(query_varianti):
+        try:
+            params = {
+                "q": query,
+                "format": "jsonv2",
+                "limit": 1,
+                "countrycodes": "it",
+                "addressdetails": 1,
+            }
+            response = requests.get(
+                NOMINATIM_URL, params=params, headers=headers, timeout=15
+            )
+            if response.status_code == 200:
+                risultati = response.json()
+                if risultati:
+                    return {
+                        "lat": float(risultati[0]["lat"]),
+                        "lon": float(risultati[0]["lon"]),
+                        "display_name": risultati[0].get("display_name", query),
+                    }
+        except Exception:
+            pass
+
+    # Fallback gratuito: Photon (dati OpenStreetMap).
+    try:
+        response = requests.get(
+            PHOTON_URL,
+            params={"q": indirizzo, "limit": 1, "lang": "it"},
+            headers=headers,
+            timeout=15,
+        )
+        if response.status_code == 200:
+            features = response.json().get("features", [])
+            if features:
+                coords = features[0].get("geometry", {}).get("coordinates", [])
+                if len(coords) >= 2:
+                    props = features[0].get("properties", {})
+                    return {
+                        "lat": float(coords[1]),
+                        "lon": float(coords[0]),
+                        "display_name": props.get("name", indirizzo),
+                    }
+    except Exception:
+        pass
+
+    return None
 
 
 def _indirizzo_riga(row):
@@ -300,13 +348,16 @@ def ottimizza_giro_free(df_giro):
         raise ValueError("Il giro contiene più di 99 fermate: il servizio OSRM pubblico non è adatto a questo volume in una singola matrice.")
 
     df_originale = df_giro.copy().reset_index(drop=True)
-    indirizzi = [DEPOSITO_VANGO] + [_indirizzo_riga(row) for _, row in df_originale.iterrows()]
 
-    coordinate = []
+    # Il deposito e' fisso e non viene geocodificato: usiamo coordinate
+    # verificate di Via Enrico Fermi 10, Burago di Molgora.
+    coordinate = [COORDINATE_DEPOSITO_VANGO]
     indirizzi_non_trovati = []
-    for idx, indirizzo in enumerate(indirizzi):
+
+    for idx, (_, row) in enumerate(df_originale.iterrows(), start=1):
+        indirizzo = _indirizzo_riga(row)
         if not indirizzo.strip():
-            indirizzi_non_trovati.append("Deposito" if idx == 0 else f"Fermata {idx}")
+            indirizzi_non_trovati.append(f"Fermata {idx}: indirizzo vuoto")
             continue
         risultato = _geocodifica_free(indirizzo)
         if risultato is None:
