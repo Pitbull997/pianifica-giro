@@ -370,8 +370,88 @@ def _percorso_da_indici(indici, distanze, durate):
     return totale_m, totale_s
 
 
-def _ottimizza_con_ortools(distanze, durate, n_clienti):
-    """Ottimizzazione locale: un solo furgone, deposito come partenza e ritorno."""
+def _gruppo_da_zona(valore):
+    """Converte la ZONA numerica in un macro-gruppo.
+
+    Esempi: 100-199 -> 1, 200-299 -> 2, 300-399 -> 3.
+    Se ZONA non e' interpretabile come numero, la fermata resta libera.
+    """
+    try:
+        testo = str(valore).strip().replace(',', '.')
+        if not testo:
+            return None
+        numero = int(float(testo))
+        if numero < 100:
+            return None
+        return numero // 100
+    except (TypeError, ValueError):
+        return None
+
+
+def _gruppi_fermate(df_giro, df_db):
+    """Restituisce il macro-gruppo ZONA per ogni fermata del giro.
+
+    La colonna ZONA normalmente appartiene al Foglio1 e non viene copiata
+    nel GiroAttivo. Per questo la recuperiamo dal database usando CLIENTE +
+    VIA + COMUNE. Se ZONA e' gia' presente nel giro, viene usata direttamente.
+    """
+    gruppi = []
+    for _, row in df_giro.iterrows():
+        valore = row.get('ZONA', None)
+        if (valore is None or str(valore).strip() == '') and df_db is not None and not df_db.empty:
+            cliente = str(row.get('CLIENTE', '')).strip().casefold()
+            via = str(row.get('VIA', '')).strip().casefold()
+            comune = str(row.get('COMUNE', '')).strip().casefold()
+            if 'CLIENTE' in df_db.columns and 'VIA' in df_db.columns and 'COMUNE' in df_db.columns and 'ZONA' in df_db.columns:
+                mask = (
+                    df_db['CLIENTE'].astype(str).str.strip().str.casefold().eq(cliente) &
+                    df_db['VIA'].astype(str).str.strip().str.casefold().eq(via) &
+                    df_db['COMUNE'].astype(str).str.strip().str.casefold().eq(comune)
+                )
+                candidati = df_db.loc[mask, 'ZONA']
+                if not candidati.empty:
+                    valore = candidati.iloc[0]
+        gruppi.append(_gruppo_da_zona(valore))
+    return gruppi
+
+
+def _calcola_penalita_gruppo(distanze):
+    """Penalita' dinamica per preferire blocchi ZONA senza renderli rigidi.
+
+    La penalita' e' espressa nella stessa unita' del costo OR-Tools (metri +
+    secondi*10) e viene dimensionata sulla distanza media delle tratte reali.
+    """
+    valori = []
+    for riga in distanze:
+        for d in riga:
+            if d is not None and float(d) > 0:
+                valori.append(float(d))
+    if not valori:
+        return 0.0
+    valori.sort()
+    mediana = valori[len(valori) // 2]
+    # Forte preferenza per non uscire/rientrare continuamente nei gruppi,
+    # ma non un vincolo assoluto: una strada molto migliore puo' vincere.
+    return max(5000.0, mediana * 2.5)
+
+
+def _costo_arco_gruppi(a, b, distanze, durate, gruppi, penalita_gruppo):
+    d = distanze[a][b]
+    t = durate[a][b]
+    if d is None or t is None:
+        return 10**12
+    costo = float(d) + float(t) * 10.0
+    # Il deposito (0) non appartiene a nessun gruppo. La penalita' viene
+    # applicata solo quando si passa direttamente da un gruppo a un altro.
+    ga = gruppi[a] if a < len(gruppi) else None
+    gb = gruppi[b] if b < len(gruppi) else None
+    if ga is not None and gb is not None and ga != gb:
+        costo += penalita_gruppo
+    return int(round(costo))
+
+
+def _ottimizza_con_ortools(distanze, durate, n_clienti, gruppi=None, penalita_gruppo=0.0):
+    """Ottimizzazione locale: un solo furgone, deposito fisso, gruppi ZONA preferiti."""
     try:
         from ortools.constraint_solver import pywrapcp, routing_enums_pb2
     except ImportError:
@@ -384,13 +464,7 @@ def _ottimizza_con_ortools(distanze, durate, n_clienti):
     def costo_arco(from_index, to_index):
         a = manager.IndexToNode(from_index)
         b = manager.IndexToNode(to_index)
-        d = distanze[a][b]
-        t = durate[a][b]
-        if d is None or t is None:
-            return 10**12
-        # Obiettivo combinato: km + tempo. Il coefficiente rende il tempo
-        # significativo senza ignorare la distanza stradale.
-        return int(round(float(d) + float(t) * 10.0))
+        return _costo_arco_gruppi(a, b, distanze, durate, gruppi or [None] * (n_clienti + 1), penalita_gruppo)
 
     transit_callback = routing.RegisterTransitCallback(costo_arco)
     routing.SetArcCostEvaluatorOfAllVehicles(transit_callback)
@@ -413,17 +487,17 @@ def _ottimizza_con_ortools(distanze, durate, n_clienti):
     return ordine, None
 
 
-def _ottimizza_fallback(distanze, durate, n_clienti):
-    """Fallback senza OR-Tools: nearest-neighbour + 2-opt.
-    Mantiene comunque partenza e ritorno al deposito.
-    """
+def _ottimizza_fallback(distanze, durate, n_clienti, gruppi=None, penalita_gruppo=0.0):
+    """Fallback senza OR-Tools: nearest-neighbour + 2-opt con preferenza ZONA."""
     non_visitati = set(range(1, n_clienti + 1))
     ordine = [0]
     while non_visitati:
         corrente = ordine[-1]
         prossimo = min(
             non_visitati,
-            key=lambda j: (10**12 if distanze[corrente][j] is None else float(distanze[corrente][j]) + float(durate[corrente][j] or 0) * 10)
+            key=lambda j: _costo_arco_gruppi(
+                corrente, j, distanze, durate, gruppi or [None] * (n_clienti + 1), penalita_gruppo
+            )
         )
         ordine.append(prossimo)
         non_visitati.remove(prossimo)
@@ -434,7 +508,9 @@ def _ottimizza_fallback(distanze, durate, n_clienti):
         for a, b in zip(seq[:-1], seq[1:]):
             if distanze[a][b] is None or durate[a][b] is None:
                 return float("inf")
-            totale += float(distanze[a][b]) + float(durate[a][b]) * 10.0
+            totale += _costo_arco_gruppi(
+                a, b, distanze, durate, gruppi or [None] * (n_clienti + 1), penalita_gruppo
+            )
         return totale
 
     migliorato = True
@@ -506,14 +582,26 @@ def ottimizza_giro_free(df_giro, df_db=None):
 
     distanze, durate = _richiedi_matrice_osrm(coordinate)
 
+    # ZONA (colonna B del Foglio1) diventa una preferenza di raggruppamento.
+    # Non e' un vincolo rigido: l'algoritmo puo' comunque attraversare un altro
+    # gruppo se la strada risultasse nettamente migliore.
+    gruppi_clienti = _gruppi_fermate(df_originale, df_db)
+    gruppi = [None] + gruppi_clienti
+    penalita_gruppo = _calcola_penalita_gruppo(distanze)
+    gruppi_presenti = sorted({g for g in gruppi_clienti if g is not None})
+
     ordine_originale = [0] + list(range(1, len(df_originale) + 1)) + [0]
     km_originali, minuti_originali = _percorso_da_indici(ordine_originale, distanze, durate)
 
-    ordine_ottimizzato, errore_ortools = _ottimizza_con_ortools(distanze, durate, len(df_originale))
-    metodo = "OR-Tools + OSRM"
+    ordine_ottimizzato, errore_ortools = _ottimizza_con_ortools(
+        distanze, durate, len(df_originale), gruppi=gruppi, penalita_gruppo=penalita_gruppo
+    )
+    metodo = "OR-Tools + OSRM + gruppi ZONA" if gruppi_presenti else "OR-Tools + OSRM"
     if ordine_ottimizzato is None:
-        ordine_ottimizzato = _ottimizza_fallback(distanze, durate, len(df_originale))
-        metodo = "Fallback locale + OSRM"
+        ordine_ottimizzato = _ottimizza_fallback(
+            distanze, durate, len(df_originale), gruppi=gruppi, penalita_gruppo=penalita_gruppo
+        )
+        metodo = "Fallback locale + OSRM + gruppi ZONA" if gruppi_presenti else "Fallback locale + OSRM"
 
     km_ottimizzati, secondi_ottimizzati = _percorso_da_indici(ordine_ottimizzato, distanze, durate)
 
@@ -531,6 +619,8 @@ def ottimizza_giro_free(df_giro, df_db=None):
         "risparmio_km": (km_originali - km_ottimizzati) / 1000.0,
         "risparmio_min": (minuti_originali - secondi_ottimizzati) / 60.0,
         "errore_ortools": errore_ortools,
+        "gruppi_zona": len(gruppi_presenti),
+        "penalita_gruppo": penalita_gruppo,
         "coordinate_da_salvare": coordinate_da_salvare,
     }
     return df_ottimizzato, metriche
