@@ -670,7 +670,7 @@ def _ordine_blocchi_da_sequenza_gruppi(distanze, durate, gruppi, sequenza_gruppi
     return ordine
 
 
-def _ottimizza_a_blocchi_zona(distanze, durate, n_clienti, gruppi):
+def _ottimizza_a_blocchi_zona(distanze, durate, n_clienti, gruppi, forza_gruppamento_zona=100):
     """Ottimizzazione a DUE LIVELLI.
 
     Livello 1: decide l'ordine delle macro-ZONE.
@@ -741,23 +741,52 @@ def _ottimizza_a_blocchi_zona(distanze, durate, n_clienti, gruppi):
         ordine.append(0)
         return ordine
 
-    # Con pochi gruppi possiamo provare TUTTI gli ordini possibili delle ZONE.
-    # Questo e' il punto fondamentale della V5: non scegliamo piu' l'ordine
-    # dei blocchi con una semplice euristica.
+    # ORDINE PREFERITO DELLE MACRO-ZONE: numerico crescente.
+    # Esempio: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7.
+    # A 100% questo ordine diventa la priorita' assoluta per i blocchi;
+    # l'ottimizzazione stradale continua invece a lavorare dentro ogni blocco.
+    forza = max(0, min(100, int(forza_gruppamento_zona)))
+    sequenza_crescente = sorted(gruppi_validi)
+
+    if forza >= 95:
+        return costruisci(sequenza_crescente)
+
+    # Con pochi gruppi possiamo provare TUTTI gli ordini possibili e scegliere
+    # un compromesso reale tra strada e ordine crescente delle ZONE.
     if len(gruppi_validi) <= 8:
         sequenze = permutations(gruppi_validi)
-        migliore_ordine = None
-        migliore_costo = float("inf")
+        candidati = []
+        posizione_ideale = {g: i for i, g in enumerate(sequenza_crescente)}
         for seq in sequenze:
             ordine = costruisci(seq)
-            costo_totale = _costo_base_ordine(ordine, distanze, durate)
-            if costo_totale < migliore_costo:
-                migliore_costo = costo_totale
-                migliore_ordine = ordine
-        return migliore_ordine
+            costo_strada = _costo_base_ordine(ordine, distanze, durate)
+            # Distanza dall'ordine numerico ideale: piu' bassa = piu' simile
+            # a 1 -> 2 -> 3 -> ...
+            costo_ordine = sum(abs(i - posizione_ideale[g]) for i, g in enumerate(seq))
+            candidati.append((costo_strada, costo_ordine, ordine))
+
+        min_strada = min(x[0] for x in candidati)
+        max_strada = max(x[0] for x in candidati)
+        min_ordine = min(x[1] for x in candidati)
+        max_ordine = max(x[1] for x in candidati)
+
+        def normalizza(x, minimo, massimo):
+            return 0.0 if massimo - minimo <= 1e-9 else (x - minimo) / (massimo - minimo)
+
+        f = forza / 100.0
+        migliore = min(
+            candidati,
+            key=lambda x: (
+                (1.0 - f) * normalizza(x[0], min_strada, max_strada)
+                + f * normalizza(x[1], min_ordine, max_ordine),
+                x[0]
+            )
+        )
+        return migliore[2]
 
     # Oltre 8 gruppi, il fattoriale cresce troppo: usiamo piu' strategie
-    # deterministiche, mantenendo comunque il vincolo di blocco.
+    # deterministiche, mantenendo il vincolo di blocco e includendo sempre
+    # l'ordine numerico crescente come candidato.
     sequenze = []
     crescente = list(gruppi_validi)
     decrescente = list(reversed(crescente))
@@ -785,22 +814,41 @@ def _ottimizza_a_blocchi_zona(distanze, durate, n_clienti, gruppi):
 
     candidati = []
     viste = set()
+    posizione_ideale = {g: i for i, g in enumerate(crescente)}
     for seq in sequenze:
         chiave = tuple(seq)
         if chiave in viste:
             continue
         viste.add(chiave)
         ordine = costruisci(seq)
-        candidati.append((_costo_base_ordine(ordine, distanze, durate), ordine))
+        costo_strada = _costo_base_ordine(ordine, distanze, durate)
+        costo_ordine = sum(abs(i - posizione_ideale[g]) for i, g in enumerate(seq))
+        candidati.append((costo_strada, costo_ordine, ordine))
 
-    return min(candidati, key=lambda x: x[0])[1]
+    min_strada = min(x[0] for x in candidati)
+    max_strada = max(x[0] for x in candidati)
+    min_ordine = min(x[1] for x in candidati)
+    max_ordine = max(x[1] for x in candidati)
+    f = forza / 100.0
+
+    def normalizza(x, minimo, massimo):
+        return 0.0 if massimo - minimo <= 1e-9 else (x - minimo) / (massimo - minimo)
+
+    return min(
+        candidati,
+        key=lambda x: (
+            (1.0 - f) * normalizza(x[0], min_strada, max_strada)
+            + f * normalizza(x[1], min_ordine, max_ordine),
+            x[0]
+        )
+    )[2]
 
 def ottimizza_giro_free(df_giro, df_db=None, forza_gruppamento_zona=75):
     """Ottimizza il giro su strada con una seconda priorita' REALE per ZONA.
 
     0%  = solo strada.
-    100% = blocchi ZONA obbligatori come strategia di ordinamento (la strada
-           continua a decidere l'ordine interno al blocco).
+    100% = blocchi ZONA in ordine numerico crescente (1 -> 2 -> 3 -> ...);
+           la strada continua a decidere l'ordine interno a ogni blocco.
     Valori intermedi = compromesso tra percorso stradale e blocchi ZONA.
     ORA non viene mai usata.
     """
@@ -879,7 +927,7 @@ def ottimizza_giro_free(df_giro, df_db=None, forza_gruppamento_zona=75):
     ordine_blocchi = None
     if len(gruppi_presenti) >= 2:
         ordine_blocchi = _ottimizza_a_blocchi_zona(
-            distanze, durate, len(df_originale), gruppi
+            distanze, durate, len(df_originale), gruppi, forza_gruppamento_zona
         )
         candidati.append(("BLOCCHI ZONA", ordine_blocchi))
 
@@ -914,7 +962,7 @@ def ottimizza_giro_free(df_giro, df_db=None, forza_gruppamento_zona=75):
     elif forza_gruppamento_zona >= 95:
         # 100% non puo' restare uguale per colpa di una normalizzazione:
         # scegliamo esplicitamente il candidato a blocchi.
-        nome_scelto, ordine_ottimizzato = ("BLOCCHI ZONA (2 LIVELLI)", ordine_blocchi)
+        nome_scelto, ordine_ottimizzato = ("BLOCCHI ZONA CRESCENTI (2 LIVELLI)", ordine_blocchi)
     elif forza_gruppamento_zona <= 5:
         nome_scelto, ordine_ottimizzato = candidati[0]
     else:
@@ -1654,7 +1702,7 @@ else:
         max_value=100,
         value=int(st.session_state.forza_gruppamento_zona),
         step=5,
-        help="0% = ZONA ignorata. 100% = forte preferenza a completare un gruppo prima di passare al successivo. Non e' un vincolo rigido.",
+        help="0% = strada libera. 100% = blocchi ZONA in ordine crescente (1 -> 2 -> 3 -> ...), ottimizzando la strada dentro ogni blocco.",
     )
     if st.session_state.forza_gruppamento_zona == 0:
         st.caption("Forza attuale: **0%** — ZONA completamente ignorata: ottimizzo solo la strada.")
