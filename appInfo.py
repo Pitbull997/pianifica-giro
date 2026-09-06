@@ -1521,7 +1521,7 @@ st.markdown("""
         background-color: #1E1E1E;
         border: 1px solid #334155;
         border-radius: 14px;
-        padding: 12px 16px;
+        padding: 10px 12px;
         margin-bottom: 10px;
         display: flex;
         align-items: center;
@@ -1543,6 +1543,37 @@ st.markdown("""
     .clean-content { flex-grow: 1; }
     .clean-title { font-size: 16px; font-weight: bold; color: #FFFFFF; margin-bottom: 2px; }
     .clean-subtitle { font-size: 13px; color: #94A3B8; }
+
+    /* Cestino VISTA RIEPILOGO: solo icona, a destra e centrata verticalmente nella card. */
+    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stHorizontalBlock"] > div:nth-child(3) {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 62px;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stHorizontalBlock"] > div:nth-child(3) div[data-testid="stButton"] {
+        width: auto !important;
+        margin: 0 !important;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stHorizontalBlock"] > div:nth-child(3) button {
+        width: 42px !important;
+        min-width: 42px !important;
+        height: 42px !important;
+        min-height: 42px !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        border: none !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        font-size: 18px !important;
+        line-height: 42px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stHorizontalBlock"] > div:nth-child(3) button:hover {
+        background: rgba(255,255,255,0.06) !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1901,25 +1932,26 @@ else:
                 for idx in range(tot_clienti):
                     row = st.session_state.giro_corrente.iloc[idx]
 
-                    # Card riepilogo con cestino integrato sulla destra
-                    col_card, col_cestino = st.columns([0.92, 0.08], gap="small")
+                    # Card riepilogo: il cestino e' integrato NELLA STESSA CARD, a destra.
+                    # Usiamo un container con bordo per evitare che il pulsante finisca sotto la card.
+                    with st.container(border=True):
+                        col_badge, col_info, col_cestino = st.columns([0.08, 0.84, 0.08], gap="small", vertical_alignment="center")
 
-                    with col_card:
-                        st.markdown(f"""
-                        <div class="clean-card clean-card-with-delete">
-                            <div class="clean-badge">{idx + 1}</div>
+                        with col_badge:
+                            st.markdown(f'<div class="clean-badge">{idx + 1}</div>', unsafe_allow_html=True)
+
+                        with col_info:
+                            st.markdown(f"""
                             <div class="clean-content">
                                 <div class="clean-title">{row['VIA']}</div>
                                 <div class="clean-subtitle">{row['COMUNE']} — Cliente: {row['CLIENTE']} (🕒 {row['ORA']} | 📦 {row['Q.ta']} pz)</div>
                             </div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                            """, unsafe_allow_html=True)
 
-                    with col_cestino:
-                        st.markdown("<div style='height: 18px;'></div>", unsafe_allow_html=True)
-                        if st.button("🗑️", help="Elimina cliente dal giro", key=f"elimina_pulita_{idx}_{row['CLIENTE']}"):
-                            st.session_state.conferma_eliminazione_idx = idx
-                            st.rerun()
+                        with col_cestino:
+                            if st.button("🗑️", help="Elimina cliente dal giro", key=f"elimina_pulita_{idx}_{row['CLIENTE']}"):
+                                st.session_state.conferma_eliminazione_idx = idx
+                                st.rerun()
 
                     if st.session_state.conferma_eliminazione_idx == idx:
                         st.warning(f"Eliminare {row['CLIENTE']} dal giro?")
