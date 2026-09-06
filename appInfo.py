@@ -274,6 +274,71 @@ def _indirizzo_riga(row):
     return f"{via}, {comune}, Italia" if via and comune else (via or comune)
 
 
+def _parse_coordinate(valore):
+    """Legge una coordinata salvata in H nel formato 'lat, lon'."""
+    if valore is None or (isinstance(valore, float) and pd.isna(valore)):
+        return None
+    testo = str(valore).strip()
+    if not testo or testo.lower() in {"nan", "none", "null"}:
+        return None
+    try:
+        parti = [x.strip().replace(",", ".") for x in testo.replace(";", ",").split(",")]
+        if len(parti) != 2:
+            return None
+        lat, lon = float(parti[0]), float(parti[1])
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            return None
+        return (lat, lon)
+    except Exception:
+        return None
+
+
+def _coordinate_riga_db(row):
+    """Recupera le coordinate già salvate nel database clienti (colonna H)."""
+    return _parse_coordinate(row.get("COORDINATE", ""))
+
+
+def _trova_coordinate_nel_db(row_giro, df_db):
+    """Trova le coordinate del cliente nel DB usando cliente + via + comune."""
+    if df_db is None or df_db.empty or "COORDINATE" not in df_db.columns:
+        return None
+
+    cliente = str(row_giro.get("CLIENTE", "")).strip().casefold()
+    via = str(row_giro.get("VIA", "")).strip().casefold()
+    comune = str(row_giro.get("COMUNE", "")).strip().casefold()
+
+    # Prima corrispondenza precisa su CLIENTE + VIA + COMUNE.
+    for _, r in df_db.iterrows():
+        if (str(r.get("CLIENTE", "")).strip().casefold() == cliente and
+            str(r.get("VIA", "")).strip().casefold() == via and
+            str(r.get("COMUNE", "")).strip().casefold() == comune):
+            coord = _coordinate_riga_db(r)
+            if coord:
+                return coord
+
+    return None
+
+
+def _aggiorna_coordinate_db(df_db, df_giro, coordinate_nuove):
+    """Aggiorna in memoria le coordinate del DB per le fermate appena geocodificate."""
+    if df_db is None or df_db.empty or "COORDINATE" not in df_db.columns:
+        return df_db
+    risultato = df_db.copy()
+    for _, r in df_giro.iterrows():
+        chiave_cliente = str(r.get("CLIENTE", "")).strip().casefold()
+        chiave_via = str(r.get("VIA", "")).strip().casefold()
+        chiave_comune = str(r.get("COMUNE", "")).strip().casefold()
+        coord = coordinate_nuove.get((chiave_cliente, chiave_via, chiave_comune))
+        if coord:
+            mask = (
+                risultato["CLIENTE"].astype(str).str.strip().str.casefold().eq(chiave_cliente) &
+                risultato["VIA"].astype(str).str.strip().str.casefold().eq(chiave_via) &
+                risultato["COMUNE"].astype(str).str.strip().str.casefold().eq(chiave_comune)
+            )
+            risultato.loc[mask, "COORDINATE"] = f"{coord[0]:.7f}, {coord[1]:.7f}"
+    return risultato
+
+
 def _richiedi_matrice_osrm(coordinate):
     """Restituisce matrici distanze (m) e durate (s) tra tutte le coordinate."""
     if not coordinate:
@@ -390,8 +455,13 @@ def _ottimizza_fallback(distanze, durate, n_clienti):
     return ordine
 
 
-def ottimizza_giro_free(df_giro):
-    """Ottimizza il giro reale su strada, ignorando completamente ORA."""
+def ottimizza_giro_free(df_giro, df_db=None):
+    """Ottimizza il giro reale su strada, ignorando completamente ORA.
+
+    Usa prima le coordinate gia' presenti nella colonna H del database clienti.
+    Geocodifica solo i clienti che non hanno ancora coordinate e le restituisce
+    al chiamante per poterle salvare nel database.
+    """
     if df_giro is None or df_giro.empty:
         raise ValueError("Il giro è vuoto.")
     if len(df_giro) > 99:
@@ -399,21 +469,35 @@ def ottimizza_giro_free(df_giro):
 
     df_originale = df_giro.copy().reset_index(drop=True)
 
-    # Il deposito e' fisso e non viene geocodificato: usiamo coordinate
-    # verificate di Via Enrico Fermi 10, Burago di Molgora.
     coordinate = [COORDINATE_DEPOSITO_VANGO]
     indirizzi_non_trovati = []
+    coordinate_da_salvare = {}
 
     for idx, (_, row) in enumerate(df_originale.iterrows(), start=1):
         indirizzo = _indirizzo_riga(row)
         if not indirizzo.strip():
             indirizzi_non_trovati.append(f"Fermata {idx}: indirizzo vuoto")
             continue
-        risultato = _geocodifica_free(indirizzo)
-        if risultato is None:
+
+        # 1. PRIORITA': coordinate gia' salvate nel Foglio1 / colonna H.
+        coord = _trova_coordinate_nel_db(row, df_db)
+
+        # 2. Fallback: geocodifica solo se H e' vuota/non valida.
+        if coord is None:
+            risultato = _geocodifica_free(indirizzo)
+            if risultato is not None:
+                coord = (risultato["lat"], risultato["lon"])
+                cliente_key = (
+                    str(row.get("CLIENTE", "")).strip().casefold(),
+                    str(row.get("VIA", "")).strip().casefold(),
+                    str(row.get("COMUNE", "")).strip().casefold(),
+                )
+                coordinate_da_salvare[cliente_key] = coord
+
+        if coord is None:
             indirizzi_non_trovati.append(indirizzo)
         else:
-            coordinate.append((risultato["lat"], risultato["lon"]))
+            coordinate.append(coord)
 
     if indirizzi_non_trovati:
         elenco = "\n".join(f"- {x}" for x in indirizzi_non_trovati[:8])
@@ -434,7 +518,6 @@ def ottimizza_giro_free(df_giro):
 
     km_ottimizzati, secondi_ottimizzati = _percorso_da_indici(ordine_ottimizzato, distanze, durate)
 
-    # Rimuove deposito iniziale/finale e converte gli indici matrice in righe DF.
     indici_clienti = [i - 1 for i in ordine_ottimizzato if i != 0]
     df_ottimizzato = df_originale.iloc[indici_clienti].reset_index(drop=True).copy()
     df_ottimizzato["POSIZIONE"] = [str(i) for i in range(1, len(df_ottimizzato) + 1)]
@@ -449,8 +532,44 @@ def ottimizza_giro_free(df_giro):
         "risparmio_km": (km_originali - km_ottimizzati) / 1000.0,
         "risparmio_min": (minuti_originali - secondi_ottimizzati) / 60.0,
         "errore_ortools": errore_ortools,
+        "coordinate_da_salvare": coordinate_da_salvare,
     }
     return df_ottimizzato, metriche
+
+
+def geolocalizza_tutti_clienti(df_db):
+    """Geolocalizza i clienti senza coordinate e aggiorna la colonna H."""
+    if df_db is None or df_db.empty:
+        return df_db.copy(), 0, 0, []
+
+    risultato = df_db.copy()
+    if "COORDINATE" not in risultato.columns:
+        risultato["COORDINATE"] = ""
+
+    trovati = 0
+    gia_presenti = 0
+    non_trovati = []
+
+    for idx, row in risultato.iterrows():
+        esistente = _coordinate_riga_db(row)
+        if esistente:
+            gia_presenti += 1
+            continue
+
+        indirizzo = _indirizzo_riga(row)
+        if not indirizzo.strip():
+            non_trovati.append(f"{row.get('CLIENTE', 'Cliente')} — indirizzo vuoto")
+            continue
+
+        risultato_geo = _geocodifica_free(indirizzo)
+        if risultato_geo is None:
+            non_trovati.append(f"{row.get('CLIENTE', 'Cliente')} — {indirizzo}")
+            continue
+
+        risultato.at[idx, "COORDINATE"] = f"{risultato_geo['lat']:.7f}, {risultato_geo['lon']:.7f}"
+        trovati += 1
+
+    return risultato, trovati, gia_presenti, non_trovati
 
 # Inizializzazione Connessione Google Sheets tramite Streamlit Secrets
 @st.cache_resource
@@ -535,7 +654,7 @@ def pulisci_orario(valore):
 
 def elabora_dataframe_db(df):
     if df.empty:
-        return pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'])
+        return pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT', 'COORDINATE'])
     
     df.columns = df.columns.str.strip().str.upper()
     
@@ -549,7 +668,7 @@ def elabora_dataframe_db(df):
     else:
         df['QTA_DEFAULT'] = 0
 
-    for col in ['ZONA', 'CLIENTE', 'COMUNE', 'VIA']:
+    for col in ['ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'COORDINATE']:
         if col in df.columns:
             df[col] = df[col].fillna("").astype(str).str.strip()
         else:
@@ -580,7 +699,7 @@ def carica_db_da_google_sheets_cached():
         if sheet_db:
             valori_grezzi = sheet_db.get_all_values()
             if not valori_grezzi:
-                intestazioni_default = ['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT']
+                intestazioni_default = ['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT', 'COORDINATE']
                 sheet_db.update([intestazioni_default])
                 return pd.DataFrame(columns=intestazioni_default)
             
@@ -590,7 +709,7 @@ def carica_db_da_google_sheets_cached():
                 return elabora_dataframe_db(df)
     except Exception as e:
         st.error(f"Errore di lettura da Google Sheets: {e}")
-    return pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT'])
+    return pd.DataFrame(columns=['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT', 'COORDINATE'])
 
 def carica_db_da_google_sheets():
     return carica_db_da_google_sheets_cached()
@@ -1074,7 +1193,18 @@ else:
             else:
                 try:
                     with st.spinner("🧠 Analizzo indirizzi e percorso stradale..."):
-                        df_opt, metriche_opt = ottimizza_giro_free(st.session_state.giro_corrente)
+                        df_opt, metriche_opt = ottimizza_giro_free(
+                            st.session_state.giro_corrente,
+                            st.session_state.db_clienti
+                        )
+                    coordinate_da_salvare = metriche_opt.pop("coordinate_da_salvare", {})
+                    if coordinate_da_salvare:
+                        st.session_state.db_clienti = _aggiorna_coordinate_db(
+                            st.session_state.db_clienti,
+                            st.session_state.giro_corrente,
+                            coordinate_da_salvare
+                        )
+                        salva_db_su_google_sheets(st.session_state.db_clienti)
                     st.session_state.giro_ottimizzato_proposto = df_opt
                     st.session_state.metriche_ottimizzazione = metriche_opt
                     st.success("Giro ottimizzato pronto: controllalo e poi scegli se applicarlo.")
@@ -1263,7 +1393,24 @@ else:
             st.rerun()
             
         st.markdown("<br>", unsafe_allow_html=True)
-        
+
+        if st.session_state.is_admin and not st.session_state.db_clienti.empty:
+            if st.button("🌍 GELOCALIZZA CLIENTI E SALVA COORDINATE", use_container_width=True, key="btn_geolocalizza_clienti"):
+                try:
+                    with st.spinner("🌍 Geolocalizzo i clienti senza coordinate... (può richiedere qualche minuto la prima volta)"):
+                        df_geo, trovati_geo, gia_presenti_geo, non_trovati_geo = geolocalizza_tutti_clienti(st.session_state.db_clienti)
+                        st.session_state.db_clienti = df_geo
+                        salva_db_su_google_sheets(st.session_state.db_clienti)
+                    st.success(f"✅ Coordinate aggiornate: {trovati_geo} nuovi clienti. {gia_presenti_geo} erano già geolocalizzati.")
+                    if non_trovati_geo:
+                        elenco_geo = "\n".join(f"- {x}" for x in non_trovati_geo[:8])
+                        if len(non_trovati_geo) > 8:
+                            elenco_geo += f"\n- ... e altri {len(non_trovati_geo) - 8}"
+                        st.warning("⚠️ Non sono riuscito a trovare questi clienti:\n" + elenco_geo)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Geolocalizzazione non riuscita: {e}")
+
         if st.session_state.is_admin:
             caricamento_file = st.file_uploader("Carica Database Clienti su Google Sheets (Excel o CSV)", type=["xlsx", "csv"])
             
