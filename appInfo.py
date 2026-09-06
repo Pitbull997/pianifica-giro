@@ -4,6 +4,8 @@ import urllib.parse
 import os
 import base64
 import time
+import json
+import requests
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -129,6 +131,124 @@ def elimina_sessione_persistente():
         local_storage.deleteItem(STORAGE_KEY)
     except Exception:
         pass
+
+
+# ==========================================
+# OTTIMIZZATORE GIRO VANGO - V1
+# ==========================================
+# 1 furgone | partenza e rientro al deposito | ORA ignorata
+DEPOSITO_VANGO = "Dolciaria Acquaviva, Via Enrico Fermi, 10, 20875 Burago di Molgora MB, Italia"
+
+def _ottimizzatore_config():
+    try:
+        cfg = st.secrets.get("route_optimization", {})
+        return dict(cfg) if cfg else {}
+    except Exception:
+        return {}
+
+def _google_access_token():
+    from google.auth.transport.requests import Request
+    creds = Credentials.from_service_account_info(
+        dict(st.secrets["gcp_service_account"]),
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    creds.refresh(Request())
+    return creds.token
+
+def _geocodifica_indirizzo(indirizzo, api_key):
+    if not api_key:
+        raise RuntimeError("Manca route_optimization.GOOGLE_MAPS_API_KEY nei Secrets.")
+    r = requests.get(
+        "https://maps.googleapis.com/maps/api/geocode/json",
+        params={"address": indirizzo, "key": api_key, "region": "it"},
+        timeout=20
+    )
+    r.raise_for_status()
+    data = r.json()
+    if data.get("status") != "OK" or not data.get("results"):
+        raise RuntimeError(f"Indirizzo non trovato: {indirizzo}")
+    loc = data["results"][0]["geometry"]["location"]
+    return float(loc["lat"]), float(loc["lng"]), data["results"][0].get("formatted_address", indirizzo)
+
+def ottimizza_giro_google(df_giro):
+    if df_giro is None or df_giro.empty:
+        raise ValueError("Il giro è vuoto.")
+
+    cfg = _ottimizzatore_config()
+    api_key = str(cfg.get("GOOGLE_MAPS_API_KEY", "")).strip()
+    project_id = str(cfg.get("GOOGLE_CLOUD_PROJECT_ID", "")).strip()
+    if not project_id:
+        try:
+            project_id = str(st.secrets["gcp_service_account"].get("project_id", "")).strip()
+        except Exception:
+            project_id = ""
+    if not project_id:
+        raise RuntimeError("Manca GOOGLE_CLOUD_PROJECT_ID nei Secrets.")
+
+    depot_lat, depot_lng, depot_label = _geocodifica_indirizzo(DEPOSITO_VANGO, api_key)
+    shipments = []
+
+    for idx, row in df_giro.reset_index(drop=True).iterrows():
+        indirizzo = f"{str(row.get('VIA','')).strip()}, {str(row.get('COMUNE','')).strip()}, Italia"
+        lat, lng, _ = _geocodifica_indirizzo(indirizzo, api_key)
+        shipments.append({
+            "label": f"stop-{idx}",
+            "deliveries": [{
+                "arrivalLocation": {"latitude": lat, "longitude": lng},
+                "duration": "0s"
+            }]
+        })
+
+    request_body = {
+        "timeout": "20s",
+        "model": {
+            "globalStartTime": "2026-01-01T00:00:00Z",
+            "globalEndTime": "2027-01-01T00:00:00Z",
+            "shipments": shipments,
+            "vehicles": [{
+                "label": "vango-1",
+                "startLocation": {"latitude": depot_lat, "longitude": depot_lng},
+                "endLocation": {"latitude": depot_lat, "longitude": depot_lng}
+            }],
+            "considerRoadTraffic": False
+        }
+    }
+
+    token = _google_access_token()
+    url = f"https://routeoptimization.googleapis.com/v1/projects/{project_id}:optimizeTours"
+    r = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json=request_body,
+        timeout=60
+    )
+    if not r.ok:
+        raise RuntimeError(f"Route Optimization API HTTP {r.status_code}: {r.text[:1000]}")
+
+    result = r.json()
+    routes = result.get("routes", [])
+    if not routes:
+        raise RuntimeError("Il motore di ottimizzazione non ha restituito una rotta.")
+
+    ordine = []
+    for visit in routes[0].get("visits", []):
+        if visit.get("shipmentIndex") is not None:
+            ordine.append(int(visit["shipmentIndex"]))
+
+    if len(ordine) != len(df_giro):
+        raise RuntimeError(f"Risposta incompleta: {len(ordine)} tappe su {len(df_giro)}.")
+
+    df_ott = df_giro.reset_index(drop=True).iloc[ordine].copy().reset_index(drop=True)
+    df_ott["POSIZIONE"] = [str(i) for i in range(1, len(df_ott) + 1)]
+
+    rm = routes[0].get("metrics", {})
+    return df_ott, {
+        "fermate": len(df_ott),
+        "totale_distanza_m": rm.get("travelDistanceMeters"),
+        "totale_durata": rm.get("travelDuration"),
+        "deposito": depot_label
+    }
+
 
 # Inizializzazione Connessione Google Sheets tramite Streamlit Secrets
 @st.cache_resource
@@ -711,7 +831,7 @@ else:
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
-    col_act1, col_act2 = st.columns(2)
+    col_act1, col_act2, col_act3 = st.columns(3)
 
     with col_act1:
         st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
@@ -731,6 +851,54 @@ else:
                 salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
+
+    with col_act3:
+        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
+        if st.button("🧠 OTTIMIZZA GIRO", use_container_width=True, key="btn_ottimizza_giro"):
+            if st.session_state.giro_corrente.empty:
+                st.warning("Non ci sono fermate da ottimizzare.")
+            else:
+                try:
+                    with st.spinner("🧠 Ottimizzazione del giro in corso..."):
+                        df_ott, metriche = ottimizza_giro_google(st.session_state.giro_corrente.copy())
+                    st.session_state.giro_ottimizzato_proposto = df_ott
+                    st.session_state.metriche_ottimizzazione = metriche
+                    st.success("Giro ottimizzato. Controlla l'anteprima prima di applicarlo.")
+                except Exception as e:
+                    st.error(f"❌ Ottimizzazione non riuscita: {e}")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    if st.session_state.get("giro_ottimizzato_proposto") is not None:
+        df_proposto = st.session_state.giro_ottimizzato_proposto
+        st.markdown("---")
+        st.subheader("🧠 Anteprima Giro Ottimizzato")
+        st.info("Partenza e rientro: Dolciaria Acquaviva — Via Enrico Fermi 10, Burago di Molgora. ORA ignorata.")
+        st.dataframe(
+            df_proposto[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'Q.ta']],
+            hide_index=True,
+            use_container_width=True
+        )
+        metriche = st.session_state.get("metriche_ottimizzazione") or {}
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Fermate", metriche.get("fermate", len(df_proposto)))
+        distanza = metriche.get("totale_distanza_m")
+        c2.metric("Distanza", f"{float(distanza)/1000:.1f} km" if distanza is not None else "n/d")
+        c3.metric("Tempo", metriche.get("totale_durata", "n/d"))
+
+        ca, cb = st.columns(2)
+        with ca:
+            if st.button("✅ APPLICA GIRO OTTIMIZZATO", use_container_width=True, type="primary", key="btn_applica_ottimizzato"):
+                st.session_state.giro_corrente = df_proposto.copy()
+                salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
+                st.session_state.giro_ottimizzato_proposto = None
+                st.session_state.metriche_ottimizzazione = None
+                st.success("Giro ottimizzato applicato e salvato su Google Sheets.")
+                st.rerun()
+        with cb:
+            if st.button("❌ ANNULLA OTTIMIZZAZIONE", use_container_width=True, key="btn_annulla_ottimizzato"):
+                st.session_state.giro_ottimizzato_proposto = None
+                st.session_state.metriche_ottimizzazione = None
+                st.rerun()
 
     st.markdown("<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
 
