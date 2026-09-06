@@ -22,43 +22,117 @@ st.set_page_config(
 )
 
 # Sessione persistente per singolo browser/dispositivo
-COOKIE_NAME = "vango_session_token"
+# Richiede: extra-streamlit-components
+COOKIE_NAME = "vango_session"
 COOKIE_MAX_AGE_DAYS = 365
 
-@st.cache_resource
-def get_cookie_manager():
-    if stx is None:
-        return None
-    return stx.CookieManager(key="vango_cookie_manager")
+def _cookie_secret():
+    """Segreto stabile per firmare il cookie di autenticazione."""
+    try:
+        secret = st.secrets.get("SESSION_COOKIE_SECRET")
+        if secret:
+            return str(secret)
+    except Exception:
+        pass
 
-cookie_manager = get_cookie_manager()
+    # Fallback: usa la chiave privata GCP già presente nei secrets.
+    try:
+        private_key = st.secrets["gcp_service_account"]["private_key"]
+        if private_key:
+            return str(private_key)
+    except Exception:
+        pass
 
-def genera_token_sessione():
-    return secrets.token_urlsafe(32)
+    return "VANGO_SESSION_SECRET_CAMBIARE_IN_STREAMLIT_SECRETS"
 
-def leggi_token_sessione():
+COOKIE_SECRET = _cookie_secret()
+
+try:
+    import extra_streamlit_components as stx
+except ImportError:
+    stx = None
+
+# IMPORTANTE: CookieManager NON va dentro @st.cache_resource.
+cookie_manager = stx.CookieManager(key="vango_cookie_manager") if stx is not None else None
+
+def _firma_cookie(payload):
+    import hashlib
+    import hmac
+    return hmac.new(
+        COOKIE_SECRET.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256
+    ).hexdigest()
+
+def genera_token_sessione(utente):
+    import base64
+    import json
+    import time
+
+    dati = {
+        "utente": str(utente),
+        "exp": int(time.time()) + COOKIE_MAX_AGE_DAYS * 24 * 60 * 60
+    }
+
+    payload = base64.urlsafe_b64encode(
+        json.dumps(dati, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+
+    return f"{payload}.{_firma_cookie(payload)}"
+
+def leggi_sessione_cookie():
     if cookie_manager is None:
         return None
+
     try:
-        return cookie_manager.get(cookie=COOKIE_NAME)
+        valore = cookie_manager.get(cookie=COOKIE_NAME)
+        if not valore or not isinstance(valore, str) or "." not in valore:
+            return None
+
+        payload, firma = valore.rsplit(".", 1)
+
+        import hmac
+        if not hmac.compare_digest(firma, _firma_cookie(payload)):
+            return None
+
+        import base64
+        import json
+        import time
+
+        padding = "=" * (-len(payload) % 4)
+        dati = json.loads(
+            base64.urlsafe_b64decode(
+                (payload + padding).encode("ascii")
+            ).decode("utf-8")
+        )
+
+        if int(dati.get("exp", 0)) <= int(time.time()):
+            return None
+
+        utente = str(dati.get("utente", "")).strip()
+        return utente or None
+
     except Exception:
         return None
 
-def salva_token_sessione(token):
-    if cookie_manager is None or not token:
+def salva_sessione_cookie(utente):
+    if cookie_manager is None or not utente:
         return
+
     try:
         cookie_manager.set(
-            COOKIE_NAME, token,
+            COOKIE_NAME,
+            genera_token_sessione(utente),
             max_age=COOKIE_MAX_AGE_DAYS * 24 * 60 * 60,
             path="/"
         )
     except Exception:
         pass
 
-def elimina_token_sessione():
+def elimina_sessione_cookie():
     if cookie_manager is None:
         return
+
     try:
         cookie_manager.delete(COOKIE_NAME)
     except Exception:
@@ -299,10 +373,6 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
                 break
 
 # Inizializzazione dati di sessione.
-# Il token nel cookie appartiene al singolo browser/dispositivo.
-if "sessioni_persistenti" not in st.session_state:
-    st.session_state.sessioni_persistenti = {}
-
 if 'autenticato' not in st.session_state:
     st.session_state.autenticato = False
 
@@ -315,26 +385,26 @@ if 'is_admin' not in st.session_state:
 if 'pagina_attiva' not in st.session_state:
     st.session_state.pagina_attiva = "welcome"
 
-if 'session_token' not in st.session_state:
-    st.session_state.session_token = leggi_token_sessione()
-
-# Ripristina il login quando il browser/app viene riaperto.
-if (
-    not st.session_state.autenticato
-    and st.session_state.session_token
-    and st.session_state.session_token in st.session_state.sessioni_persistenti
-):
-    dati = st.session_state.sessioni_persistenti[st.session_state.session_token]
-    st.session_state.autenticato = True
-    st.session_state.utente_corrente = dati["utente"]
-    st.session_state.is_admin = dati["is_admin"]
-    st.session_state.pagina_attiva = "giro"
+if 'session_cookie_letto' not in st.session_state:
+    st.session_state.session_cookie_letto = False
 
 if 'db_clienti' not in st.session_state:
     st.session_state.db_clienti = carica_db_da_google_sheets()
 
 if 'utenti_sistema' not in st.session_state:
     st.session_state.utenti_sistema = carica_utenti_da_sheets()
+
+# Ripristina il login dal cookie persistente del singolo browser/dispositivo.
+# L'utente viene accettato solo se esiste ancora nella tabella Utenti.
+if not st.session_state.session_cookie_letto:
+    st.session_state.session_cookie_letto = True
+    utente_cookie = leggi_sessione_cookie()
+
+    if utente_cookie and utente_cookie in st.session_state.utenti_sistema:
+        st.session_state.autenticato = True
+        st.session_state.utente_corrente = utente_cookie
+        st.session_state.is_admin = (utente_cookie.lower() == "admin")
+        st.session_state.pagina_attiva = "giro"
 
 if 'giro_corrente' not in st.session_state or st.session_state.get('ultimo_utente_caricato') != st.session_state.utente_corrente:
     if st.session_state.utente_corrente:
@@ -551,14 +621,8 @@ elif not st.session_state.autenticato and st.session_state.pagina_attiva == "log
                     st.session_state.pagina_attiva = "giro"
 
 
-                    # Token univoco per questo browser/dispositivo.
-                    token = genera_token_sessione()
-                    st.session_state.session_token = token
-                    st.session_state.sessioni_persistenti[token] = {
-                        "utente": username_input,
-                        "is_admin": st.session_state.is_admin
-                    }
-                    salva_token_sessione(token)
+                    # Salva il login nel cookie persistente del solo browser/dispositivo.
+                    salva_sessione_cookie(username_input)
                     
                     st.session_state.giro_corrente = carica_giro_utente_da_sheets(username_input)
                     st.session_state.ultimo_utente_caricato = username_input
@@ -592,11 +656,7 @@ else:
         st.markdown(f"<p style='color: #94A3B8; font-size: 13px; margin: 0;'>👤 Utente: <b style='color: #60A5FA;'>{st.session_state.get('utente_corrente', '')}</b></p>", unsafe_allow_html=True)
     with col_logout_u:
         if st.button("🚪 LOGOUT", use_container_width=True, key="btn_logout_principale"):
-            token_corrente = st.session_state.get("session_token")
-            if token_corrente:
-                st.session_state.sessioni_persistenti.pop(token_corrente, None)
-            elimina_token_sessione()
-            st.session_state.session_token = None
+            elimina_sessione_cookie()
             st.session_state.autenticato = False
             st.session_state.utente_corrente = ""
             st.session_state.is_admin = False
