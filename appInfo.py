@@ -147,7 +147,6 @@ OSRM_TABLE_URL = "https://router.project-osrm.org/table/v1/driving"
 # In questo modo il deposito non dipende dalla geocodifica pubblica.
 COORDINATE_DEPOSITO_VANGO = (45.59085, 9.384842)
 
-@st.cache_data(ttl=60 * 60 * 24 * 30, show_spinner=False)
 def _geocodifica_free(indirizzo):
     """Geocodifica gratuita con piu' fornitori e protezione dai limiti.
 
@@ -537,8 +536,13 @@ def ottimizza_giro_free(df_giro, df_db=None):
     return df_ottimizzato, metriche
 
 
-def geolocalizza_tutti_clienti(df_db):
-    """Geolocalizza i clienti senza coordinate e aggiorna la colonna H."""
+def geolocalizza_tutti_clienti(df_db, salvataggio_progressivo=None):
+    """Geolocalizza i clienti senza coordinate e aggiorna la colonna H.
+
+    IMPORTANTE: non usa st.cache_data per la geocodifica, perché anche un
+    fallimento temporaneo verrebbe altrimenti memorizzato come None.
+    Il salvataggio progressivo evita di perdere il lavoro già fatto.
+    """
     if df_db is None or df_db.empty:
         return df_db.copy(), 0, 0, []
 
@@ -549,26 +553,46 @@ def geolocalizza_tutti_clienti(df_db):
     trovati = 0
     gia_presenti = 0
     non_trovati = []
+    totali = len(risultato)
+    ultimo_salvataggio = 0
 
-    for idx, row in risultato.iterrows():
+    progress = st.progress(0, text="🌍 Preparazione geolocalizzazione...")
+
+    for posizione, (idx, row) in enumerate(risultato.iterrows(), start=1):
         esistente = _coordinate_riga_db(row)
         if esistente:
             gia_presenti += 1
-            continue
+        else:
+            indirizzo = _indirizzo_riga(row)
+            if not indirizzo.strip():
+                non_trovati.append(f"{row.get('CLIENTE', 'Cliente')} — indirizzo vuoto")
+            else:
+                risultato_geo = _geocodifica_free(indirizzo)
+                if risultato_geo is None:
+                    non_trovati.append(f"{row.get('CLIENTE', 'Cliente')} — {indirizzo}")
+                else:
+                    risultato.at[idx, "COORDINATE"] = f"{risultato_geo['lat']:.7f}, {risultato_geo['lon']:.7f}"
+                    trovati += 1
 
-        indirizzo = _indirizzo_riga(row)
-        if not indirizzo.strip():
-            non_trovati.append(f"{row.get('CLIENTE', 'Cliente')} — indirizzo vuoto")
-            continue
+        # Salva a blocchi: così la colonna H viene realmente aggiornata
+        # anche se il processo viene interrotto prima della fine.
+        if (trovati - ultimo_salvataggio) >= 10:
+            if salvataggio_progressivo is not None:
+                try:
+                    salvataggio_progressivo(risultato)
+                    ultimo_salvataggio = trovati
+                except Exception:
+                    pass
 
-        risultato_geo = _geocodifica_free(indirizzo)
-        if risultato_geo is None:
-            non_trovati.append(f"{row.get('CLIENTE', 'Cliente')} — {indirizzo}")
-            continue
+        progress.progress(posizione / totali, text=f"🌍 Geolocalizzazione: {posizione}/{totali} clienti")
 
-        risultato.at[idx, "COORDINATE"] = f"{risultato_geo['lat']:.7f}, {risultato_geo['lon']:.7f}"
-        trovati += 1
+    if salvataggio_progressivo is not None and trovati > ultimo_salvataggio:
+        try:
+            salvataggio_progressivo(risultato)
+        except Exception:
+            pass
 
+    progress.empty()
     return risultato, trovati, gia_presenti, non_trovati
 
 # Inizializzazione Connessione Google Sheets tramite Streamlit Secrets
@@ -680,6 +704,32 @@ def elabora_dataframe_db(df):
         df['ORA'] = ""
         
     return df.sort_values(by="POSIZIONE").reset_index(drop=True)
+
+def salva_coordinate_su_google_sheets(df):
+    """Aggiorna SOLO la colonna H del Foglio1, senza cancellare il database."""
+    try:
+        if not sheet_db or df is None or df.empty:
+            return False
+
+        # Assicura l'intestazione H1.
+        try:
+            sheet_db.update("H1", [["COORDINATE"]])
+        except Exception:
+            pass
+
+        valori = []
+        for valore in df["COORDINATE"].tolist() if "COORDINATE" in df.columns else []:
+            valori.append(["" if pd.isna(valore) else str(valore)])
+
+        if valori:
+            # Riga 1 = intestazione, quindi il primo cliente è H2.
+            sheet_db.update(f"H2:H{len(valori) + 1}", valori)
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.warning(f"⚠️ Salvataggio coordinate in colonna H non riuscito: {e}")
+        return False
+
 
 def salva_db_su_google_sheets(df):
     try:
@@ -1397,10 +1447,13 @@ else:
         if st.session_state.is_admin and not st.session_state.db_clienti.empty:
             if st.button("🌍 GELOCALIZZA CLIENTI E SALVA COORDINATE", use_container_width=True, key="btn_geolocalizza_clienti"):
                 try:
-                    with st.spinner("🌍 Geolocalizzo i clienti senza coordinate... (può richiedere qualche minuto la prima volta)"):
-                        df_geo, trovati_geo, gia_presenti_geo, non_trovati_geo = geolocalizza_tutti_clienti(st.session_state.db_clienti)
+                    with st.spinner("🌍 Geolocalizzo i clienti senza coordinate... e salvo progressivamente la colonna H"):
+                        df_geo, trovati_geo, gia_presenti_geo, non_trovati_geo = geolocalizza_tutti_clienti(
+                            st.session_state.db_clienti,
+                            salvataggio_progressivo=salva_coordinate_su_google_sheets
+                        )
                         st.session_state.db_clienti = df_geo
-                        salva_db_su_google_sheets(st.session_state.db_clienti)
+                        salva_coordinate_su_google_sheets(st.session_state.db_clienti)
                     st.success(f"✅ Coordinate aggiornate: {trovati_geo} nuovi clienti. {gia_presenti_geo} erano già geolocalizzati.")
                     if non_trovati_geo:
                         elenco_geo = "\n".join(f"- {x}" for x in non_trovati_geo[:8])
