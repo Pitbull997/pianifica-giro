@@ -4,7 +4,6 @@ import urllib.parse
 import os
 import base64
 import time
-import json
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
@@ -132,123 +131,225 @@ def elimina_sessione_persistente():
     except Exception:
         pass
 
-
 # ==========================================
-# OTTIMIZZATORE GIRO VANGO - V1
+# OTTIMIZZATORE GIRO FREE - OpenStreetMap + OSRM + OR-Tools
 # ==========================================
-# 1 furgone | partenza e rientro al deposito | ORA ignorata
-DEPOSITO_VANGO = "Dolciaria Acquaviva, Via Enrico Fermi, 10, 20875 Burago di Molgora MB, Italia"
+# Nessuna Route Optimization API Google e nessuna Google Geocoding API.
+# La geocodifica usa Nominatim/OpenStreetMap; il routing usa OSRM.
+# ORA viene volutamente IGNORATA dall'ottimizzazione.
+DEPOSITO_VANGO = "Dolciaria Acquaviva, Via Enrico Fermi, 10, Burago di Molgora, MB, Italia"
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+OSRM_TABLE_URL = "https://router.project-osrm.org/table/v1/driving"
 
-def _ottimizzatore_config():
+@st.cache_data(ttl=60 * 60 * 24 * 30, show_spinner=False)
+def _geocodifica_free(indirizzo):
+    """Geocodifica un indirizzo con Nominatim/OpenStreetMap.
+    La cache riduce drasticamente il numero di richieste ripetute.
+    """
     try:
-        cfg = st.secrets.get("route_optimization", {})
-        return dict(cfg) if cfg else {}
-    except Exception:
-        return {}
-
-def _google_access_token():
-    from google.auth.transport.requests import Request
-    creds = Credentials.from_service_account_info(
-        dict(st.secrets["gcp_service_account"]),
-        scopes=["https://www.googleapis.com/auth/cloud-platform"]
-    )
-    creds.refresh(Request())
-    return creds.token
-
-def _geocodifica_indirizzo(indirizzo, api_key):
-    if not api_key:
-        raise RuntimeError("Manca route_optimization.GOOGLE_MAPS_API_KEY nei Secrets.")
-    r = requests.get(
-        "https://maps.googleapis.com/maps/api/geocode/json",
-        params={"address": indirizzo, "key": api_key, "region": "it"},
-        timeout=20
-    )
-    r.raise_for_status()
-    data = r.json()
-    if data.get("status") != "OK" or not data.get("results"):
-        raise RuntimeError(f"Indirizzo non trovato: {indirizzo}")
-    loc = data["results"][0]["geometry"]["location"]
-    return float(loc["lat"]), float(loc["lng"]), data["results"][0].get("formatted_address", indirizzo)
-
-def ottimizza_giro_google(df_giro):
-    if df_giro is None or df_giro.empty:
-        raise ValueError("Il giro è vuoto.")
-
-    cfg = _ottimizzatore_config()
-    api_key = str(cfg.get("GOOGLE_MAPS_API_KEY", "")).strip()
-    project_id = str(cfg.get("GOOGLE_CLOUD_PROJECT_ID", "")).strip()
-    if not project_id:
-        try:
-            project_id = str(st.secrets["gcp_service_account"].get("project_id", "")).strip()
-        except Exception:
-            project_id = ""
-    if not project_id:
-        raise RuntimeError("Manca GOOGLE_CLOUD_PROJECT_ID nei Secrets.")
-
-    depot_lat, depot_lng, depot_label = _geocodifica_indirizzo(DEPOSITO_VANGO, api_key)
-    shipments = []
-
-    for idx, row in df_giro.reset_index(drop=True).iterrows():
-        indirizzo = f"{str(row.get('VIA','')).strip()}, {str(row.get('COMUNE','')).strip()}, Italia"
-        lat, lng, _ = _geocodifica_indirizzo(indirizzo, api_key)
-        shipments.append({
-            "label": f"stop-{idx}",
-            "deliveries": [{
-                "arrivalLocation": {"latitude": lat, "longitude": lng},
-                "duration": "0s"
-            }]
-        })
-
-    request_body = {
-        "timeout": "20s",
-        "model": {
-            "globalStartTime": "2026-01-01T00:00:00Z",
-            "globalEndTime": "2027-01-01T00:00:00Z",
-            "shipments": shipments,
-            "vehicles": [{
-                "label": "vango-1",
-                "startLocation": {"latitude": depot_lat, "longitude": depot_lng},
-                "endLocation": {"latitude": depot_lat, "longitude": depot_lng}
-            }],
-            "considerRoadTraffic": False
+        headers = {
+            "User-Agent": "VanGo-GiroConsegne/2.0 (route optimization)"
         }
-    }
+        params = {
+            "q": indirizzo,
+            "format": "jsonv2",
+            "limit": 1,
+            "countrycodes": "it",
+        }
+        response = requests.get(NOMINATIM_URL, params=params, headers=headers, timeout=15)
+        response.raise_for_status()
+        risultati = response.json()
+        if not risultati:
+            return None
+        return {
+            "lat": float(risultati[0]["lat"]),
+            "lon": float(risultati[0]["lon"]),
+            "display_name": risultati[0].get("display_name", indirizzo),
+        }
+    except Exception:
+        return None
 
-    token = _google_access_token()
-    url = f"https://routeoptimization.googleapis.com/v1/projects/{project_id}:optimizeTours"
-    r = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        json=request_body,
-        timeout=60
-    )
-    if not r.ok:
-        raise RuntimeError(f"Route Optimization API HTTP {r.status_code}: {r.text[:1000]}")
 
-    result = r.json()
-    routes = result.get("routes", [])
-    if not routes:
-        raise RuntimeError("Il motore di ottimizzazione non ha restituito una rotta.")
+def _indirizzo_riga(row):
+    via = str(row.get("VIA", "")).strip()
+    comune = str(row.get("COMUNE", "")).strip()
+    return f"{via}, {comune}, Italia" if via and comune else (via or comune)
+
+
+def _richiedi_matrice_osrm(coordinate):
+    """Restituisce matrici distanze (m) e durate (s) tra tutte le coordinate."""
+    if not coordinate:
+        raise ValueError("Nessuna coordinata disponibile per il calcolo del percorso.")
+    coord_string = ";".join(f"{lon},{lat}" for lat, lon in coordinate)
+    url = f"{OSRM_TABLE_URL}/{coord_string}"
+    params = {"annotations": "distance,duration"}
+    response = requests.get(url, params=params, timeout=45)
+    response.raise_for_status()
+    dati = response.json()
+    if dati.get("code") != "Ok":
+        raise RuntimeError(f"OSRM non ha restituito una matrice valida: {dati.get('message', dati.get('code', 'errore sconosciuto'))}")
+    distanze = dati.get("distances")
+    durate = dati.get("durations")
+    if not distanze or not durate:
+        raise RuntimeError("OSRM ha restituito una matrice vuota.")
+    return distanze, durate
+
+
+def _percorso_da_indici(indici, distanze, durate):
+    totale_m = 0.0
+    totale_s = 0.0
+    for a, b in zip(indici[:-1], indici[1:]):
+        d = distanze[a][b]
+        t = durate[a][b]
+        if d is None or t is None:
+            raise RuntimeError("Esiste una tratta stradale non raggiungibile nella matrice OSRM.")
+        totale_m += float(d)
+        totale_s += float(t)
+    return totale_m, totale_s
+
+
+def _ottimizza_con_ortools(distanze, durate, n_clienti):
+    """Ottimizzazione locale: un solo furgone, deposito come partenza e ritorno."""
+    try:
+        from ortools.constraint_solver import pywrapcp, routing_enums_pb2
+    except ImportError:
+        return None, "OR-Tools non installato"
+
+    # Indice 0 = deposito; 1..n = clienti.
+    manager = pywrapcp.RoutingIndexManager(n_clienti + 1, 1, 0)
+    routing = pywrapcp.RoutingModel(manager)
+
+    def costo_arco(from_index, to_index):
+        a = manager.IndexToNode(from_index)
+        b = manager.IndexToNode(to_index)
+        d = distanze[a][b]
+        t = durate[a][b]
+        if d is None or t is None:
+            return 10**12
+        # Obiettivo combinato: km + tempo. Il coefficiente rende il tempo
+        # significativo senza ignorare la distanza stradale.
+        return int(round(float(d) + float(t) * 10.0))
+
+    transit_callback = routing.RegisterTransitCallback(costo_arco)
+    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback)
+
+    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+    search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+    search_parameters.time_limit.seconds = 8
+
+    soluzione = routing.SolveWithParameters(search_parameters)
+    if soluzione is None:
+        return None, "OR-Tools non ha trovato una soluzione"
 
     ordine = []
-    for visit in routes[0].get("visits", []):
-        if visit.get("shipmentIndex") is not None:
-            ordine.append(int(visit["shipmentIndex"]))
+    index = routing.Start(0)
+    while not routing.IsEnd(index):
+        ordine.append(manager.IndexToNode(index))
+        index = soluzione.Value(routing.NextVar(index))
+    ordine.append(manager.IndexToNode(index))
+    return ordine, None
 
-    if len(ordine) != len(df_giro):
-        raise RuntimeError(f"Risposta incompleta: {len(ordine)} tappe su {len(df_giro)}.")
 
-    df_ott = df_giro.reset_index(drop=True).iloc[ordine].copy().reset_index(drop=True)
-    df_ott["POSIZIONE"] = [str(i) for i in range(1, len(df_ott) + 1)]
+def _ottimizza_fallback(distanze, durate, n_clienti):
+    """Fallback senza OR-Tools: nearest-neighbour + 2-opt.
+    Mantiene comunque partenza e ritorno al deposito.
+    """
+    non_visitati = set(range(1, n_clienti + 1))
+    ordine = [0]
+    while non_visitati:
+        corrente = ordine[-1]
+        prossimo = min(
+            non_visitati,
+            key=lambda j: (10**12 if distanze[corrente][j] is None else float(distanze[corrente][j]) + float(durate[corrente][j] or 0) * 10)
+        )
+        ordine.append(prossimo)
+        non_visitati.remove(prossimo)
+    ordine.append(0)
 
-    rm = routes[0].get("metrics", {})
-    return df_ott, {
-        "fermate": len(df_ott),
-        "totale_distanza_m": rm.get("travelDistanceMeters"),
-        "totale_durata": rm.get("travelDuration"),
-        "deposito": depot_label
+    def costo(seq):
+        totale = 0.0
+        for a, b in zip(seq[:-1], seq[1:]):
+            if distanze[a][b] is None or durate[a][b] is None:
+                return float("inf")
+            totale += float(distanze[a][b]) + float(durate[a][b]) * 10.0
+        return totale
+
+    migliorato = True
+    while migliorato:
+        migliorato = False
+        migliore_costo = costo(ordine)
+        # Il deposito resta fisso alle estremita'.
+        for i in range(1, len(ordine) - 2):
+            for j in range(i + 1, len(ordine) - 1):
+                candidato = ordine[:i] + ordine[i:j + 1][::-1] + ordine[j + 1:]
+                costo_candidato = costo(candidato)
+                if costo_candidato + 0.01 < migliore_costo:
+                    ordine = candidato
+                    migliore_costo = costo_candidato
+                    migliorato = True
+        
+    return ordine
+
+
+def ottimizza_giro_free(df_giro):
+    """Ottimizza il giro reale su strada, ignorando completamente ORA."""
+    if df_giro is None or df_giro.empty:
+        raise ValueError("Il giro è vuoto.")
+    if len(df_giro) > 99:
+        raise ValueError("Il giro contiene più di 99 fermate: il servizio OSRM pubblico non è adatto a questo volume in una singola matrice.")
+
+    df_originale = df_giro.copy().reset_index(drop=True)
+    indirizzi = [DEPOSITO_VANGO] + [_indirizzo_riga(row) for _, row in df_originale.iterrows()]
+
+    coordinate = []
+    indirizzi_non_trovati = []
+    for idx, indirizzo in enumerate(indirizzi):
+        if not indirizzo.strip():
+            indirizzi_non_trovati.append("Deposito" if idx == 0 else f"Fermata {idx}")
+            continue
+        risultato = _geocodifica_free(indirizzo)
+        if risultato is None:
+            indirizzi_non_trovati.append(indirizzo)
+        else:
+            coordinate.append((risultato["lat"], risultato["lon"]))
+
+    if indirizzi_non_trovati:
+        elenco = "\n".join(f"- {x}" for x in indirizzi_non_trovati[:8])
+        if len(indirizzi_non_trovati) > 8:
+            elenco += f"\n- ... e altre {len(indirizzi_non_trovati) - 8}"
+        raise ValueError("Non riesco a geolocalizzare alcuni indirizzi con OpenStreetMap:\n" + elenco)
+
+    distanze, durate = _richiedi_matrice_osrm(coordinate)
+
+    ordine_originale = [0] + list(range(1, len(df_originale) + 1)) + [0]
+    km_originali, minuti_originali = _percorso_da_indici(ordine_originale, distanze, durate)
+
+    ordine_ottimizzato, errore_ortools = _ottimizza_con_ortools(distanze, durate, len(df_originale))
+    metodo = "OR-Tools + OSRM"
+    if ordine_ottimizzato is None:
+        ordine_ottimizzato = _ottimizza_fallback(distanze, durate, len(df_originale))
+        metodo = "Fallback locale + OSRM"
+
+    km_ottimizzati, secondi_ottimizzati = _percorso_da_indici(ordine_ottimizzato, distanze, durate)
+
+    # Rimuove deposito iniziale/finale e converte gli indici matrice in righe DF.
+    indici_clienti = [i - 1 for i in ordine_ottimizzato if i != 0]
+    df_ottimizzato = df_originale.iloc[indici_clienti].reset_index(drop=True).copy()
+    df_ottimizzato["POSIZIONE"] = [str(i) for i in range(1, len(df_ottimizzato) + 1)]
+
+    metriche = {
+        "metodo": metodo,
+        "fermate": len(df_originale),
+        "km_originali": km_originali / 1000.0,
+        "min_originali": minuti_originali / 60.0,
+        "km_ottimizzati": km_ottimizzati / 1000.0,
+        "min_ottimizzati": secondi_ottimizzati / 60.0,
+        "risparmio_km": (km_originali - km_ottimizzati) / 1000.0,
+        "risparmio_min": (minuti_originali - secondi_ottimizzati) / 60.0,
+        "errore_ortools": errore_ortools,
     }
-
+    return df_ottimizzato, metriche
 
 # Inizializzazione Connessione Google Sheets tramite Streamlit Secrets
 @st.cache_resource
@@ -540,6 +641,12 @@ if 'clienti_selezionati_m' not in st.session_state:
 
 if 'vista_pulita' not in st.session_state:
     st.session_state.vista_pulita = False
+
+if 'giro_ottimizzato_proposto' not in st.session_state:
+    st.session_state.giro_ottimizzato_proposto = None
+
+if 'metriche_ottimizzazione' not in st.session_state:
+    st.session_state.metriche_ottimizzazione = None
 
 if "nav" in st.query_params and st.query_params["nav"] == "login":
     st.session_state.pagina_attiva = "login"
@@ -840,6 +947,8 @@ else:
                 st.session_state.giro_corrente = st.session_state.giro_corrente.iloc[::-1].reset_index(drop=True)
                 st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
                 salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
+                st.session_state.giro_ottimizzato_proposto = None
+                st.session_state.metriche_ottimizzazione = None
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -849,58 +958,68 @@ else:
             if not st.session_state.giro_corrente.empty:
                 st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
                 salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
+                st.session_state.giro_ottimizzato_proposto = None
+                st.session_state.metriche_ottimizzazione = None
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
     with col_act3:
         st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-        if st.button("🧠 OTTIMIZZA GIRO", use_container_width=True, key="btn_ottimizza_giro"):
+        if st.button("🧠 OTTIMIZZA GIRO", use_container_width=True, key="btn_ottimizza"):
             if st.session_state.giro_corrente.empty:
-                st.warning("Non ci sono fermate da ottimizzare.")
+                st.warning("⚠️ Il giro è vuoto.")
+            elif len(st.session_state.giro_corrente) < 2:
+                st.info("ℹ️ Servono almeno 2 fermate per ottimizzare il giro.")
             else:
                 try:
-                    with st.spinner("🧠 Ottimizzazione del giro in corso..."):
-                        df_ott, metriche = ottimizza_giro_google(st.session_state.giro_corrente.copy())
-                    st.session_state.giro_ottimizzato_proposto = df_ott
-                    st.session_state.metriche_ottimizzazione = metriche
-                    st.success("Giro ottimizzato. Controlla l'anteprima prima di applicarlo.")
+                    with st.spinner("🧠 Analizzo indirizzi e percorso stradale..."):
+                        df_opt, metriche_opt = ottimizza_giro_free(st.session_state.giro_corrente)
+                    st.session_state.giro_ottimizzato_proposto = df_opt
+                    st.session_state.metriche_ottimizzazione = metriche_opt
+                    st.success("Giro ottimizzato pronto: controllalo e poi scegli se applicarlo.")
+                    st.rerun()
                 except Exception as e:
                     st.error(f"❌ Ottimizzazione non riuscita: {e}")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    if st.session_state.get("giro_ottimizzato_proposto") is not None:
-        df_proposto = st.session_state.giro_ottimizzato_proposto
-        st.markdown("---")
-        st.subheader("🧠 Anteprima Giro Ottimizzato")
-        st.info("Partenza e rientro: Dolciaria Acquaviva — Via Enrico Fermi 10, Burago di Molgora. ORA ignorata.")
-        st.dataframe(
-            df_proposto[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'Q.ta']],
-            hide_index=True,
-            use_container_width=True
-        )
-        metriche = st.session_state.get("metriche_ottimizzazione") or {}
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Fermate", metriche.get("fermate", len(df_proposto)))
-        distanza = metriche.get("totale_distanza_m")
-        c2.metric("Distanza", f"{float(distanza)/1000:.1f} km" if distanza is not None else "n/d")
-        c3.metric("Tempo", metriche.get("totale_durata", "n/d"))
+    st.markdown("<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
 
-        ca, cb = st.columns(2)
-        with ca:
+    # ==========================================
+    # ANTEPRIMA GIRO OTTIMIZZATO
+    # ==========================================
+    if st.session_state.giro_ottimizzato_proposto is not None:
+        df_proposto = st.session_state.giro_ottimizzato_proposto
+        m = st.session_state.metriche_ottimizzazione or {}
+        st.markdown("---")
+        st.subheader("🧠 Anteprima percorso ottimizzato")
+        st.caption("Start e fine giro: Dolciaria Acquaviva — Via Enrico Fermi 10, Burago di Molgora. Il campo ORA non viene usato per l'ottimizzazione.")
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Km", f"{m.get('km_ottimizzati', 0):.1f}", delta=f"{m.get('risparmio_km', 0):+.1f} km")
+        c2.metric("Tempo strada", f"{m.get('min_ottimizzati', 0):.0f} min", delta=f"{m.get('risparmio_min', 0):+.0f} min")
+        c3.metric("Fermate", f"{m.get('fermate', len(df_proposto))}")
+        c4.metric("Metodo", "FREE")
+
+        st.dataframe(
+            df_proposto[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']],
+            hide_index=True,
+            use_container_width=True,
+        )
+
+        col_applica, col_annulla = st.columns(2)
+        with col_applica:
             if st.button("✅ APPLICA GIRO OTTIMIZZATO", use_container_width=True, type="primary", key="btn_applica_ottimizzato"):
                 st.session_state.giro_corrente = df_proposto.copy()
                 salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
                 st.session_state.giro_ottimizzato_proposto = None
                 st.session_state.metriche_ottimizzazione = None
-                st.success("Giro ottimizzato applicato e salvato su Google Sheets.")
+                st.success("✅ Giro ottimizzato salvato su Google Sheets.")
                 st.rerun()
-        with cb:
+        with col_annulla:
             if st.button("❌ ANNULLA OTTIMIZZAZIONE", use_container_width=True, key="btn_annulla_ottimizzato"):
                 st.session_state.giro_ottimizzato_proposto = None
                 st.session_state.metriche_ottimizzazione = None
                 st.rerun()
-
-    st.markdown("<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
 
     # ==========================================
     # SCHERMATA 1: GIRO CONSEGNE
