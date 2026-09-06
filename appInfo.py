@@ -1347,6 +1347,26 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
                 st.error(f"Errore nel salvataggio del giro su Google Sheets: {e}")
                 break
 
+def elimina_cliente_dal_giro(idx):
+    """Elimina una sola fermata dal giro corrente e aggiorna GiroAttivo.
+
+    Il cliente resta nel database Foglio1: viene rimosso solo dal giro corrente.
+    """
+    df = st.session_state.giro_corrente.copy()
+    if df.empty or idx < 0 or idx >= len(df):
+        return
+    cliente = str(df.iloc[idx].get("CLIENTE", "Cliente"))
+    df = df.drop(df.index[idx]).reset_index(drop=True)
+    df["POSIZIONE"] = [str(i) for i in range(1, len(df) + 1)]
+    st.session_state.giro_corrente = df
+    st.session_state.giro_ottimizzato_proposto = None
+    st.session_state.metriche_ottimizzazione = None
+    st.session_state.conferma_eliminazione_idx = None
+    salva_giro_utente_su_sheets(st.session_state.utente_corrente, df)
+    st.session_state.cliente_eliminato_messaggio = f"🗑️ {cliente} eliminato dal giro."
+    st.rerun()
+
+
 # Inizializzazione dati di sessione.
 if 'autenticato' not in st.session_state:
     st.session_state.autenticato = False
@@ -1371,6 +1391,10 @@ if 'db_clienti' not in st.session_state:
 
 if 'utenti_sistema' not in st.session_state:
     st.session_state.utenti_sistema = carica_utenti_da_sheets()
+
+if st.session_state.cliente_eliminato_messaggio:
+    st.success(st.session_state.cliente_eliminato_messaggio)
+    st.session_state.cliente_eliminato_messaggio = None
 
 # Ripristina il login dal localStorage del singolo browser/dispositivo.
 # Il componente browser è asincrono: al primo render può non aver ancora
@@ -1412,6 +1436,12 @@ if 'giro_ottimizzato_proposto' not in st.session_state:
 
 if 'metriche_ottimizzazione' not in st.session_state:
     st.session_state.metriche_ottimizzazione = None
+
+if 'conferma_eliminazione_idx' not in st.session_state:
+    st.session_state.conferma_eliminazione_idx = None
+
+if 'cliente_eliminato_messaggio' not in st.session_state:
+    st.session_state.cliente_eliminato_messaggio = None
 
 if "nav" in st.query_params and st.query_params["nav"] == "login":
     st.session_state.pagina_attiva = "login"
@@ -1878,6 +1908,21 @@ else:
                     </div>
                     """, unsafe_allow_html=True)
 
+                    if st.button("🗑️ ELIMINA CLIENTE", use_container_width=True, key=f"elimina_pulita_{idx}_{row['CLIENTE']}"):
+                        st.session_state.conferma_eliminazione_idx = idx
+                        st.rerun()
+
+                    if st.session_state.conferma_eliminazione_idx == idx:
+                        st.warning(f"Eliminare {row['CLIENTE']} dal giro?")
+                        c_ok, c_no = st.columns(2)
+                        with c_ok:
+                            if st.button("✅ CONFERMA", use_container_width=True, key=f"conferma_elimina_pulita_{idx}"):
+                                elimina_cliente_dal_giro(idx)
+                        with c_no:
+                            if st.button("❌ ANNULLA", use_container_width=True, key=f"annulla_elimina_pulita_{idx}"):
+                                st.session_state.conferma_eliminazione_idx = None
+                                st.rerun()
+
                 st.markdown("---")
                 st.markdown(f'''
                     <a href="{maps_url}" target="_blank" style="text-decoration:none;">
@@ -1898,7 +1943,7 @@ else:
                     </div>
                     """, unsafe_allow_html=True)
 
-                    col_c1, col_c2, col_c3 = st.columns([1, 1, 1])
+                    col_c1, col_c2, col_c3, col_c4 = st.columns([1, 1, 1, 1])
                     
                     with col_c1:
                         dest = urllib.parse.quote(f"{row['VIA']}, {row['COMUNE']}")
@@ -1938,6 +1983,22 @@ else:
                             st.session_state.giro_corrente = df_nuovo
                             salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
                             st.rerun()
+
+                    with col_c4:
+                        if st.button("🗑️ ELIMINA", use_container_width=True, key=f"elimina_operativa_{idx}_{row['CLIENTE']}"):
+                            st.session_state.conferma_eliminazione_idx = idx
+                            st.rerun()
+
+                        if st.session_state.conferma_eliminazione_idx == idx:
+                            st.warning(f"Eliminare {row['CLIENTE']} dal giro?")
+                            c_ok, c_no = st.columns(2)
+                            with c_ok:
+                                if st.button("✅ CONFERMA", use_container_width=True, key=f"conferma_elimina_operativa_{idx}"):
+                                    elimina_cliente_dal_giro(idx)
+                            with c_no:
+                                if st.button("❌ ANNULLA", use_container_width=True, key=f"annulla_elimina_operativa_{idx}"):
+                                    st.session_state.conferma_eliminazione_idx = None
+                                    st.rerun()
 
                     st.markdown("<hr style='margin: 10px 0; border-color: #262626;'>", unsafe_allow_html=True)
 
