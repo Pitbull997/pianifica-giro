@@ -357,6 +357,95 @@ def _richiedi_matrice_osrm(coordinate):
     return distanze, durate
 
 
+def diagnostica_osrm_caso_victor(df_giro, df_db=None):
+    """Confronta il caso reale Victor/Volturno/Daimler/San Gregorio/Novate.
+    Non modifica e non salva il giro. Usa le stesse coordinate e OSRM di V9.
+    """
+    if df_giro is None or df_giro.empty:
+        raise ValueError("Il giro è vuoto.")
+
+    nomi = {
+        "VICTOR": "Via Benedetto Marcello 91",
+        "VOLTURNO": "Via Volturno 42",
+        "DAIMLER": "Via Gottlieb Wilhelm Daimler 61",
+        "SAN GREGORIO": "Via S. Gregorio 20",
+        "NOVATE": "Via Repubblica 6",
+    }
+
+    def norm(v):
+        import unicodedata
+        x = unicodedata.normalize("NFKD", str(v or "")).encode("ascii", "ignore").decode().lower()
+        return " ".join(x.replace(",", " ").split())
+
+    trovati = {}
+    for idx, (_, row) in enumerate(df_giro.iterrows(), start=1):
+        via = norm(row.get("VIA", ""))
+        for nome, indirizzo in nomi.items():
+            if nome not in trovati and norm(indirizzo) in via:
+                trovati[nome] = idx
+
+    mancanti = [k for k in nomi if k not in trovati]
+    if mancanti:
+        raise ValueError("Nel giro non trovo: " + ", ".join(mancanti))
+
+    # Costruisce le coordinate nello stesso modo dell'ottimizzatore V9.
+    coordinate = [COORDINATE_DEPOSITO_VANGO]
+    for _, row in df_giro.iterrows():
+        coord = _trova_coordinate_nel_db(row, df_db)
+        if coord is None:
+            risultato = _geocodifica_free(_indirizzo_riga(row))
+            if risultato is not None:
+                coord = (risultato["lat"], risultato["lon"])
+        if coord is None:
+            raise ValueError(f"Coordinate mancanti per: {_indirizzo_riga(row)}")
+        coordinate.append(coord)
+
+    distanze, durate = _richiedi_matrice_osrm(coordinate)
+
+    # Gli indici della matrice OSRM sono: 0=deposito, 1=prima fermata, ...
+    idx = {nome: trovati[nome] for nome in nomi}
+    a = [idx["VICTOR"], idx["VOLTURNO"], idx["DAIMLER"], idx["SAN GREGORIO"], idx["NOVATE"]]
+    b = [idx["VICTOR"], idx["SAN GREGORIO"], idx["VOLTURNO"], idx["DAIMLER"], idx["NOVATE"]]
+
+    def dettagli(ordine):
+        righe = []
+        km = 0.0
+        sec = 0.0
+        costo = 0.0
+        for x, y in zip(ordine[:-1], ordine[1:]):
+            d = float(distanze[x][y])
+            t = float(durate[x][y])
+            km += d
+            sec += t
+            costo += d + t * 10.0
+            righe.append((x, y, d / 1000.0, t / 60.0, d + t * 10.0))
+        return righe, km / 1000.0, sec / 60.0, costo
+
+    da, kma, mina, ca = dettagli(a)
+    dbb, kmb, minb, cb = dettagli(b)
+
+    etichette = {
+        idx["VICTOR"]: "Victor", idx["VOLTURNO"]: "Volturno",
+        idx["DAIMLER"]: "Daimler", idx["SAN GREGORIO"]: "San Gregorio",
+        idx["NOVATE"]: "Novate"
+    }
+    def tab(righe):
+        return [{
+            "Da": etichette.get(x, f"fermata {x}"),
+            "A": etichette.get(y, f"fermata {y}"),
+            "km": round(km, 2),
+            "min": round(minuti, 1),
+            "costo V9": round(c, 1),
+        } for x, y, km, minuti, c in righe]
+
+    return {
+        "vango": {"km": kma, "min": mina, "costo": ca, "tratte": tab(da)},
+        "alternativa": {"km": kmb, "min": minb, "costo": cb, "tratte": tab(dbb)},
+        "risparmio_alternativa_min": mina - minb,
+        "risparmio_alternativa_km": kma - kmb,
+    }
+
+
 def _percorso_da_indici(indici, distanze, durate):
     totale_m = 0.0
     totale_s = 0.0
@@ -1778,6 +1867,33 @@ else:
         st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
+
+    if st.button("🔬 DIAGNOSTICA OSRM — VICTOR / VOLTURNO / DAIMLER / SAN GREGORIO", use_container_width=True, key="btn_diagnostica_osrm"):
+        try:
+            with st.spinner("🔬 Confronto le due sequenze direttamente con OSRM..."):
+                diag = diagnostica_osrm_caso_victor(st.session_state.giro_corrente, st.session_state.db_clienti)
+            st.subheader("🔬 Diagnostica OSRM")
+            st.caption("Test non salva e non modifica il giro. Il costo è quello usato da V9: distanza + tempo × 10.")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**A — ordine attuale Vango**")
+                st.write("Victor → Volturno → Daimler → San Gregorio → Novate")
+                st.metric("Tempo OSRM", f"{diag['vango']['min']:.1f} min")
+                st.metric("Distanza OSRM", f"{diag['vango']['km']:.2f} km")
+                st.metric("Costo V9", f"{diag['vango']['costo']:.0f}")
+            with c2:
+                st.markdown("**B — ordine alternativo**")
+                st.write("Victor → San Gregorio → Volturno → Daimler → Novate")
+                st.metric("Tempo OSRM", f"{diag['alternativa']['min']:.1f} min")
+                st.metric("Distanza OSRM", f"{diag['alternativa']['km']:.2f} km")
+                st.metric("Costo V9", f"{diag['alternativa']['costo']:.0f}")
+            if diag["alternativa"]["costo"] < diag["vango"]["costo"]:
+                st.success(f"✅ OSRM considera migliore l'alternativa: {diag['risparmio_alternativa_min']:.1f} min e {diag['risparmio_alternativa_km']:.2f} km in meno.")
+            else:
+                st.warning(f"⚠️ Secondo OSRM l'ordine Vango resta migliore per il costo attuale. Differenza tempo: {diag['risparmio_alternativa_min']:.1f} min.")
+            st.dataframe(pd.DataFrame(diag["vango"]["tratte"] + diag["alternativa"]["tratte"]), hide_index=True, use_container_width=True)
+        except Exception as e:
+            st.error(f"❌ Diagnostica non riuscita: {e}")
 
     # ==========================================
     # ANTEPRIMA GIRO OTTIMIZZATO
