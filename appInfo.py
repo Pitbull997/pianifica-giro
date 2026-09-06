@@ -530,6 +530,94 @@ def _ottimizza_fallback(distanze, durate, n_clienti, gruppi=None, penalita_grupp
     return ordine
 
 
+
+def _metriche_gruppamento_ordine(ordine, gruppi):
+    """Restituisce cambi ZONA e rientri in una ZONA già abbandonata."""
+    seq = []
+    for idx in ordine:
+        if idx == 0:
+            continue
+        g = gruppi[idx] if idx < len(gruppi) else None
+        if g is not None:
+            seq.append(g)
+    cambi = 0
+    rientri = 0
+    viste = set()
+    precedente = None
+    for g in seq:
+        if precedente is not None and g != precedente:
+            cambi += 1
+            if g in viste:
+                rientri += 1
+        viste.add(g)
+        precedente = g
+    return cambi, rientri, seq
+
+
+def _costo_base_ordine(ordine, distanze, durate):
+    totale = 0.0
+    for a, b in zip(ordine[:-1], ordine[1:]):
+        d = distanze[a][b]
+        t = durate[a][b]
+        if d is None or t is None:
+            return float("inf")
+        totale += float(d) + float(t) * 10.0
+    return totale
+
+
+def _ottimizza_a_blocchi_zona(distanze, durate, n_clienti, gruppi):
+    """Costruisce un candidato con ogni macro-ZONA in un blocco contiguo."""
+    gruppi_validi = {}
+    for i in range(1, n_clienti + 1):
+        g = gruppi[i] if i < len(gruppi) else None
+        if g is not None:
+            gruppi_validi.setdefault(g, []).append(i)
+
+    senza_zona = [i for i in range(1, n_clienti + 1) if i not in {x for v in gruppi_validi.values() for x in v}]
+    ordine = [0]
+    corrente = 0
+
+    # Prima le ZONA: ad ogni passo scegliamo il gruppo la cui fermata più vicina
+    # è più vicina al punto corrente. Una volta entrati, completiamo il blocco.
+    rimanenti = {g: list(v) for g, v in gruppi_validi.items()}
+    while rimanenti:
+        g_scelto = min(
+            rimanenti,
+            key=lambda g: min(
+                (float(distanze[corrente][j]) + float(durate[corrente][j]) * 10.0)
+                if distanze[corrente][j] is not None and durate[corrente][j] is not None else 10**15
+                for j in rimanenti[g]
+            )
+        )
+        da_visitare = set(rimanenti.pop(g_scelto))
+        while da_visitare:
+            prossimo = min(
+                da_visitare,
+                key=lambda j: (
+                    float(distanze[corrente][j]) + float(durate[corrente][j]) * 10.0
+                    if distanze[corrente][j] is not None and durate[corrente][j] is not None else 10**15
+                )
+            )
+            ordine.append(prossimo)
+            corrente = prossimo
+            da_visitare.remove(prossimo)
+
+    # Eventuali fermate senza ZONA vengono lasciate in coda.
+    while senza_zona:
+        prossimo = min(
+            senza_zona,
+            key=lambda j: (
+                float(distanze[corrente][j]) + float(durate[corrente][j]) * 10.0
+                if distanze[corrente][j] is not None and durate[corrente][j] is not None else 10**15
+            )
+        )
+        ordine.append(prossimo)
+        corrente = prossimo
+        senza_zona.remove(prossimo)
+
+    ordine.append(0)
+    return ordine
+
 def ottimizza_giro_free(df_giro, df_db=None, forza_gruppamento_zona=75):
     """Ottimizza il giro reale su strada, ignorando completamente ORA.
 
@@ -597,17 +685,48 @@ def ottimizza_giro_free(df_giro, df_db=None, forza_gruppamento_zona=75):
     ordine_originale = [0] + list(range(1, len(df_originale) + 1)) + [0]
     km_originali, minuti_originali = _percorso_da_indici(ordine_originale, distanze, durate)
 
-    ordine_ottimizzato, errore_ortools = _ottimizza_con_ortools(
-        distanze, durate, len(df_originale), gruppi=gruppi, penalita_gruppo=penalita_gruppo
+    # Creiamo più candidati: percorso stradale puro, percorso con penalità ZONA
+    # e un percorso a blocchi. Poi scegliamo in base alla forza richiesta.
+    candidati = []
+    ordine_puro, errore_ortools = _ottimizza_con_ortools(
+        distanze, durate, len(df_originale), gruppi=[None] * (len(df_originale) + 1), penalita_gruppo=0.0
     )
-    metodo = "OR-Tools + OSRM + gruppi ZONA" if gruppi_presenti else "OR-Tools + OSRM"
-    if ordine_ottimizzato is None:
+    if ordine_puro is not None:
+        candidati.append(("OR-Tools + OSRM", ordine_puro))
+
+    if gruppi_presenti and forza_gruppamento_zona > 0:
+        for moltiplicatore in (4.0, 10.0, 20.0):
+            ordine_cand, err_cand = _ottimizza_con_ortools(
+                distanze, durate, len(df_originale), gruppi=gruppi,
+                penalita_gruppo=penalita_base * (forza_gruppamento_zona / 100.0) * moltiplicatore
+            )
+            if ordine_cand is not None:
+                candidati.append((f"OR-Tools + OSRM + ZONA x{moltiplicatore:g}", ordine_cand))
+
+        ordine_blocchi = _ottimizza_a_blocchi_zona(distanze, durate, len(df_originale), gruppi)
+        candidati.append(("Ottimizzazione a blocchi ZONA", ordine_blocchi))
+
+    if not candidati:
         ordine_ottimizzato = _ottimizza_fallback(
             distanze, durate, len(df_originale), gruppi=gruppi, penalita_gruppo=penalita_gruppo
         )
         metodo = "Fallback locale + OSRM + gruppi ZONA" if gruppi_presenti else "Fallback locale + OSRM"
+    else:
+        # La scala della penalità viene rapportata al costo medio di una tratta,
+        # così il 0-100% resta leggibile anche con giri di dimensioni diverse.
+        costo_medio = max(1.0, _costo_base_ordine(candidati[0][1], distanze, durate) / max(1, len(df_originale) + 1))
+        forza = forza_gruppamento_zona / 100.0
+        def score_candidato(item):
+            nome, ordine = item
+            base = _costo_base_ordine(ordine, distanze, durate)
+            cambi, rientri, _ = _metriche_gruppamento_ordine(ordine, gruppi)
+            penalita = forza * costo_medio * (cambi + 2.0 * rientri) * 2.0
+            return base + penalita
+        nome_scelto, ordine_ottimizzato = min(candidati, key=score_candidato)
+        metodo = nome_scelto
 
     km_ottimizzati, secondi_ottimizzati = _percorso_da_indici(ordine_ottimizzato, distanze, durate)
+    cambi_zona, rientri_zona, sequenza_zona = _metriche_gruppamento_ordine(ordine_ottimizzato, gruppi)
 
     indici_clienti = [i - 1 for i in ordine_ottimizzato if i != 0]
     df_ottimizzato = df_originale.iloc[indici_clienti].reset_index(drop=True).copy()
@@ -626,6 +745,9 @@ def ottimizza_giro_free(df_giro, df_db=None, forza_gruppamento_zona=75):
         "gruppi_zona": len(gruppi_presenti),
         "penalita_gruppo": penalita_gruppo,
         "forza_gruppamento_zona": forza_gruppamento_zona,
+        "cambi_zona": cambi_zona,
+        "rientri_zona": rientri_zona,
+        "sequenza_zona": sequenza_zona,
         "coordinate_da_salvare": coordinate_da_salvare,
     }
     return df_ottimizzato, metriche
@@ -1384,6 +1506,11 @@ else:
         st.subheader("🧠 Anteprima percorso ottimizzato")
         st.caption("Start e fine giro: Dolciaria Acquaviva — Via Enrico Fermi 10, Burago di Molgora. Il campo ORA non viene usato per l'ottimizzazione.")
         st.info(f"🎯 Forza raggruppamento ZONA usata: **{m.get('forza_gruppamento_zona', st.session_state.forza_gruppamento_zona)}%**")
+        seq_zona = m.get("sequenza_zona", [])
+        if seq_zona:
+            st.caption(f"🗺️ Sequenza ZONA: **{' → '.join(map(str, seq_zona))}**  |  Cambi ZONA: **{m.get('cambi_zona', 0)}**  |  Rientri: **{m.get('rientri_zona', 0)}**")
+        elif m.get("gruppi_zona", 0) == 0:
+            st.warning("⚠️ Nessuna ZONA disponibile per le fermate di questo giro: la percentuale non può influire sul percorso.")
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Km", f"{m.get('km_ottimizzati', 0):.1f}", delta=f"{m.get('risparmio_km', 0):+.1f} km")
