@@ -1705,10 +1705,10 @@ else:
 
     st.session_state.forza_gruppamento_zona = st.select_slider(
         "🎯 Forza raggruppamento ZONA",
-        options=[0, 25, 50, 100],
-        value=int(st.session_state.forza_gruppamento_zona) if int(st.session_state.forza_gruppamento_zona) in [0, 25, 50, 100] else 50,
+        options=[0, 25, 50, 75, 100],
+        value=int(st.session_state.forza_gruppamento_zona) if int(st.session_state.forza_gruppamento_zona) in [0, 25, 50, 75, 100] else 50,
         format_func=lambda x: f"{x}%",
-        help="0% = strada libera. 25% = ZONA leggera. 50% = compromesso. 100% = ordine ZONA obbligatorio e clienti ottimizzati dentro ogni ZONA.",
+        help="0% = strada libera. 25% = ZONA leggera. 50% = compromesso. 75% = ZONA prioritarie. 100% = ordine ZONA obbligatorio e clienti ottimizzati dentro ogni ZONA.",
     )
     if st.session_state.forza_gruppamento_zona == 0:
         st.caption("Forza attuale: **0%** — ZONA completamente ignorata: ottimizzo solo la strada.")
@@ -1716,6 +1716,8 @@ else:
         st.caption("Forza attuale: **25%** — leggera preferenza per restare nelle stesse ZONA, ma le ZONA possono mescolarsi.")
     elif st.session_state.forza_gruppamento_zona == 50:
         st.caption("Forza attuale: **50%** — compromesso strada + ZONA: le ZONA possono mescolarsi se conviene al percorso.")
+    elif st.session_state.forza_gruppamento_zona == 75:
+        st.caption("Forza attuale: **75%** — ZONA molto prioritarie: il percorso tende a completare le ZONA prima di passare alla successiva, ma può ancora privilegiare la strada.")
     else:
         st.caption("Forza attuale: **100%** — ordine macro-ZONA obbligatorio (1 → 2 → 3 → ...); clienti ottimizzati dentro ogni ZONA.")
 
