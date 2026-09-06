@@ -388,32 +388,67 @@ def _gruppo_da_zona(valore):
         return None
 
 
+def _normalizza_chiave_testo(valore):
+    """Normalizza testi per confronti robusti tra GiroAttivo e Foglio1."""
+    import unicodedata, re
+    x = "" if valore is None else str(valore)
+    x = unicodedata.normalize("NFKD", x).encode("ascii", "ignore").decode("ascii")
+    x = x.casefold().strip()
+    x = re.sub(r"[.,;:/\\\-]+", " ", x)
+    x = re.sub(r"\s+", " ", x)
+    return x
+
 def _gruppi_fermate(df_giro, df_db):
-    """Restituisce il macro-gruppo ZONA per ogni fermata del giro.
+    """Recupera il macro-gruppo ZONA in modo robusto dal Foglio1.
 
-    La colonna ZONA normalmente appartiene al Foglio1 e non viene copiata
-    nel GiroAttivo. Per questo la recuperiamo dal database usando CLIENTE +
-    VIA + COMUNE. Se ZONA e' gia' presente nel giro, viene usata direttamente.
+    Prima prova CLIENTE + VIA + COMUNE. Se non trova la riga, prova VIA +
+    COMUNE. Questo evita che una piccola differenza nel nome cliente faccia
+    perdere la ZONA e quindi disattivi di fatto il raggruppamento.
     """
-    gruppi = []
-    for _, row in df_giro.iterrows():
-        valore = row.get('ZONA', None)
-        if (valore is None or str(valore).strip() == '') and df_db is not None and not df_db.empty:
-            cliente = str(row.get('CLIENTE', '')).strip().casefold()
-            via = str(row.get('VIA', '')).strip().casefold()
-            comune = str(row.get('COMUNE', '')).strip().casefold()
-            if 'CLIENTE' in df_db.columns and 'VIA' in df_db.columns and 'COMUNE' in df_db.columns and 'ZONA' in df_db.columns:
-                mask = (
-                    df_db['CLIENTE'].astype(str).str.strip().str.casefold().eq(cliente) &
-                    df_db['VIA'].astype(str).str.strip().str.casefold().eq(via) &
-                    df_db['COMUNE'].astype(str).str.strip().str.casefold().eq(comune)
-                )
-                candidati = df_db.loc[mask, 'ZONA']
-                if not candidati.empty:
-                    valore = candidati.iloc[0]
-        gruppi.append(_gruppo_da_zona(valore))
-    return gruppi
+    if df_giro is None or df_giro.empty:
+        return []
+    if df_db is None or df_db.empty or "ZONA" not in df_db.columns:
+        return [None] * len(df_giro)
 
+    db = df_db.copy()
+    for col in ["CLIENTE", "VIA", "COMUNE"]:
+        if col in db.columns:
+            db[f"__K_{col}"] = db[col].map(_normalizza_chiave_testo)
+
+    risultati = []
+    for _, row in df_giro.iterrows():
+        # Se ZONA e' gia' presente nel giro, e' la fonte piu' affidabile.
+        valore = row.get("ZONA", None)
+        if valore is not None and str(valore).strip() not in ("", "nan", "None"):
+            risultati.append(_gruppo_da_zona(valore))
+            continue
+
+        cliente = _normalizza_chiave_testo(row.get("CLIENTE", ""))
+        via = _normalizza_chiave_testo(row.get("VIA", ""))
+        comune = _normalizza_chiave_testo(row.get("COMUNE", ""))
+
+        valore_trovato = None
+        # 1) Chiave completa.
+        if all(c in db.columns for c in ["__K_CLIENTE", "__K_VIA", "__K_COMUNE"]):
+            mask = (db["__K_CLIENTE"].eq(cliente) & db["__K_VIA"].eq(via) & db["__K_COMUNE"].eq(comune))
+            candidati = db.loc[mask, "ZONA"]
+            if not candidati.empty:
+                valore_trovato = candidati.iloc[0]
+
+        # 2) Fallback fondamentale: VIA + COMUNE.
+        if valore_trovato is None and all(c in db.columns for c in ["__K_VIA", "__K_COMUNE"]):
+            mask = db["__K_VIA"].eq(via) & db["__K_COMUNE"].eq(comune)
+            candidati = db.loc[mask, "ZONA"].dropna()
+            if len(candidati) == 1:
+                valore_trovato = candidati.iloc[0]
+            elif len(candidati) > 1:
+                # Se ci sono piu' clienti allo stesso indirizzo, scegliamo la
+                # prima ZONA disponibile invece di perdere completamente il gruppo.
+                valore_trovato = candidati.iloc[0]
+
+        risultati.append(_gruppo_da_zona(valore_trovato))
+
+    return risultati
 
 def _calcola_penalita_gruppo(distanze):
     """Penalita' dinamica per preferire blocchi ZONA senza renderli rigidi.
@@ -633,6 +668,12 @@ def ottimizza_giro_free(df_giro, df_db=None, forza_gruppamento_zona=75):
         raise ValueError("Il giro contiene più di 99 fermate: il servizio OSRM pubblico non è adatto a questo volume in una singola matrice.")
 
     df_originale = df_giro.copy().reset_index(drop=True)
+
+    # Recuperiamo le ZONE prima della geocodifica: se il database e' corretto,
+    # ogni fermata deve poter essere associata a una macro-ZONA.
+    gruppi_clienti = _gruppi_fermate(df_originale, df_db)
+    gruppi_presenti_pre = sorted({g for g in gruppi_clienti if g is not None})
+
     coordinate = [COORDINATE_DEPOSITO_VANGO]
     indirizzi_non_trovati = []
     coordinate_da_salvare = {}
@@ -667,10 +708,9 @@ def ottimizza_giro_free(df_giro, df_db=None, forza_gruppamento_zona=75):
     distanze, durate = _richiedi_matrice_osrm(coordinate)
     forza_gruppamento_zona = max(0, min(100, int(forza_gruppamento_zona)))
 
-    # ZONA viene letta dal Foglio1 tramite CLIENTE + VIA + COMUNE.
-    gruppi_clienti = _gruppi_fermate(df_originale, df_db)
+    # ZONA e' stata recuperata in modo robusto prima della matrice OSRM.
     gruppi = [None] + gruppi_clienti
-    gruppi_presenti = sorted({g for g in gruppi_clienti if g is not None})
+    gruppi_presenti = gruppi_presenti_pre
     penalita_base = _calcola_penalita_gruppo(distanze)
     penalita_gruppo = penalita_base * (forza_gruppamento_zona / 100.0)
 
@@ -1474,7 +1514,12 @@ else:
         step=5,
         help="0% = ZONA ignorata. 100% = forte preferenza a completare un gruppo prima di passare al successivo. Non e' un vincolo rigido.",
     )
-    st.caption(f"Forza attuale: **{st.session_state.forza_gruppamento_zona}%** — piu' alta = maggiore preferenza a mantenere unite le fermate della stessa ZONA.")
+    if st.session_state.forza_gruppamento_zona == 0:
+        st.caption("Forza attuale: **0%** — ZONA completamente ignorata: ottimizzo solo la strada.")
+    elif st.session_state.forza_gruppamento_zona >= 95:
+        st.caption(f"Forza attuale: **{st.session_state.forza_gruppamento_zona}%** — massima priorita' ai blocchi ZONA.")
+    else:
+        st.caption(f"Forza attuale: **{st.session_state.forza_gruppamento_zona}%** — compromesso tra strada e raggruppamento ZONA.")
 
     col_act1, col_act2, col_act3 = st.columns(3)
 
