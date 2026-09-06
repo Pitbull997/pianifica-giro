@@ -140,6 +140,7 @@ def elimina_sessione_persistente():
 DEPOSITO_VANGO = "Dolciaria Acquaviva, Via Enrico Fermi, 10, Burago di Molgora, MB, Italia"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 PHOTON_URL = "https://photon.komoot.io/api/"
+ARCGIS_GEOCODER_URL = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates"
 OSRM_TABLE_URL = "https://router.project-osrm.org/table/v1/driving"
 
 # Coordinate verificate per il deposito fisso di VanGo.
@@ -148,30 +149,38 @@ COORDINATE_DEPOSITO_VANGO = (45.59085, 9.384842)
 
 @st.cache_data(ttl=60 * 60 * 24 * 30, show_spinner=False)
 def _geocodifica_free(indirizzo):
-    """Geocodifica gratuita e resiliente.
+    """Geocodifica gratuita con piu' fornitori e protezione dai limiti.
 
-    1) prova Nominatim/OpenStreetMap con piu' forme della stessa ricerca;
-    2) se Nominatim non restituisce risultati, prova Photon/OpenStreetMap.
+    Ordine:
+    1) Nominatim/OpenStreetMap con query strutturata e retry;
+    2) Photon/OpenStreetMap come secondo motore OSM;
+    3) ArcGIS World Geocoder come ulteriore fallback pubblico.
 
-    La cache riduce drasticamente il numero di richieste ripetute.
+    La cache per 30 giorni evita di ripetere le stesse richieste.
     """
     indirizzo = str(indirizzo or "").strip()
     if not indirizzo:
         return None
 
     headers = {
-        "User-Agent": "VanGo-GiroConsegne/2.1 (route optimizer)"
+        "User-Agent": "VanGo-GiroConsegne/2.2 (route optimizer; contact: vango)"
     }
 
-    # Nominatim: prima la stringa completa, poi versioni semplificate.
-    query_varianti = [indirizzo]
-    if ", Italia" in indirizzo:
-        query_varianti.append(indirizzo.replace(", Italia", ""))
-    if ", Italy" in indirizzo:
-        query_varianti.append(indirizzo.replace(", Italy", ""))
+    # Normalizza leggermente l'indirizzo per aumentare la compatibilita'.
+    indirizzo_base = indirizzo.replace(", Italia", "").replace(", Italy", "").strip()
+    query_varianti = list(dict.fromkeys([
+        indirizzo,
+        indirizzo_base,
+    ]))
 
-    for query in dict.fromkeys(query_varianti):
+    # ------------------------------------------------------------
+    # 1) NOMINATIM - un'unica richiesta per variante, rispettando
+    #    il limite pubblico di circa 1 richiesta/secondo.
+    # ------------------------------------------------------------
+    for n, query in enumerate(query_varianti):
         try:
+            if n > 0:
+                time.sleep(1.2)
             params = {
                 "q": query,
                 "format": "jsonv2",
@@ -180,7 +189,7 @@ def _geocodifica_free(indirizzo):
                 "addressdetails": 1,
             }
             response = requests.get(
-                NOMINATIM_URL, params=params, headers=headers, timeout=15
+                NOMINATIM_URL, params=params, headers=headers, timeout=12
             )
             if response.status_code == 200:
                 risultati = response.json()
@@ -189,28 +198,69 @@ def _geocodifica_free(indirizzo):
                         "lat": float(risultati[0]["lat"]),
                         "lon": float(risultati[0]["lon"]),
                         "display_name": risultati[0].get("display_name", query),
+                        "provider": "Nominatim",
                     }
         except Exception:
             pass
 
-    # Fallback gratuito: Photon (dati OpenStreetMap).
+    # ------------------------------------------------------------
+    # 2) PHOTON - secondo motore basato su OpenStreetMap.
+    #    Proviamo la stringa completa e quella semplificata.
+    # ------------------------------------------------------------
+    for query in query_varianti:
+        try:
+            response = requests.get(
+                PHOTON_URL,
+                params={"q": query, "limit": 1, "lang": "it"},
+                headers=headers,
+                timeout=12,
+            )
+            if response.status_code == 200:
+                features = response.json().get("features", [])
+                if features:
+                    coords = features[0].get("geometry", {}).get("coordinates", [])
+                    if len(coords) >= 2:
+                        props = features[0].get("properties", {})
+                        return {
+                            "lat": float(coords[1]),
+                            "lon": float(coords[0]),
+                            "display_name": props.get("name", query),
+                            "provider": "Photon",
+                        }
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------
+    # 3) ARCGIS - fallback ulteriore senza usare Google Maps API.
+    #    L'endpoint pubblico e' usato solo per trovare la posizione.
+    # ------------------------------------------------------------
     try:
         response = requests.get(
-            PHOTON_URL,
-            params={"q": indirizzo, "limit": 1, "lang": "it"},
+            ARCGIS_GEOCODER_URL,
+            params={
+                "SingleLine": indirizzo_base,
+                "countryCode": "ITA",
+                "maxLocations": 1,
+                "outFields": "Match_addr,Addr_type",
+                "forStorage": "false",
+                "f": "json",
+            },
             headers=headers,
-            timeout=15,
+            timeout=12,
         )
         if response.status_code == 200:
-            features = response.json().get("features", [])
-            if features:
-                coords = features[0].get("geometry", {}).get("coordinates", [])
-                if len(coords) >= 2:
-                    props = features[0].get("properties", {})
+            candidati = response.json().get("candidates", [])
+            if candidati:
+                candidato = candidati[0]
+                posizione = candidato.get("location", {})
+                x = posizione.get("x")
+                y = posizione.get("y")
+                if x is not None and y is not None:
                     return {
-                        "lat": float(coords[1]),
-                        "lon": float(coords[0]),
-                        "display_name": props.get("name", indirizzo),
+                        "lat": float(y),
+                        "lon": float(x),
+                        "display_name": candidato.get("address", indirizzo),
+                        "provider": "ArcGIS",
                     }
     except Exception:
         pass
