@@ -671,39 +671,117 @@ def _ordine_blocchi_da_sequenza_gruppi(distanze, durate, gruppi, sequenza_gruppi
 
 
 def _ottimizza_a_blocchi_zona(distanze, durate, n_clienti, gruppi):
-    """Genera più percorsi a blocchi ZONA e restituisce il migliore su strada."""
+    """Ottimizzazione a DUE LIVELLI.
+
+    Livello 1: decide l'ordine delle macro-ZONE.
+    Livello 2: dentro ogni macro-ZONA ottimizza le fermate sulla strada.
+
+    La ZONA non puo' essere spezzata: una volta terminato un blocco non si
+    torna piu' a quel blocco. Questo e' il comportamento richiesto al 100%.
+    """
+    from itertools import permutations
+
     gruppi_validi = sorted({gruppi[i] for i in range(1, n_clienti + 1)
                              if i < len(gruppi) and gruppi[i] is not None})
     if not gruppi_validi:
         return [0] + list(range(1, n_clienti + 1)) + [0]
 
-    membri = {g: [i for i in range(1, n_clienti + 1) if gruppi[i] == g] for g in gruppi_validi}
+    membri = {
+        g: [i for i in range(1, n_clienti + 1)
+            if i < len(gruppi) and gruppi[i] == g]
+        for g in gruppi_validi
+    }
 
-    # Generiamo più ordini di macro-ZONE. Tutti mantengono le ZONE in blocchi;
-    # cambia solo quale blocco viene visitato prima.
+    def costo(a, b):
+        return _costo_arco_base(a, b, distanze, durate)
+
+    def ottimizza_blocco(membri_blocco, ingresso):
+        """Trova un buon ordine stradale per un singolo blocco ZONA."""
+        if len(membri_blocco) <= 1:
+            return list(membri_blocco)
+
+        non_visitati = set(membri_blocco)
+        ordine = []
+        corrente = ingresso
+        while non_visitati:
+            prossimo = min(non_visitati, key=lambda j: costo(corrente, j))
+            ordine.append(prossimo)
+            non_visitati.remove(prossimo)
+            corrente = prossimo
+
+        # 2-opt solo dentro il blocco: non puo' spostare una fermata fuori ZONA.
+        migliorato = True
+        while migliorato and len(ordine) >= 3:
+            migliorato = False
+            migliore = costo(ingresso, ordine[0])
+            migliore += sum(costo(a, b) for a, b in zip(ordine[:-1], ordine[1:]))
+
+            for i in range(len(ordine) - 1):
+                for j in range(i + 1, len(ordine)):
+                    cand = ordine[:i] + ordine[i:j + 1][::-1] + ordine[j + 1:]
+                    val = costo(ingresso, cand[0])
+                    val += sum(costo(a, b) for a, b in zip(cand[:-1], cand[1:]))
+                    if val + 0.01 < migliore:
+                        ordine = cand
+                        migliore = val
+                        migliorato = True
+                        break
+                if migliorato:
+                    break
+        return ordine
+
+    def costruisci(seq_zone):
+        ordine = [0]
+        corrente = 0
+        for g in seq_zone:
+            blocco = ottimizza_blocco(membri[g], corrente)
+            ordine.extend(blocco)
+            if blocco:
+                corrente = blocco[-1]
+        ordine.append(0)
+        return ordine
+
+    # Con pochi gruppi possiamo provare TUTTI gli ordini possibili delle ZONE.
+    # Questo e' il punto fondamentale della V5: non scegliamo piu' l'ordine
+    # dei blocchi con una semplice euristica.
+    if len(gruppi_validi) <= 8:
+        sequenze = permutations(gruppi_validi)
+        migliore_ordine = None
+        migliore_costo = float("inf")
+        for seq in sequenze:
+            ordine = costruisci(seq)
+            costo_totale = _costo_base_ordine(ordine, distanze, durate)
+            if costo_totale < migliore_costo:
+                migliore_costo = costo_totale
+                migliore_ordine = ordine
+        return migliore_ordine
+
+    # Oltre 8 gruppi, il fattoriale cresce troppo: usiamo piu' strategie
+    # deterministiche, mantenendo comunque il vincolo di blocco.
     sequenze = []
+    crescente = list(gruppi_validi)
+    decrescente = list(reversed(crescente))
+    per_deposito = sorted(
+        gruppi_validi,
+        key=lambda g: min(costo(0, j) for j in membri[g])
+    )
+    sequenze.extend([crescente, decrescente, per_deposito, list(reversed(per_deposito))])
 
-    # 1) greedy partendo dal deposito, scegliendo la ZONA con l'ingresso più vicino
-    rimanenti = set(gruppi_validi)
-    corrente = 0
-    seq = []
-    while rimanenti:
-        g = min(rimanenti, key=lambda z: min(_costo_arco_base(corrente, j, distanze, durate) for j in membri[z]))
-        seq.append(g)
-        # Per il passo successivo usiamo la fermata del gruppo più vicina come proxy di uscita.
-        corrente = min(membri[g], key=lambda j: _costo_arco_base(0 if len(seq) == 1 else corrente, j, distanze, durate))
-        rimanenti.remove(g)
-    sequenze.append(seq)
-    sequenze.append(list(reversed(seq)))
-
-    # 2) ordine per vicinanza al deposito (utile quando le ZONE sono geograficamente distribuite)
-    seq_dep = sorted(gruppi_validi, key=lambda g: min(_costo_arco_base(0, j, distanze, durate) for j in membri[g]))
-    sequenze.append(seq_dep)
-    sequenze.append(list(reversed(seq_dep)))
-
-    # 3) ordine numerico crescente/decrescente: candidato deterministico di sicurezza.
-    sequenze.append(sorted(gruppi_validi))
-    sequenze.append(sorted(gruppi_validi, reverse=True))
+    # Greedy tra blocchi usando la miglior uscita del blocco corrente.
+    for prima in gruppi_validi:
+        rimanenti = set(gruppi_validi)
+        rimanenti.remove(prima)
+        seq = [prima]
+        corrente = min(membri[prima], key=lambda j: costo(0, j))
+        while rimanenti:
+            g = min(
+                rimanenti,
+                key=lambda z: min(costo(corrente, j) for j in membri[z])
+            )
+            seq.append(g)
+            corrente = min(membri[g], key=lambda j: costo(corrente, j))
+            rimanenti.remove(g)
+        sequenze.append(seq)
 
     candidati = []
     viste = set()
@@ -712,9 +790,8 @@ def _ottimizza_a_blocchi_zona(distanze, durate, n_clienti, gruppi):
         if chiave in viste:
             continue
         viste.add(chiave)
-        ordine = _ordine_blocchi_da_sequenza_gruppi(distanze, durate, gruppi, seq)
-        costo = _costo_base_ordine(ordine, distanze, durate)
-        candidati.append((costo, ordine))
+        ordine = costruisci(seq)
+        candidati.append((_costo_base_ordine(ordine, distanze, durate), ordine))
 
     return min(candidati, key=lambda x: x[0])[1]
 
@@ -837,7 +914,7 @@ def ottimizza_giro_free(df_giro, df_db=None, forza_gruppamento_zona=75):
     elif forza_gruppamento_zona >= 95:
         # 100% non puo' restare uguale per colpa di una normalizzazione:
         # scegliamo esplicitamente il candidato a blocchi.
-        nome_scelto, ordine_ottimizzato = ("BLOCCHI ZONA", ordine_blocchi)
+        nome_scelto, ordine_ottimizzato = ("BLOCCHI ZONA (2 LIVELLI)", ordine_blocchi)
     elif forza_gruppamento_zona <= 5:
         nome_scelto, ordine_ottimizzato = candidati[0]
     else:
