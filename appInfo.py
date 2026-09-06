@@ -530,7 +530,7 @@ def _ottimizza_fallback(distanze, durate, n_clienti, gruppi=None, penalita_grupp
     return ordine
 
 
-def ottimizza_giro_free(df_giro, df_db=None):
+def ottimizza_giro_free(df_giro, df_db=None, forza_gruppamento_zona=75):
     """Ottimizza il giro reale su strada, ignorando completamente ORA.
 
     Usa prima le coordinate gia' presenti nella colonna H del database clienti.
@@ -587,7 +587,11 @@ def ottimizza_giro_free(df_giro, df_db=None):
     # gruppo se la strada risultasse nettamente migliore.
     gruppi_clienti = _gruppi_fermate(df_originale, df_db)
     gruppi = [None] + gruppi_clienti
-    penalita_gruppo = _calcola_penalita_gruppo(distanze)
+    # La forza 0-100% controlla quanto viene premiata la continuita' delle ZONA.
+    # 0% = ZONA ignorata. 100% = forte preferenza, ma non vincolo rigido.
+    forza_gruppamento_zona = max(0, min(100, int(forza_gruppamento_zona)))
+    penalita_base = _calcola_penalita_gruppo(distanze)
+    penalita_gruppo = penalita_base * (forza_gruppamento_zona / 100.0) * 4.0
     gruppi_presenti = sorted({g for g in gruppi_clienti if g is not None})
 
     ordine_originale = [0] + list(range(1, len(df_originale) + 1)) + [0]
@@ -621,6 +625,7 @@ def ottimizza_giro_free(df_giro, df_db=None):
         "errore_ortools": errore_ortools,
         "gruppi_zona": len(gruppi_presenti),
         "penalita_gruppo": penalita_gruppo,
+        "forza_gruppamento_zona": forza_gruppamento_zona,
         "coordinate_da_salvare": coordinate_da_salvare,
     }
     return df_ottimizzato, metriche
@@ -1002,6 +1007,9 @@ if 'clienti_selezionati_m' not in st.session_state:
 if 'vista_pulita' not in st.session_state:
     st.session_state.vista_pulita = False
 
+if 'forza_gruppamento_zona' not in st.session_state:
+    st.session_state.forza_gruppamento_zona = 75
+
 if 'giro_ottimizzato_proposto' not in st.session_state:
     st.session_state.giro_ottimizzato_proposto = None
 
@@ -1298,6 +1306,16 @@ else:
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
+    st.session_state.forza_gruppamento_zona = st.slider(
+        "🎯 Forza raggruppamento ZONA",
+        min_value=0,
+        max_value=100,
+        value=int(st.session_state.forza_gruppamento_zona),
+        step=5,
+        help="0% = ZONA ignorata. 100% = forte preferenza a completare un gruppo prima di passare al successivo. Non e' un vincolo rigido.",
+    )
+    st.caption(f"Forza attuale: **{st.session_state.forza_gruppamento_zona}%** — piu' alta = maggiore preferenza a mantenere unite le fermate della stessa ZONA.")
+
     col_act1, col_act2, col_act3 = st.columns(3)
 
     with col_act1:
@@ -1335,7 +1353,8 @@ else:
                     with st.spinner("🧠 Analizzo indirizzi e percorso stradale..."):
                         df_opt, metriche_opt = ottimizza_giro_free(
                             st.session_state.giro_corrente,
-                            st.session_state.db_clienti
+                            st.session_state.db_clienti,
+                            forza_gruppamento_zona=st.session_state.forza_gruppamento_zona
                         )
                     coordinate_da_salvare = metriche_opt.pop("coordinate_da_salvare", {})
                     if coordinate_da_salvare:
@@ -1364,6 +1383,7 @@ else:
         st.markdown("---")
         st.subheader("🧠 Anteprima percorso ottimizzato")
         st.caption("Start e fine giro: Dolciaria Acquaviva — Via Enrico Fermi 10, Burago di Molgora. Il campo ORA non viene usato per l'ottimizzazione.")
+        st.info(f"🎯 Forza raggruppamento ZONA usata: **{m.get('forza_gruppamento_zona', st.session_state.forza_gruppamento_zona)}%**")
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Km", f"{m.get('km_ottimizzati', 0):.1f}", delta=f"{m.get('risparmio_km', 0):+.1f} km")
