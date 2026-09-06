@@ -712,17 +712,48 @@ def ottimizza_giro_free(df_giro, df_db=None, forza_gruppamento_zona=75):
         )
         metodo = "Fallback locale + OSRM + gruppi ZONA" if gruppi_presenti else "Fallback locale + OSRM"
     else:
-        # La scala della penalità viene rapportata al costo medio di una tratta,
-        # così il 0-100% resta leggibile anche con giri di dimensioni diverse.
-        costo_medio = max(1.0, _costo_base_ordine(candidati[0][1], distanze, durate) / max(1, len(df_originale) + 1))
-        forza = forza_gruppamento_zona / 100.0
-        def score_candidato(item):
-            nome, ordine = item
+        # V3.3: la percentuale diventa una VERA seconda priorità.
+        # Prima normalizziamo il costo stradale e il costo di raggruppamento
+        # tra tutti i candidati; poi il cursore decide quanto pesa ciascun
+        # obiettivo. Questo evita che una penalità arbitraria lasci invariato
+        # il giro al 0%, 50% e 100%.
+        valori_base = []
+        valori_gruppo = []
+        dettagli = {}
+        for nome, ordine in candidati:
             base = _costo_base_ordine(ordine, distanze, durate)
             cambi, rientri, _ = _metriche_gruppamento_ordine(ordine, gruppi)
-            penalita = forza * costo_medio * (cambi + 2.0 * rientri) * 2.0
-            return base + penalita
-        nome_scelto, ordine_ottimizzato = min(candidati, key=score_candidato)
+            # I rientri valgono più di un semplice cambio: significano che
+            # abbiamo lasciato una ZONA e poi siamo tornati indietro.
+            costo_gruppo = float(cambi) + float(rientri) * 3.0
+            valori_base.append(base)
+            valori_gruppo.append(costo_gruppo)
+            dettagli[nome] = (base, costo_gruppo, cambi, rientri)
+
+        min_base, max_base = min(valori_base), max(valori_base)
+        min_gruppo, max_gruppo = min(valori_gruppo), max(valori_gruppo)
+        forza = forza_gruppamento_zona / 100.0
+
+        def normalizza(valore, minimo, massimo):
+            if massimo - minimo <= 1e-9:
+                return 0.0
+            return (valore - minimo) / (massimo - minimo)
+
+        def score_candidato(item):
+            nome, ordine = item
+            base, costo_gruppo, cambi, rientri = dettagli[nome]
+            # 0% = solo strada. 100% = prima di tutto ZONA; a parità,
+            # vince il percorso stradale migliore.
+            score_strada = normalizza(base, min_base, max_base)
+            score_zona = normalizza(costo_gruppo, min_gruppo, max_gruppo)
+            return (1.0 - forza) * score_strada + forza * score_zona
+
+        # In caso di parità numerica, privilegiamo il percorso stradale più
+        # corto: la ZONA non deve peggiorare inutilmente il giro.
+        nome_scelto, ordine_ottimizzato = min(
+            candidati,
+            key=lambda item: (score_candidato(item), dettagli[item[0]][0])
+        )
         metodo = nome_scelto
 
     km_ottimizzati, secondi_ottimizzati = _percorso_da_indici(ordine_ottimizzato, distanze, durate)
@@ -749,6 +780,11 @@ def ottimizza_giro_free(df_giro, df_db=None, forza_gruppamento_zona=75):
         "rientri_zona": rientri_zona,
         "sequenza_zona": sequenza_zona,
         "coordinate_da_salvare": coordinate_da_salvare,
+        "debug_gruppamento": {
+            "gruppi_presenti": gruppi_presenti,
+            "cambi_zona": cambi_zona,
+            "rientri_zona": rientri_zona,
+        },
     }
     return df_ottimizzato, metriche
 
