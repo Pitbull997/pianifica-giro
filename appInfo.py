@@ -365,11 +365,11 @@ def diagnostica_osrm_caso_victor(df_giro, df_db=None):
         raise ValueError("Il giro è vuoto.")
 
     nomi = {
-        "VICTOR": "Via Benedetto Marcello 91",
-        "VOLTURNO": "Via Volturno 42",
-        "DAIMLER": "Via Gottlieb Wilhelm Daimler 61",
-        "SAN GREGORIO": "Via S. Gregorio 20",
-        "NOVATE": "Via Repubblica 6",
+        "VICTOR": {"via": "Via Benedetto Marcello 91", "cliente": "VICTOR (PEPENERO CAFE')"},
+        "VOLTURNO": {"via": "Via Volturno 42", "cliente": "PONNA SNC"},
+        "DAIMLER": {"via": "Via Gottlieb Wilhelm Daimler 61", "cliente": "IMAGINATION"},
+        "SAN GREGORIO": {"via": "Via S. Gregorio 20", "cliente": "LEPOS"},
+        "NOVATE": {"via": "Via Repubblica 6", "cliente": "CAFE' VINTAGE NOVATE"},
     }
 
     def norm(v):
@@ -380,8 +380,25 @@ def diagnostica_osrm_caso_victor(df_giro, df_db=None):
     trovati = {}
     for idx, (_, row) in enumerate(df_giro.iterrows(), start=1):
         via = norm(row.get("VIA", ""))
-        for nome, indirizzo in nomi.items():
-            if nome not in trovati and norm(indirizzo) in via:
+        cliente = norm(row.get("CLIENTE", ""))
+        for nome, info in nomi.items():
+            if nome in trovati:
+                continue
+            indirizzo = norm(info["via"])
+            nome_cliente = norm(info["cliente"])
+            # Primo tentativo: indirizzo completo.
+            if indirizzo in via or via in indirizzo:
+                trovati[nome] = idx
+                continue
+            # Secondo tentativo: numero civico + parole distintive della via.
+            parti = indirizzo.split()
+            civico = parti[-1] if parti and parti[-1].isdigit() else ""
+            parole_chiave = [x for x in parti[:-1] if len(x) >= 5 and x not in {"via", "viale", "piazza"}]
+            if civico and civico in via and any(x in via for x in parole_chiave):
+                trovati[nome] = idx
+                continue
+            # Ultimo fallback: nome cliente.
+            if nome_cliente and nome_cliente in cliente:
                 trovati[nome] = idx
 
     mancanti = [k for k in nomi if k not in trovati]
