@@ -748,7 +748,11 @@ def _ottimizza_a_blocchi_zona(distanze, durate, n_clienti, gruppi, forza_gruppam
     forza = max(0, min(100, int(forza_gruppamento_zona)))
     sequenza_crescente = sorted(gruppi_validi)
 
-    if forza >= 95:
+    if forza >= 100:
+        # MODALITA' 100% RICHIESTA:
+        # 1) ordine obbligatorio delle macro-ZONE: 1 -> 2 -> 3 -> ...
+        # 2) ogni ZONA viene completata prima di passare alla successiva
+        # 3) dentro ogni ZONA ottimizziamo la sequenza stradale dei clienti
         return costruisci(sequenza_crescente)
 
     # Con pochi gruppi possiamo provare TUTTI gli ordini possibili e scegliere
@@ -847,9 +851,12 @@ def ottimizza_giro_free(df_giro, df_db=None, forza_gruppamento_zona=75):
     """Ottimizza il giro su strada con una seconda priorita' REALE per ZONA.
 
     0%  = solo strada.
-    100% = blocchi ZONA in ordine numerico crescente (1 -> 2 -> 3 -> ...);
-           la strada continua a decidere l'ordine interno a ogni blocco.
-    Valori intermedi = compromesso tra percorso stradale e blocchi ZONA.
+    100% = modalita' STRICT ZONA: prima ZONA 1, poi ZONA 2, poi ZONA 3...;
+           ogni ZONA viene completata prima di passare alla successiva e
+           l'ordine dei clienti viene ottimizzato SOLO all'interno della ZONA.
+    0% = solo strada, ZONA completamente ignorata.
+    Valori intermedi = compromesso: le ZONE possono essere mischiate in base
+           al criterio stradale, come richiesto dall'utente.
     ORA non viene mai usata.
     """
     if df_giro is None or df_giro.empty:
@@ -959,9 +966,9 @@ def ottimizza_giro_free(df_giro, df_db=None, forza_gruppamento_zona=75):
 
     if len(gruppi_presenti) < 2:
         nome_scelto, ordine_ottimizzato = candidati[0]
-    elif forza_gruppamento_zona >= 95:
-        # 100% non puo' restare uguale per colpa di una normalizzazione:
-        # scegliamo esplicitamente il candidato a blocchi.
+    elif forza_gruppamento_zona >= 100:
+        # A 100% la ZONA e' una priorita' rigida sull'ordine dei blocchi:
+        # NON si confronta con il percorso stradale puro.
         nome_scelto, ordine_ottimizzato = ("BLOCCHI ZONA CRESCENTI (2 LIVELLI)", ordine_blocchi)
     elif forza_gruppamento_zona <= 5:
         nome_scelto, ordine_ottimizzato = candidati[0]
@@ -1398,7 +1405,7 @@ if 'vista_pulita' not in st.session_state:
     st.session_state.vista_pulita = False
 
 if 'forza_gruppamento_zona' not in st.session_state:
-    st.session_state.forza_gruppamento_zona = 75
+    st.session_state.forza_gruppamento_zona = 50
 
 if 'giro_ottimizzato_proposto' not in st.session_state:
     st.session_state.giro_ottimizzato_proposto = None
@@ -1696,20 +1703,21 @@ else:
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
-    st.session_state.forza_gruppamento_zona = st.slider(
+    st.session_state.forza_gruppamento_zona = st.select_slider(
         "🎯 Forza raggruppamento ZONA",
-        min_value=0,
-        max_value=100,
-        value=int(st.session_state.forza_gruppamento_zona),
-        step=5,
-        help="0% = strada libera. 100% = blocchi ZONA in ordine crescente (1 -> 2 -> 3 -> ...), ottimizzando la strada dentro ogni blocco.",
+        options=[0, 25, 50, 100],
+        value=int(st.session_state.forza_gruppamento_zona) if int(st.session_state.forza_gruppamento_zona) in [0, 25, 50, 100] else 50,
+        format_func=lambda x: f"{x}%",
+        help="0% = strada libera. 25% = ZONA leggera. 50% = compromesso. 100% = ordine ZONA obbligatorio e clienti ottimizzati dentro ogni ZONA.",
     )
     if st.session_state.forza_gruppamento_zona == 0:
         st.caption("Forza attuale: **0%** — ZONA completamente ignorata: ottimizzo solo la strada.")
-    elif st.session_state.forza_gruppamento_zona >= 95:
-        st.caption(f"Forza attuale: **{st.session_state.forza_gruppamento_zona}%** — massima priorita' ai blocchi ZONA.")
+    elif st.session_state.forza_gruppamento_zona == 25:
+        st.caption("Forza attuale: **25%** — leggera preferenza per restare nelle stesse ZONA, ma le ZONA possono mescolarsi.")
+    elif st.session_state.forza_gruppamento_zona == 50:
+        st.caption("Forza attuale: **50%** — compromesso strada + ZONA: le ZONA possono mescolarsi se conviene al percorso.")
     else:
-        st.caption(f"Forza attuale: **{st.session_state.forza_gruppamento_zona}%** — compromesso tra strada e raggruppamento ZONA.")
+        st.caption("Forza attuale: **100%** — ordine macro-ZONA obbligatorio (1 → 2 → 3 → ...); clienti ottimizzati dentro ogni ZONA.")
 
     col_act1, col_act2, col_act3 = st.columns(3)
 
@@ -1783,6 +1791,8 @@ else:
         if seq_zona:
             st.caption(f"🗺️ Sequenza ZONA: **{' → '.join(map(str, seq_zona))}**  |  Cambi ZONA: **{m.get('cambi_zona', 0)}**  |  Rientri: **{m.get('rientri_zona', 0)}**")
             st.caption(f"📦 Macro-ZONE trovate: **{m.get('gruppi_zona', 0)}** — Metodo scelto: **{m.get('metodo', '')}**")
+            if m.get("forza_gruppamento_zona", 0) == 100 and seq_zona:
+                st.caption("🔒 Al 100%: le macro-ZONE sono mantenute in ordine crescente e ogni ZONA viene completata prima della successiva.")
         elif m.get("gruppi_zona", 0) == 0:
             st.warning("⚠️ Nessuna ZONA disponibile per le fermate di questo giro: la percentuale non può influire sul percorso.")
 
