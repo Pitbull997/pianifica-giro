@@ -600,58 +600,123 @@ def _costo_base_ordine(ordine, distanze, durate):
     return totale
 
 
-def _ottimizza_a_blocchi_zona(distanze, durate, n_clienti, gruppi):
-    """Costruisce un candidato con ogni macro-ZONA in un blocco contiguo."""
-    gruppi_validi = {}
-    for i in range(1, n_clienti + 1):
-        g = gruppi[i] if i < len(gruppi) else None
-        if g is not None:
-            gruppi_validi.setdefault(g, []).append(i)
+def _costo_arco_base(a, b, distanze, durate):
+    d = distanze[a][b]
+    t = durate[a][b]
+    if d is None or t is None:
+        return 10**15
+    return float(d) + float(t) * 10.0
 
-    senza_zona = [i for i in range(1, n_clienti + 1) if i not in {x for v in gruppi_validi.values() for x in v}]
+
+def _ordine_blocchi_da_sequenza_gruppi(distanze, durate, gruppi, sequenza_gruppi):
+    """Costruisce un percorso in cui ogni macro-ZONA compare in un unico blocco."""
     ordine = [0]
     corrente = 0
+    membri = {}
+    for i in range(1, len(gruppi)):
+        g = gruppi[i]
+        if g is not None:
+            membri.setdefault(g, []).append(i)
 
-    # Prima le ZONA: ad ogni passo scegliamo il gruppo la cui fermata più vicina
-    # è più vicina al punto corrente. Una volta entrati, completiamo il blocco.
-    rimanenti = {g: list(v) for g, v in gruppi_validi.items()}
-    while rimanenti:
-        g_scelto = min(
-            rimanenti,
-            key=lambda g: min(
-                (float(distanze[corrente][j]) + float(durate[corrente][j]) * 10.0)
-                if distanze[corrente][j] is not None and durate[corrente][j] is not None else 10**15
-                for j in rimanenti[g]
-            )
-        )
-        da_visitare = set(rimanenti.pop(g_scelto))
+    for g in sequenza_gruppi:
+        da_visitare = set(membri.get(g, []))
         while da_visitare:
             prossimo = min(
                 da_visitare,
-                key=lambda j: (
-                    float(distanze[corrente][j]) + float(durate[corrente][j]) * 10.0
-                    if distanze[corrente][j] is not None and durate[corrente][j] is not None else 10**15
-                )
+                key=lambda j: _costo_arco_base(corrente, j, distanze, durate)
             )
             ordine.append(prossimo)
             corrente = prossimo
             da_visitare.remove(prossimo)
 
-    # Eventuali fermate senza ZONA vengono lasciate in coda.
-    while senza_zona:
-        prossimo = min(
-            senza_zona,
-            key=lambda j: (
-                float(distanze[corrente][j]) + float(durate[corrente][j]) * 10.0
-                if distanze[corrente][j] is not None and durate[corrente][j] is not None else 10**15
-            )
-        )
+        # Migliora l'ordine interno del blocco senza permettere che la ZONA
+        # venga interrotta. Piccolo 2-opt locale sul solo blocco appena creato.
+        pos_inizio = 1
+        for k in range(1, len(ordine)):
+            if gruppi[ordine[k]] == g:
+                pos_inizio = k
+            else:
+                break
+        pos_fine = len(ordine) - 1
+        while pos_fine >= pos_inizio and gruppi[ordine[pos_fine]] != g:
+            pos_fine -= 1
+        if pos_fine - pos_inizio >= 2:
+            migliorato = True
+            while migliorato:
+                migliorato = False
+                migliore = sum(_costo_arco_base(a, b, distanze, durate)
+                               for a, b in zip(ordine[pos_inizio-1:pos_fine+1], ordine[pos_inizio:pos_fine+2]))
+                for i in range(pos_inizio, pos_fine):
+                    for j in range(i+1, pos_fine+1):
+                        candidato = ordine[:i] + ordine[i:j+1][::-1] + ordine[j+1:]
+                        costo = sum(_costo_arco_base(a, b, distanze, durate)
+                                    for a, b in zip(candidato[pos_inizio-1:pos_fine+1], candidato[pos_inizio:pos_fine+2]))
+                        if costo + 0.01 < migliore:
+                            ordine = candidato
+                            migliore = costo
+                            migliorato = True
+                            break
+                    if migliorato:
+                        break
+
+    # Fermate senza ZONA alla fine, senza alterare il raggruppamento delle altre.
+    senza = [i for i in range(1, len(gruppi)) if gruppi[i] is None]
+    while senza:
+        prossimo = min(senza, key=lambda j: _costo_arco_base(corrente, j, distanze, durate))
         ordine.append(prossimo)
         corrente = prossimo
-        senza_zona.remove(prossimo)
-
+        senza.remove(prossimo)
     ordine.append(0)
     return ordine
+
+
+def _ottimizza_a_blocchi_zona(distanze, durate, n_clienti, gruppi):
+    """Genera più percorsi a blocchi ZONA e restituisce il migliore su strada."""
+    gruppi_validi = sorted({gruppi[i] for i in range(1, n_clienti + 1)
+                             if i < len(gruppi) and gruppi[i] is not None})
+    if not gruppi_validi:
+        return [0] + list(range(1, n_clienti + 1)) + [0]
+
+    membri = {g: [i for i in range(1, n_clienti + 1) if gruppi[i] == g] for g in gruppi_validi}
+
+    # Generiamo più ordini di macro-ZONE. Tutti mantengono le ZONE in blocchi;
+    # cambia solo quale blocco viene visitato prima.
+    sequenze = []
+
+    # 1) greedy partendo dal deposito, scegliendo la ZONA con l'ingresso più vicino
+    rimanenti = set(gruppi_validi)
+    corrente = 0
+    seq = []
+    while rimanenti:
+        g = min(rimanenti, key=lambda z: min(_costo_arco_base(corrente, j, distanze, durate) for j in membri[z]))
+        seq.append(g)
+        # Per il passo successivo usiamo la fermata del gruppo più vicina come proxy di uscita.
+        corrente = min(membri[g], key=lambda j: _costo_arco_base(0 if len(seq) == 1 else corrente, j, distanze, durate))
+        rimanenti.remove(g)
+    sequenze.append(seq)
+    sequenze.append(list(reversed(seq)))
+
+    # 2) ordine per vicinanza al deposito (utile quando le ZONE sono geograficamente distribuite)
+    seq_dep = sorted(gruppi_validi, key=lambda g: min(_costo_arco_base(0, j, distanze, durate) for j in membri[g]))
+    sequenze.append(seq_dep)
+    sequenze.append(list(reversed(seq_dep)))
+
+    # 3) ordine numerico crescente/decrescente: candidato deterministico di sicurezza.
+    sequenze.append(sorted(gruppi_validi))
+    sequenze.append(sorted(gruppi_validi, reverse=True))
+
+    candidati = []
+    viste = set()
+    for seq in sequenze:
+        chiave = tuple(seq)
+        if chiave in viste:
+            continue
+        viste.add(chiave)
+        ordine = _ordine_blocchi_da_sequenza_gruppi(distanze, durate, gruppi, seq)
+        costo = _costo_base_ordine(ordine, distanze, durate)
+        candidati.append((costo, ordine))
+
+    return min(candidati, key=lambda x: x[0])[1]
 
 def ottimizza_giro_free(df_giro, df_db=None, forza_gruppamento_zona=75):
     """Ottimizza il giro su strada con una seconda priorita' REALE per ZONA.
