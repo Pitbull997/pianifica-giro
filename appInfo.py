@@ -1900,19 +1900,26 @@ else:
                 
                 for idx in range(tot_clienti):
                     row = st.session_state.giro_corrente.iloc[idx]
-                    st.markdown(f"""
-                    <div class="clean-card">
-                        <div class="clean-badge">{idx + 1}</div>
-                        <div class="clean-content">
-                            <div class="clean-title">{row['VIA']}</div>
-                            <div class="clean-subtitle">{row['COMUNE']} — Cliente: {row['CLIENTE']} (🕒 {row['ORA']} | 📦 {row['Q.ta']} pz)</div>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
 
-                    if st.button("🗑️ ELIMINA CLIENTE", use_container_width=True, key=f"elimina_pulita_{idx}_{row['CLIENTE']}"):
-                        st.session_state.conferma_eliminazione_idx = idx
-                        st.rerun()
+                    # Card riepilogo con cestino integrato sulla destra
+                    col_card, col_cestino = st.columns([0.92, 0.08], gap="small")
+
+                    with col_card:
+                        st.markdown(f"""
+                        <div class="clean-card clean-card-with-delete">
+                            <div class="clean-badge">{idx + 1}</div>
+                            <div class="clean-content">
+                                <div class="clean-title">{row['VIA']}</div>
+                                <div class="clean-subtitle">{row['COMUNE']} — Cliente: {row['CLIENTE']} (🕒 {row['ORA']} | 📦 {row['Q.ta']} pz)</div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    with col_cestino:
+                        st.markdown("<div style='height: 18px;'></div>", unsafe_allow_html=True)
+                        if st.button("🗑️", help="Elimina cliente dal giro", key=f"elimina_pulita_{idx}_{row['CLIENTE']}"):
+                            st.session_state.conferma_eliminazione_idx = idx
+                            st.rerun()
 
                     if st.session_state.conferma_eliminazione_idx == idx:
                         st.warning(f"Eliminare {row['CLIENTE']} dal giro?")
@@ -1987,7 +1994,7 @@ else:
                             st.rerun()
 
                     with col_c4:
-                        if st.button("🗑️ ELIMINA", use_container_width=True, key=f"elimina_operativa_{idx}_{row['CLIENTE']}"):
+                        if st.button("🗑️", help="Elimina cliente dal giro", key=f"elimina_operativa_{idx}_{row['CLIENTE']}"):
                             st.session_state.conferma_eliminazione_idx = idx
                             st.rerun()
 
