@@ -1544,12 +1544,13 @@ st.markdown("""
     .clean-title { font-size: 16px; font-weight: bold; color: #FFFFFF; margin-bottom: 2px; }
     .clean-subtitle { font-size: 13px; color: #94A3B8; }
 
-    /* Cestino VISTA RIEPILOGO: solo icona, a destra e centrata verticalmente nella card. */
+    /* Cestino VISTA RIEPILOGO: solo icona, in alto a destra dentro la card. */
     div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stHorizontalBlock"] > div:nth-child(3) {
         display: flex;
-        align-items: center;
-        justify-content: center;
-        min-height: 62px;
+        align-items: flex-start;
+        justify-content: flex-end;
+        min-height: 0;
+        padding-top: 0;
     }
     div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stHorizontalBlock"] > div:nth-child(3) div[data-testid="stButton"] {
         width: auto !important;
@@ -1935,7 +1936,7 @@ else:
                     # Card riepilogo: il cestino e' integrato NELLA STESSA CARD, a destra.
                     # Usiamo un container con bordo per evitare che il pulsante finisca sotto la card.
                     with st.container(border=True):
-                        col_badge, col_info, col_cestino = st.columns([0.08, 0.84, 0.08], gap="small", vertical_alignment="center")
+                        col_badge, col_info, col_cestino = st.columns([0.08, 0.84, 0.08], gap="small", vertical_alignment="top")
 
                         with col_badge:
                             st.markdown(f'<div class="clean-badge">{idx + 1}</div>', unsafe_allow_html=True)
