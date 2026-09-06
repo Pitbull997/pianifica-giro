@@ -3,7 +3,6 @@ import pandas as pd
 import urllib.parse
 import os
 import base64
-import json
 import time
 import gspread
 from google.oauth2.service_account import Credentials
@@ -15,8 +14,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
-
-FILE_SESSIONE_PERSISTENTE = "sessione_salvata.json"
 
 # Inizializzazione Connessione Google Sheets tramite Streamlit Secrets
 @st.cache_resource
@@ -53,23 +50,6 @@ except Exception as e:
     sheet_db = None
     sheet_utenti = None
     sheet_giro = None
-
-# Funzioni per la sessione persistente di login
-def carica_sessione():
-    if os.path.exists(FILE_SESSIONE_PERSISTENTE):
-        try:
-            with open(FILE_SESSIONE_PERSISTENTE, "r") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {"autenticato": False, "utente": "", "is_admin": False}
-
-def salva_sessione(autenticato, utente, is_admin):
-    try:
-        with open(FILE_SESSIONE_PERSISTENTE, "w") as f:
-            json.dump({"autenticato": autenticato, "utente": utente, "is_admin": is_admin}, f)
-    except Exception as e:
-        st.error(f"Errore nel salvataggio della sessione: {e}")
 
 # Funzioni per caricare e salvare gli utenti da Google Sheets (TTL ottimizzato a 300s)
 @st.cache_data(ttl=300, show_spinner=False)
@@ -270,19 +250,21 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
                 break
 
 # Inizializzazione dati di sessione
-sessione_salvata = carica_sessione()
-
-if 'pagina_attiva' not in st.session_state:
-    st.session_state.pagina_attiva = "giro" if sessione_salvata["autenticato"] else "welcome"
+# IMPORTANTE: il login vive esclusivamente in st.session_state.
+# Non viene più salvato in un file sul server, così ogni telefono/browser
+# mantiene una sessione indipendente dagli altri utenti.
 
 if 'autenticato' not in st.session_state:
-    st.session_state.autenticato = sessione_salvata["autenticato"]
+    st.session_state.autenticato = False
 
 if 'utente_corrente' not in st.session_state:
-    st.session_state.utente_corrente = sessione_salvata["utente"]
+    st.session_state.utente_corrente = ""
 
 if 'is_admin' not in st.session_state:
-    st.session_state.is_admin = sessione_salvata["is_admin"]
+    st.session_state.is_admin = False
+
+if 'pagina_attiva' not in st.session_state:
+    st.session_state.pagina_attiva = "welcome"
 
 if 'db_clienti' not in st.session_state:
     st.session_state.db_clienti = carica_db_da_google_sheets()
@@ -467,7 +449,7 @@ if not st.session_state.autenticato and st.session_state.pagina_attiva == "welco
 # ==========================================
 # SCHERMATA DI LOGIN
 # ==========================================
-elif not st.session_state.autenticato and (st.session_state.pagina_attiva == "login" or not sessione_salvata["autenticato"]):
+elif not st.session_state.autenticato and st.session_state.pagina_attiva == "login":
     st.markdown("<div style='margin-top: 40px;'></div>", unsafe_allow_html=True)
     
     icon_path = "icovg.png"
@@ -507,7 +489,6 @@ elif not st.session_state.autenticato and (st.session_state.pagina_attiva == "lo
                     st.session_state.giro_corrente = carica_giro_utente_da_sheets(username_input)
                     st.session_state.ultimo_utente_caricato = username_input
                     
-                    salva_sessione(True, username_input, st.session_state.is_admin)
                     st.rerun()
                 else:
                     st.error("❌ Utente o password errati.")
@@ -541,8 +522,6 @@ else:
             st.session_state.utente_corrente = ""
             st.session_state.is_admin = False
             st.session_state.pagina_attiva = "login"
-            if os.path.exists(FILE_SESSIONE_PERSISTENTE):
-                os.remove(FILE_SESSIONE_PERSISTENTE)
             st.rerun()
 
     st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
