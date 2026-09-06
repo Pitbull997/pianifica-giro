@@ -1392,6 +1392,14 @@ if 'db_clienti' not in st.session_state:
 if 'utenti_sistema' not in st.session_state:
     st.session_state.utenti_sistema = carica_utenti_da_sheets()
 
+# Stato della funzione elimina cliente: inizializzato PRIMA di qualsiasi accesso.
+# Questo evita AttributeError al primo avvio dell'app.
+if 'conferma_eliminazione_idx' not in st.session_state:
+    st.session_state.conferma_eliminazione_idx = None
+
+if 'cliente_eliminato_messaggio' not in st.session_state:
+    st.session_state.cliente_eliminato_messaggio = None
+
 if st.session_state.cliente_eliminato_messaggio:
     st.success(st.session_state.cliente_eliminato_messaggio)
     st.session_state.cliente_eliminato_messaggio = None
@@ -1436,12 +1444,6 @@ if 'giro_ottimizzato_proposto' not in st.session_state:
 
 if 'metriche_ottimizzazione' not in st.session_state:
     st.session_state.metriche_ottimizzazione = None
-
-if 'conferma_eliminazione_idx' not in st.session_state:
-    st.session_state.conferma_eliminazione_idx = None
-
-if 'cliente_eliminato_messaggio' not in st.session_state:
-    st.session_state.cliente_eliminato_messaggio = None
 
 if "nav" in st.query_params and st.query_params["nav"] == "login":
     st.session_state.pagina_attiva = "login"
