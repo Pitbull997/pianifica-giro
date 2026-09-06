@@ -3,6 +3,12 @@ import pandas as pd
 import urllib.parse
 import os
 import base64
+import secrets
+
+try:
+    import extra_streamlit_components as stx
+except ImportError:
+    stx = None
 import time
 import gspread
 from google.oauth2.service_account import Credentials
@@ -14,6 +20,49 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+# Sessione persistente per singolo browser/dispositivo
+COOKIE_NAME = "vango_session_token"
+COOKIE_MAX_AGE_DAYS = 365
+
+@st.cache_resource
+def get_cookie_manager():
+    if stx is None:
+        return None
+    return stx.CookieManager(key="vango_cookie_manager")
+
+cookie_manager = get_cookie_manager()
+
+def genera_token_sessione():
+    return secrets.token_urlsafe(32)
+
+def leggi_token_sessione():
+    if cookie_manager is None:
+        return None
+    try:
+        return cookie_manager.get(cookie=COOKIE_NAME)
+    except Exception:
+        return None
+
+def salva_token_sessione(token):
+    if cookie_manager is None or not token:
+        return
+    try:
+        cookie_manager.set(
+            COOKIE_NAME, token,
+            max_age=COOKIE_MAX_AGE_DAYS * 24 * 60 * 60,
+            path="/"
+        )
+    except Exception:
+        pass
+
+def elimina_token_sessione():
+    if cookie_manager is None:
+        return
+    try:
+        cookie_manager.delete(COOKIE_NAME)
+    except Exception:
+        pass
 
 # Inizializzazione Connessione Google Sheets tramite Streamlit Secrets
 @st.cache_resource
@@ -249,10 +298,10 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
                 st.error(f"Errore nel salvataggio del giro su Google Sheets: {e}")
                 break
 
-# Inizializzazione dati di sessione
-# IMPORTANTE: il login vive esclusivamente in st.session_state.
-# Non viene più salvato in un file sul server, così ogni telefono/browser
-# mantiene una sessione indipendente dagli altri utenti.
+# Inizializzazione dati di sessione.
+# Il token nel cookie appartiene al singolo browser/dispositivo.
+if "sessioni_persistenti" not in st.session_state:
+    st.session_state.sessioni_persistenti = {}
 
 if 'autenticato' not in st.session_state:
     st.session_state.autenticato = False
@@ -265,6 +314,21 @@ if 'is_admin' not in st.session_state:
 
 if 'pagina_attiva' not in st.session_state:
     st.session_state.pagina_attiva = "welcome"
+
+if 'session_token' not in st.session_state:
+    st.session_state.session_token = leggi_token_sessione()
+
+# Ripristina il login quando il browser/app viene riaperto.
+if (
+    not st.session_state.autenticato
+    and st.session_state.session_token
+    and st.session_state.session_token in st.session_state.sessioni_persistenti
+):
+    dati = st.session_state.sessioni_persistenti[st.session_state.session_token]
+    st.session_state.autenticato = True
+    st.session_state.utente_corrente = dati["utente"]
+    st.session_state.is_admin = dati["is_admin"]
+    st.session_state.pagina_attiva = "giro"
 
 if 'db_clienti' not in st.session_state:
     st.session_state.db_clienti = carica_db_da_google_sheets()
@@ -485,6 +549,16 @@ elif not st.session_state.autenticato and st.session_state.pagina_attiva == "log
                     st.session_state.utente_corrente = username_input
                     st.session_state.is_admin = (username_input.lower() == "admin")
                     st.session_state.pagina_attiva = "giro"
+
+
+                    # Token univoco per questo browser/dispositivo.
+                    token = genera_token_sessione()
+                    st.session_state.session_token = token
+                    st.session_state.sessioni_persistenti[token] = {
+                        "utente": username_input,
+                        "is_admin": st.session_state.is_admin
+                    }
+                    salva_token_sessione(token)
                     
                     st.session_state.giro_corrente = carica_giro_utente_da_sheets(username_input)
                     st.session_state.ultimo_utente_caricato = username_input
@@ -518,6 +592,11 @@ else:
         st.markdown(f"<p style='color: #94A3B8; font-size: 13px; margin: 0;'>👤 Utente: <b style='color: #60A5FA;'>{st.session_state.get('utente_corrente', '')}</b></p>", unsafe_allow_html=True)
     with col_logout_u:
         if st.button("🚪 LOGOUT", use_container_width=True, key="btn_logout_principale"):
+            token_corrente = st.session_state.get("session_token")
+            if token_corrente:
+                st.session_state.sessioni_persistenti.pop(token_corrente, None)
+            elimina_token_sessione()
+            st.session_state.session_token = None
             st.session_state.autenticato = False
             st.session_state.utente_corrente = ""
             st.session_state.is_admin = False
