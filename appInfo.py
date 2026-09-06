@@ -81,11 +81,17 @@ def genera_token_sessione(utente):
     return f"{payload}.{_firma_cookie(payload)}"
 
 def leggi_sessione_cookie():
-    if cookie_manager is None:
-        return None
-
     try:
-        valore = cookie_manager.get(cookie=COOKIE_NAME)
+        # Streamlit moderno: legge direttamente i cookie inviati dal browser
+        # all'apertura della sessione.
+        if hasattr(st, "context") and hasattr(st.context, "cookies"):
+            valore = st.context.cookies.get(COOKIE_NAME)
+        elif cookie_manager is not None:
+            # Fallback per versioni Streamlit meno recenti.
+            valore = cookie_manager.get(cookie=COOKIE_NAME)
+        else:
+            valore = None
+
         if not valore or not isinstance(valore, str) or "." not in valore:
             return None
 
@@ -124,7 +130,8 @@ def salva_sessione_cookie(utente):
             COOKIE_NAME,
             genera_token_sessione(utente),
             max_age=COOKIE_MAX_AGE_DAYS * 24 * 60 * 60,
-            path="/"
+            path="/",
+            key=f"set_{COOKIE_NAME}"
         )
     except Exception:
         pass
@@ -134,7 +141,10 @@ def elimina_sessione_cookie():
         return
 
     try:
-        cookie_manager.delete(COOKIE_NAME)
+        cookie_manager.delete(
+            COOKIE_NAME,
+            key=f"set_{COOKIE_NAME}"
+        )
     except Exception:
         pass
 
@@ -605,6 +615,12 @@ elif not st.session_state.autenticato and st.session_state.pagina_attiva == "log
         with st.form("form_login"):
             username_input = st.text_input("Utente")
             password_input = st.text_input("Password", type="password")
+
+            ricordami = st.checkbox(
+                "☑️ Ricordami su questo dispositivo",
+                value=True,
+                help="Se attivo, resterai collegato su questo browser anche dopo aver chiuso e riaperto l'app."
+            )
             
             st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
             submit_login = st.form_submit_button("ACCEDI", use_container_width=True, type="primary")
@@ -621,8 +637,11 @@ elif not st.session_state.autenticato and st.session_state.pagina_attiva == "log
                     st.session_state.pagina_attiva = "giro"
 
 
-                    # Salva il login nel cookie persistente del solo browser/dispositivo.
-                    salva_sessione_cookie(username_input)
+                    # Salva il login solo se "Ricordami" è selezionato.
+                    if ricordami:
+                        salva_sessione_cookie(username_input)
+                    else:
+                        elimina_sessione_cookie()
                     
                     st.session_state.giro_corrente = carica_giro_utente_da_sheets(username_input)
                     st.session_state.ultimo_utente_caricato = username_input
