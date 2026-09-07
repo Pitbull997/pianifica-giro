@@ -1770,15 +1770,26 @@ def _chiave_cliente_giro(row):
     )
 
 def _crea_snapshot_ordine(df):
-    """Memorizza solo l'ordine delle fermate, non una copia del database."""
-    occorrenze = {}
+    """Memorizza una copia esatta delle righe del giro al momento del backup.
+
+    Il backup riguarda esclusivamente il giro corrente in GiroAttivo: se dopo il
+    salvataggio una fermata viene eliminata, il ripristino deve poterla ricreare.
+    Non viene mai usato per modificare Foglio1 o Utenti.
+    """
+    df_snapshot = df.reset_index(drop=True).copy()
+    # JSON non gestisce NaN/NaT in modo affidabile: li trasformiamo in stringa vuota.
+    df_snapshot = df_snapshot.where(pd.notna(df_snapshot), "")
+    righe = df_snapshot.to_dict(orient='records')
     snapshot = []
-    for _, row in df.reset_index(drop=True).iterrows():
-        chiave = _chiave_cliente_giro(row)
-        n = occorrenze.get(chiave, 0)
-        occorrenze[chiave] = n + 1
-        snapshot.append({"chiave": list(chiave), "occorrenza": n})
-    return snapshot
+    for posizione, riga in enumerate(righe, start=1):
+        riga = {str(k): v for k, v in riga.items()}
+        riga["__VANGO_POSIZIONE_BACKUP"] = posizione
+        snapshot.append(riga)
+    return {
+        "versione": 2,
+        "tipo": "GIRO_COMPLETO",
+        "righe": snapshot,
+    }
 
 def _trova_riga_snapshot(df, item, usati):
     chiave = tuple(item.get('chiave', []))
@@ -1854,25 +1865,51 @@ def carica_snapshot_posizione():
         return None
 
 def ripristina_posizione_giro():
-    """Ripristina l'ordine salvato senza modificare dati cliente, quantita' o stato."""
+    """Ripristina ESATTAMENTE il giro memorizzato nel backup.
+
+    A differenza della vecchia logica, il backup contiene anche le righe delle
+    fermate. Quindi una fermata eliminata dopo il salvataggio viene ricreata.
+    Il ripristino sostituisce il giro corrente con la fotografia salvata, senza
+    aggiungere clienti presenti solo nel giro corrente.
+    """
     snapshot = carica_snapshot_posizione()
-    df = st.session_state.giro_corrente.copy()
-    if not snapshot or df.empty:
+    if not snapshot:
         return False
 
-    usati = set()
-    indici = []
-    for item in snapshot:
-        idx = _trova_riga_snapshot(df, item, usati)
-        if idx is not None:
-            indici.append(idx)
-            usati.add(idx)
-    # Eventuali fermate aggiunte dopo il backup restano in fondo.
-    indici.extend([i for i in df.index if i not in usati])
-    if not indici:
-        return False
-    df = df.loc[indici].reset_index(drop=True)
-    df['POSIZIONE'] = [str(i) for i in range(1, len(df) + 1)]
+    # Nuovo formato: fotografia completa del giro al momento del salvataggio.
+    if isinstance(snapshot, dict) and snapshot.get("tipo") == "GIRO_COMPLETO":
+        righe = snapshot.get("righe", [])
+        if not righe:
+            return False
+        try:
+            df = pd.DataFrame(righe).copy()
+            if "__VANGO_POSIZIONE_BACKUP" in df.columns:
+                df = df.sort_values("__VANGO_POSIZIONE_BACKUP", kind="stable")
+                df = df.drop(columns=["__VANGO_POSIZIONE_BACKUP"])
+            # Ripristina esattamente l'ordine e la struttura delle righe salvate.
+            df = df.reset_index(drop=True)
+            if 'POSIZIONE' in df.columns:
+                df['POSIZIONE'] = [str(i) for i in range(1, len(df) + 1)]
+        except Exception:
+            return False
+    else:
+        # Compatibilita' con eventuali vecchi backup V1 che memorizzavano solo l'ordine.
+        df = st.session_state.giro_corrente.copy()
+        if df.empty:
+            return False
+        usati = set()
+        indici = []
+        for item in snapshot:
+            idx = _trova_riga_snapshot(df, item, usati)
+            if idx is not None:
+                indici.append(idx)
+                usati.add(idx)
+        if not indici:
+            return False
+        indici.extend([i for i in df.index if i not in usati])
+        df = df.loc[indici].reset_index(drop=True)
+        df['POSIZIONE'] = [str(i) for i in range(1, len(df) + 1)]
+
     st.session_state.giro_corrente = df
     st.session_state.metriche_giro_corrente = None
     st.session_state.giro_ottimizzato_proposto = None
