@@ -1063,6 +1063,256 @@ def ottimizza_giro_free(df_giro, df_db=None, forza_gruppamento_zona=75):
     return df_ottimizzato, metriche
 
 
+
+def _parse_orario_apertura(valore):
+    """Interpreta ORA come apertura minima.
+
+    Regola V10 TEST:
+    - 01:00 = ORARIO SCONOSCIUTO -> nessun vincolo temporale.
+    - vuoto/non interpretabile = nessun vincolo temporale.
+    - HH:MM = cliente disponibile da quell'ora in poi.
+    """
+    if valore is None:
+        return None
+    try:
+        if pd.isna(valore):
+            return None
+    except Exception:
+        pass
+
+    testo = str(valore).strip()
+    if not testo or testo.lower() in ("nan", "nat", "none", "null"):
+        return None
+
+    # 01:00 e' il nostro codice per "orario sconosciuto".
+    if testo.startswith("01:00") or testo in ("1:00", "1:0", "01:0"):
+        return None
+
+    import re
+    match = re.search(r"(?<!\d)(\d{1,2}):(\d{2})(?::\d{2})?", testo)
+    if not match:
+        return None
+
+    ore = int(match.group(1))
+    minuti = int(match.group(2))
+    if ore < 0 or ore > 23 or minuti < 0 or minuti > 59:
+        return None
+    return ore * 60 + minuti
+
+
+def _formatta_ora_minuti(minuti):
+    """Formatta minuti dalla mezzanotte in HH:MM."""
+    minuti = int(max(0, minuti))
+    ore = (minuti // 60) % 24
+    mins = minuti % 60
+    return f"{ore:02d}:{mins:02d}"
+
+
+def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=300):
+    """V10 TEST: un solo furgone + vincoli di apertura minima.
+
+    OSRM fornisce i tempi stradali; OR-Tools decide l'ordine.
+    Non esistono orari di chiusura nel DB, quindi ogni ORA valida e' trattata
+    come "non prima di HH:MM". 01:00/blank = nessun vincolo.
+    """
+    try:
+        from ortools.constraint_solver import pywrapcp, routing_enums_pb2
+    except ImportError:
+        return None, "OR-Tools non installato", None
+
+    n_clienti = len(df_giro)
+    manager = pywrapcp.RoutingIndexManager(n_clienti + 1, 1, 0)
+    routing = pywrapcp.RoutingModel(manager)
+
+    def costo_arco(from_index, to_index):
+        a = manager.IndexToNode(from_index)
+        b = manager.IndexToNode(to_index)
+        d = distanze[a][b]
+        t = durate[a][b]
+        if d is None or t is None:
+            return 10**12
+        # Manteniamo lo stesso criterio stradale del motore V9.
+        return int(round(float(d) + float(t) * 10.0))
+
+    costo_callback = routing.RegisterTransitCallback(costo_arco)
+    routing.SetArcCostEvaluatorOfAllVehicles(costo_callback)
+
+    def tempo_arco(from_index, to_index):
+        a = manager.IndexToNode(from_index)
+        b = manager.IndexToNode(to_index)
+        t = durate[a][b]
+        if t is None:
+            return 10**9
+        # Tempo di viaggio arrotondato al minuto superiore.
+        return max(0, int(round(float(t) / 60.0)))
+
+    tempo_callback = routing.RegisterTransitCallback(tempo_arco)
+
+    # Orizzonte: dalle 05:00 fino a fine giornata.  Il tempo e' espresso
+    # come minuti trascorsi dall'inizio del giro alle 05:00.
+    fine_giornata = 24 * 60
+    slack_massimo = fine_giornata
+    routing.AddDimension(
+        tempo_callback,
+        slack_massimo,
+        fine_giornata - ora_partenza_minuti,
+        True,
+        "Tempo"
+    )
+    dimensione_tempo = routing.GetDimensionOrDie("Tempo")
+
+    # Il deposito parte esattamente alle ora_partenza_minuti.
+    dimensione_tempo.CumulVar(routing.Start(0)).SetValue(0)
+
+    orari_apertura = []
+    for _, row in df_giro.reset_index(drop=True).iterrows():
+        orari_apertura.append(_parse_orario_apertura(row.get("ORA", "")))
+
+    # Vincoli di apertura: nessun limite superiore, solo "non prima di".
+    for i, apertura in enumerate(orari_apertura, start=1):
+        if apertura is None:
+            dimensione_tempo.CumulVar(manager.NodeToIndex(i)).SetRange(0, fine_giornata - ora_partenza_minuti)
+        else:
+            apertura_relativa = max(0, apertura - ora_partenza_minuti)
+            if apertura_relativa > fine_giornata - ora_partenza_minuti:
+                return None, f"L'orario { _formatta_ora_minuti(apertura) } supera l'orizzonte della giornata.", orari_apertura
+            dimensione_tempo.CumulVar(manager.NodeToIndex(i)).SetRange(
+                apertura_relativa,
+                fine_giornata - ora_partenza_minuti
+            )
+
+    # Evitiamo che il solver preferisca attese inutili quando esistono
+    # alternative con lo stesso costo stradale.
+    try:
+        dimensione_tempo.SetSlackCostCoefficientForAllVehicles(1)
+    except Exception:
+        pass
+
+    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+    search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+    search_parameters.time_limit.seconds = 12
+
+    soluzione = routing.SolveWithParameters(search_parameters)
+    if soluzione is None:
+        return None, "OR-Tools non ha trovato una soluzione compatibile con gli orari.", orari_apertura
+
+    ordine = []
+    index = routing.Start(0)
+    while not routing.IsEnd(index):
+        ordine.append(manager.IndexToNode(index))
+        index = soluzione.Value(routing.NextVar(index))
+    ordine.append(manager.IndexToNode(index))
+
+    arrivi_relativi = {}
+    for node in ordine:
+        if node == 0:
+            continue
+        index_node = manager.NodeToIndex(node)
+        arrivi_relativi[node] = int(soluzione.Value(dimensione_tempo.CumulVar(index_node)))
+
+    return ordine, None, {
+        "orari_apertura": orari_apertura,
+        "arrivi_relativi": arrivi_relativi,
+        "ora_partenza_minuti": ora_partenza_minuti,
+    }
+
+
+def ottimizza_giro_orari_test(df_giro, df_db=None, ora_partenza_minuti=300):
+    """V10 TEST ORARI: percorso stradale ottimizzato rispettando le aperture.
+
+    E' una modalita' separata: non usa ZONA come criterio.
+    01:00 e' sconosciuto e quindi non impone alcun vincolo.
+    """
+    if df_giro is None or df_giro.empty:
+        raise ValueError("Il giro è vuoto.")
+    if len(df_giro) > 99:
+        raise ValueError("Il giro contiene più di 99 fermate: il servizio OSRM pubblico non è adatto a questo volume in una singola matrice.")
+
+    df_originale = df_giro.copy().reset_index(drop=True)
+    coordinate = [COORDINATE_DEPOSITO_VANGO]
+    indirizzi_non_trovati = []
+    coordinate_da_salvare = {}
+
+    for idx, (_, row) in enumerate(df_originale.iterrows(), start=1):
+        indirizzo = _indirizzo_riga(row)
+        if not indirizzo.strip():
+            indirizzi_non_trovati.append(f"Fermata {idx}: indirizzo vuoto")
+            continue
+        coord = _trova_coordinate_nel_db(row, df_db)
+        if coord is None:
+            risultato = _geocodifica_free(indirizzo)
+            if risultato is not None:
+                coord = (risultato["lat"], risultato["lon"])
+                cliente_key = (
+                    str(row.get("CLIENTE", "")).strip().casefold(),
+                    str(row.get("VIA", "")).strip().casefold(),
+                    str(row.get("COMUNE", "")).strip().casefold(),
+                )
+                coordinate_da_salvare[cliente_key] = coord
+        if coord is None:
+            indirizzi_non_trovati.append(indirizzo)
+        else:
+            coordinate.append(coord)
+
+    if indirizzi_non_trovati:
+        elenco = "\n".join(f"- {x}" for x in indirizzi_non_trovati[:8])
+        if len(indirizzi_non_trovati) > 8:
+            elenco += f"\n- ... e altre {len(indirizzi_non_trovati) - 8}"
+        raise ValueError("Non riesco a geolocalizzare alcuni indirizzi con OpenStreetMap:\n" + elenco)
+
+    distanze, durate = _richiedi_matrice_osrm(coordinate)
+    ordine_originale = [0] + list(range(1, len(df_originale) + 1)) + [0]
+    km_originali, minuti_originali = _percorso_da_indici(ordine_originale, distanze, durate)
+
+    ordine_ottimizzato, errore_ortools, dati_tempo = _ottimizza_con_ortools_orari(
+        distanze, durate, df_originale, ora_partenza_minuti=ora_partenza_minuti
+    )
+    if ordine_ottimizzato is None:
+        raise ValueError(errore_ortools or "Ottimizzazione ORARI non riuscita.")
+
+    km_ottimizzati, secondi_ottimizzati = _percorso_da_indici(ordine_ottimizzato, distanze, durate)
+    indici_clienti = [i - 1 for i in ordine_ottimizzato if i != 0]
+    df_ottimizzato = df_originale.iloc[indici_clienti].reset_index(drop=True).copy()
+    df_ottimizzato["POSIZIONE"] = [str(i) for i in range(1, len(df_ottimizzato) + 1)]
+
+    # Costruiamo un orario di arrivo leggibile per la verifica pratica.
+    arrivi = dati_tempo.get("arrivi_relativi", {}) if isinstance(dati_tempo, dict) else {}
+    arrivi_assoluti = []
+    attese = []
+    for node in indici_clienti:
+        relativo = int(arrivi.get(node + 1, 0))
+        arrivo_assoluto = ora_partenza_minuti + relativo
+        arrivi_assoluti.append(_formatta_ora_minuti(arrivo_assoluto))
+        apertura = _parse_orario_apertura(df_originale.iloc[node].get("ORA", ""))
+        if apertura is not None:
+            attese.append(max(0, arrivo_assoluto - apertura))
+        else:
+            attese.append(0)
+
+    df_ottimizzato["ARRIVO STIMATO"] = arrivi_assoluti
+
+    orari_conosciuti = sum(1 for x in dati_tempo.get("orari_apertura", []) if x is not None)
+    orari_sconosciuti = len(df_originale) - orari_conosciuti
+
+    metriche = {
+        "metodo": "ORARI — TEST",
+        "fermate": len(df_originale),
+        "km_originali": km_originali / 1000.0,
+        "min_originali": minuti_originali / 60.0,
+        "km_ottimizzati": km_ottimizzati / 1000.0,
+        "min_ottimizzati": secondi_ottimizzati / 60.0,
+        "risparmio_km": (km_originali - km_ottimizzati) / 1000.0,
+        "risparmio_min": (minuti_originali - secondi_ottimizzati) / 60.0,
+        "errore_ortools": errore_ortools,
+        "orari_conosciuti": orari_conosciuti,
+        "orari_sconosciuti": orari_sconosciuti,
+        "ora_partenza": _formatta_ora_minuti(ora_partenza_minuti),
+        "attesa_totale_min": int(sum(attese)),
+        "coordinate_da_salvare": coordinate_da_salvare,
+    }
+    return df_ottimizzato, metriche
+
 def geolocalizza_tutti_clienti(df_db, salvataggio_progressivo=None):
     """Geolocalizza i clienti senza coordinate e aggiorna la colonna H.
 
@@ -1642,6 +1892,9 @@ if 'vista_pulita' not in st.session_state:
 if 'forza_gruppamento_zona' not in st.session_state:
     st.session_state.forza_gruppamento_zona = 50
 
+if 'modalita_ottimizzazione' not in st.session_state:
+    st.session_state.modalita_ottimizzazione = "⚖️ ZONE + ROUTE"
+
 if 'giro_ottimizzato_proposto' not in st.session_state:
     st.session_state.giro_ottimizzato_proposto = None
 
@@ -2026,6 +2279,42 @@ else:
         st.markdown('</div>', unsafe_allow_html=True)
 
 
+    st.session_state.modalita_ottimizzazione = st.selectbox(
+        "🧠 Modalità ottimizzazione",
+        options=[
+            "🛣️ ROUTE",
+            "📍 ZONE",
+            "⚖️ ZONE + ROUTE",
+            "🕐 ORARI — TEST",
+        ],
+        index=[
+            "🛣️ ROUTE",
+            "📍 ZONE",
+            "⚖️ ZONE + ROUTE",
+            "🕐 ORARI — TEST",
+        ].index(st.session_state.modalita_ottimizzazione)
+        if st.session_state.modalita_ottimizzazione in [
+            "🛣️ ROUTE",
+            "📍 ZONE",
+            "⚖️ ZONE + ROUTE",
+            "🕐 ORARI — TEST",
+        ] else 2,
+        key="select_modalita_ottimizzazione",
+    )
+
+    if st.session_state.modalita_ottimizzazione == "🛣️ ROUTE":
+        st.session_state.forza_gruppamento_zona = 0
+        st.caption("🛣️ ROUTE — motore V9 attuale: ottimizzazione stradale pura, ZONA ignorata.")
+    elif st.session_state.modalita_ottimizzazione == "📍 ZONE":
+        st.session_state.forza_gruppamento_zona = 100
+        st.caption("📍 ZONE — motore V9 attuale: ordine macro-ZONA crescente, clienti ottimizzati dentro ogni ZONA.")
+    elif st.session_state.modalita_ottimizzazione == "⚖️ ZONE + ROUTE":
+        st.session_state.forza_gruppamento_zona = 50
+        st.caption("⚖️ ZONE + ROUTE — motore V9 attuale al 50%: compromesso strada + ZONA.")
+    else:
+        st.session_state.forza_gruppamento_zona = 0
+        st.caption("🕐 ORARI — TEST — strada + orari di apertura minima. 01:00 = orario sconosciuto, quindi nessun vincolo.")
+
     if st.button("🧠 OTTIMIZZA GIRO", use_container_width=True, key="btn_ottimizza"):
         if st.session_state.giro_corrente.empty:
             st.warning("⚠️ Il giro è vuoto.")
@@ -2033,12 +2322,19 @@ else:
             st.info("ℹ️ Servono almeno 2 fermate per ottimizzare il giro.")
         else:
             try:
-                with st.spinner("🧠 Analizzo indirizzi e percorso stradale..."):
-                    df_opt, metriche_opt = ottimizza_giro_free(
-                        st.session_state.giro_corrente,
-                        st.session_state.db_clienti,
-                        forza_gruppamento_zona=st.session_state.forza_gruppamento_zona
-                    )
+                with st.spinner("🧠 Analizzo indirizzi, percorso stradale e vincoli..."):
+                    if st.session_state.modalita_ottimizzazione == "🕐 ORARI — TEST":
+                        df_opt, metriche_opt = ottimizza_giro_orari_test(
+                            st.session_state.giro_corrente,
+                            st.session_state.db_clienti,
+                            ora_partenza_minuti=300,
+                        )
+                    else:
+                        df_opt, metriche_opt = ottimizza_giro_free(
+                            st.session_state.giro_corrente,
+                            st.session_state.db_clienti,
+                            forza_gruppamento_zona=st.session_state.forza_gruppamento_zona
+                        )
                 coordinate_da_salvare = metriche_opt.pop("coordinate_da_salvare", {})
                 if coordinate_da_salvare:
                     st.session_state.db_clienti = _aggiorna_coordinate_db(
@@ -2056,24 +2352,6 @@ else:
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
-    st.session_state.forza_gruppamento_zona = st.select_slider(
-        "🎯 Forza raggruppamento ZONA",
-        options=[0, 25, 50, 75, 100],
-        value=int(st.session_state.forza_gruppamento_zona) if int(st.session_state.forza_gruppamento_zona) in [0, 25, 50, 75, 100] else 50,
-        format_func=lambda x: f"{x}%",
-        help="0% = strada libera. 25% = ZONA leggera. 50% = compromesso. 75% = ZONA prioritarie. 100% = ordine ZONA obbligatorio e clienti ottimizzati dentro ogni ZONA.",
-    )
-    if st.session_state.forza_gruppamento_zona == 0:
-        st.caption("Forza attuale: **0%** — ZONA completamente ignorata: ottimizzo solo la strada.")
-    elif st.session_state.forza_gruppamento_zona == 25:
-        st.caption("Forza attuale: **25%** — leggera preferenza per restare nelle stesse ZONA, ma le ZONA possono mescolarsi.")
-    elif st.session_state.forza_gruppamento_zona == 50:
-        st.caption("Forza attuale: **50%** — compromesso strada + ZONA: le ZONA possono mescolarsi se conviene al percorso.")
-    elif st.session_state.forza_gruppamento_zona == 75:
-        st.caption("Forza attuale: **75%** — ZONA molto prioritarie: il percorso tende a completare le ZONA prima di passare alla successiva, ma può ancora privilegiare la strada.")
-    else:
-        st.caption("Forza attuale: **100%** — ordine macro-ZONA obbligatorio (1 → 2 → 3 → ...); clienti ottimizzati dentro ogni ZONA.")
-
     st.markdown("<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
 
     # ==========================================
@@ -2084,8 +2362,12 @@ else:
         m = st.session_state.metriche_ottimizzazione or {}
         st.markdown("---")
         st.subheader("🧠 Anteprima percorso ottimizzato")
-        st.caption("Start e fine giro: Dolciaria Acquaviva — Via Enrico Fermi 10, Burago di Molgora. Il campo ORA non viene usato per l'ottimizzazione.")
-        st.info(f"🎯 Forza raggruppamento ZONA usata: **{m.get('forza_gruppamento_zona', st.session_state.forza_gruppamento_zona)}%**")
+        if m.get("metodo") == "ORARI — TEST":
+            st.caption("Start e fine giro: Dolciaria Acquaviva — Via Enrico Fermi 10, Burago di Molgora. Partenza test alle 05:00. 01:00 = orario sconosciuto, quindi nessun vincolo.")
+            st.info(f"🕐 Orari conosciuti: **{m.get('orari_conosciuti', 0)}** — sconosciuti (01:00/vuoti): **{m.get('orari_sconosciuti', 0)}** — attesa totale: **{m.get('attesa_totale_min', 0)} min**")
+        else:
+            st.caption("Start e fine giro: Dolciaria Acquaviva — Via Enrico Fermi 10, Burago di Molgora. Il campo ORA non viene usato per l'ottimizzazione V9.")
+            st.info(f"🎯 Forza raggruppamento ZONA usata: **{m.get('forza_gruppamento_zona', st.session_state.forza_gruppamento_zona)}%**")
         seq_zona = m.get("sequenza_zona", [])
         if seq_zona:
             st.caption(f"🗺️ Sequenza ZONA: **{' → '.join(map(str, seq_zona))}**  |  Cambi ZONA: **{m.get('cambi_zona', 0)}**  |  Rientri: **{m.get('rientri_zona', 0)}**")
@@ -2101,8 +2383,11 @@ else:
         c3.metric("Fermate", f"{m.get('fermate', len(df_proposto))}")
         c4.metric("Metodo", "FREE")
 
+        colonne_anteprima = ['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']
+        if m.get("metodo") == "ORARI — TEST" and 'ARRIVO STIMATO' in df_proposto.columns:
+            colonne_anteprima = ['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'ARRIVO STIMATO', 'Q.ta']
         st.dataframe(
-            df_proposto[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']],
+            df_proposto[colonne_anteprima],
             hide_index=True,
             use_container_width=True,
         )
@@ -2110,7 +2395,10 @@ else:
         col_applica, col_annulla = st.columns(2)
         with col_applica:
             if st.button("✅ APPLICA GIRO OTTIMIZZATO", use_container_width=True, type="primary", key="btn_applica_ottimizzato"):
-                st.session_state.giro_corrente = df_proposto.copy()
+                df_da_applicare = df_proposto.copy()
+                if 'ARRIVO STIMATO' in df_da_applicare.columns:
+                    df_da_applicare = df_da_applicare.drop(columns=['ARRIVO STIMATO'])
+                st.session_state.giro_corrente = df_da_applicare
                 st.session_state.metriche_giro_corrente = None
                 salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
                 st.session_state.giro_ottimizzato_proposto = None
