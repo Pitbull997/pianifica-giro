@@ -370,6 +370,32 @@ def _percorso_da_indici(indici, distanze, durate):
         totale_s += float(t)
     return totale_m, totale_s
 
+def calcola_metriche_giro_corrente(df_giro, df_db):
+    """Calcola KM e tempo del giro attualmente salvato, senza riottimizzarlo.
+
+    Usa esattamente l'ordine corrente delle fermate + deposito di partenza/fine.
+    Non modifica il motore dell'ottimizzatore e non modifica l'ordine del giro.
+    Restituisce None se manca almeno una coordinata nel DB.
+    """
+    if df_giro is None or df_giro.empty:
+        return None
+
+    coordinate = [COORDINATE_DEPOSITO_VANGO]
+    for _, row in df_giro.reset_index(drop=True).iterrows():
+        coord = _trova_coordinate_nel_db(row, df_db)
+        if coord is None:
+            return None
+        coordinate.append(coord)
+    coordinate.append(COORDINATE_DEPOSITO_VANGO)
+
+    distanze, durate = _richiedi_matrice_osrm(coordinate)
+    ordine = list(range(len(coordinate)))
+    km, secondi = _percorso_da_indici(ordine, distanze, durate)
+    return {
+        "km": km / 1000.0,
+        "minuti": secondi / 60.0,
+    }
+
 
 def _gruppo_da_zona(valore):
     """Converte la ZONA numerica in un macro-gruppo.
@@ -1411,6 +1437,7 @@ def elimina_cliente_dal_giro(idx):
     df = df.drop(df.index[idx]).reset_index(drop=True)
     df["POSIZIONE"] = [str(i) for i in range(1, len(df) + 1)]
     st.session_state.giro_corrente = df
+    st.session_state.metriche_giro_corrente = None
     st.session_state.giro_ottimizzato_proposto = None
     st.session_state.metriche_ottimizzazione = None
     st.session_state.conferma_eliminazione_idx = None
@@ -1478,9 +1505,11 @@ if not st.session_state.autenticato:
 if 'giro_corrente' not in st.session_state or st.session_state.get('ultimo_utente_caricato') != st.session_state.utente_corrente:
     if st.session_state.utente_corrente:
         st.session_state.giro_corrente = carica_giro_utente_da_sheets(st.session_state.utente_corrente)
+        st.session_state.metriche_giro_corrente = None
         st.session_state.ultimo_utente_caricato = st.session_state.utente_corrente
     else:
         st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO'])
+    st.session_state.metriche_giro_corrente = None
 
 if 'clienti_selezionati_m' not in st.session_state:
     st.session_state.clienti_selezionati_m = []
@@ -1496,6 +1525,9 @@ if 'giro_ottimizzato_proposto' not in st.session_state:
 
 if 'metriche_ottimizzazione' not in st.session_state:
     st.session_state.metriche_ottimizzazione = None
+
+if 'metriche_giro_corrente' not in st.session_state:
+    st.session_state.metriche_giro_corrente = None
 
 if "nav" in st.query_params and st.query_params["nav"] == "login":
     st.session_state.pagina_attiva = "login"
@@ -1828,6 +1860,7 @@ else:
         if st.button("🔄 INVERTI SEQUENZA", use_container_width=True, key="btn_inverti"):
             if not st.session_state.giro_corrente.empty:
                 st.session_state.giro_corrente = st.session_state.giro_corrente.iloc[::-1].reset_index(drop=True)
+                st.session_state.metriche_giro_corrente = None
                 st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
                 salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
                 st.session_state.giro_ottimizzato_proposto = None
@@ -1840,6 +1873,7 @@ else:
         if st.button("🗑️ SVUOTA GIRO", use_container_width=True, key="btn_svuota"):
             if not st.session_state.giro_corrente.empty:
                 st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO'])
+                st.session_state.metriche_giro_corrente = None
                 salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
                 st.session_state.giro_ottimizzato_proposto = None
                 st.session_state.metriche_ottimizzazione = None
@@ -1932,6 +1966,7 @@ else:
         with col_applica:
             if st.button("✅ APPLICA GIRO OTTIMIZZATO", use_container_width=True, type="primary", key="btn_applica_ottimizzato"):
                 st.session_state.giro_corrente = df_proposto.copy()
+                st.session_state.metriche_giro_corrente = None
                 salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
                 st.session_state.giro_ottimizzato_proposto = None
                 st.session_state.metriche_ottimizzazione = None
@@ -2055,10 +2090,40 @@ else:
                 st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
         
 
-        col_m1, col_m2, col_m3 = st.columns(3)
+        # KM e tempo del GIRO CORRENTE: mostrati subito dopo "Comuni".
+        # Questi valori descrivono l'ordine attualmente salvato e NON avviano
+        # mai una nuova ottimizzazione. Il calcolo viene memorizzato in sessione
+        # e rifatto solo quando cambia l'ordine o il contenuto del giro.
+        if st.session_state.metriche_giro_corrente is None and not st.session_state.giro_corrente.empty:
+            try:
+                st.session_state.metriche_giro_corrente = calcola_metriche_giro_corrente(
+                    st.session_state.giro_corrente,
+                    st.session_state.db_clienti
+                )
+            except Exception:
+                # Nessun errore bloccante nell'interfaccia: se OSRM non risponde
+                # o manca una coordinata, lasciamo semplicemente il valore "—".
+                st.session_state.metriche_giro_corrente = None
+
+        metriche_giro = st.session_state.metriche_giro_corrente or {}
+        km_giro = metriche_giro.get("km")
+        minuti_giro = metriche_giro.get("minuti")
+
+        col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
         col_m1.metric("Fermate Totali", f"{tot_clienti}")
         col_m2.metric("Pezzi Totali", f"{tot_qta}")
         col_m3.metric("Comuni", f"{tot_comuni}")
+        col_m4.metric("KM Totali", f"{km_giro:.1f}" if km_giro is not None else "—")
+        if minuti_giro is not None:
+            ore = int(minuti_giro // 60)
+            minuti = int(round(minuti_giro - ore * 60))
+            if minuti == 60:
+                ore += 1
+                minuti = 0
+            tempo_display = f"{ore}h {minuti:02d}m" if ore > 0 else f"{minuti} min"
+        else:
+            tempo_display = "—"
+        col_m5.metric("Tempo Giro", tempo_display)
 
         st.markdown("---")
 
@@ -2207,6 +2272,7 @@ else:
                             df_nuovo['POSIZIONE'] = [str(i) for i in range(1, len(df_nuovo) + 1)]
                             
                             st.session_state.giro_corrente = df_nuovo
+                            st.session_state.metriche_giro_corrente = None
                             salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
                             st.rerun()
 
@@ -2333,6 +2399,7 @@ else:
                     nuovi_clienti['STATO'] = STATO_DA_FARE
                     
                     st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
+                    st.session_state.metriche_giro_corrente = None
                     st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
                     
                     salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
