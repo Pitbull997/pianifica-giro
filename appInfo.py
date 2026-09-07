@@ -2042,8 +2042,8 @@ else:
                         with col_info:
                             st.markdown(f"""
                             <div class="clean-content">
-                                <div class="clean-title">{row['VIA']}</div>
-                                <div class="clean-subtitle">{row['COMUNE']} — Cliente: {row['CLIENTE']} (🕒 {row['ORA']} | 📦 {row['Q.ta']} pz)</div>
+                                <div class="clean-title">{row['CLIENTE']}</div>
+                                <div class="clean-subtitle">📍 {row['VIA']}, {row['COMUNE']} (🕒 {row['ORA']} | 📦 {row['Q.ta']} pz)</div>
                             </div>
                             """, unsafe_allow_html=True)
                             stato_attuale = str(row.get('STATO', '')).strip() or STATO_DA_FARE
