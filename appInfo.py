@@ -1846,83 +1846,6 @@ else:
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # Resoconto scaricabile: un solo tasto, sempre aggiornato con lo stato corrente.
-    if st.session_state.pagina_attiva == "giro" and not st.session_state.giro_corrente.empty:
-            # Esporta il resoconto del giro in Excel.
-            # Il file viene rigenerato ad ogni aggiornamento della pagina, quindi
-            # contiene sempre lo stato consegna piu' recente senza usare un secondo tasto.
-            try:
-                from openpyxl import Workbook
-                from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-                from openpyxl.utils import get_column_letter
-
-                df_export = prepara_vista_giro(st.session_state.giro_corrente).copy()
-                righe_export = []
-                for i, (_, r) in enumerate(df_export.iterrows(), start=1):
-                    stato = str(r.get("STATO", "")).strip() or STATO_DA_FARE
-                    if stato not in STATI_CONSEGNA:
-                        stato = STATO_DA_FARE
-                    righe_export.append({
-                        "N°": i,
-                        "CLIENTE": str(r.get("CLIENTE", "")).strip(),
-                        "STATO CONSEGNA": stato,
-                    })
-
-                wb = Workbook()
-                ws = wb.active
-                ws.title = "Resoconto Giro"
-                intestazioni = ["N°", "CLIENTE", "STATO CONSEGNA"]
-                ws.append(intestazioni)
-
-                for riga in righe_export:
-                    ws.append([riga[col] for col in intestazioni])
-
-                # Formattazione semplice e leggibile, pensata per l'uso quotidiano.
-                for cella in ws[1]:
-                    cella.font = Font(bold=True)
-                    cella.alignment = Alignment(horizontal="center", vertical="center")
-                ws.freeze_panes = "A2"
-                ws.auto_filter.ref = ws.dimensions
-                ws.row_dimensions[1].height = 24
-
-                larghezze = {"A": 8, "B": 42, "C": 24}
-                for col, larghezza in larghezze.items():
-                    ws.column_dimensions[col].width = larghezza
-
-                bordo = Side(style="thin")
-                for row in ws.iter_rows():
-                    for cella in row:
-                        cella.border = Border(bottom=bordo)
-                        cella.alignment = Alignment(vertical="center")
-
-                # Colori automatici solo sulla colonna dello stato.
-                for row in ws.iter_rows(min_row=2, min_col=3, max_col=3):
-                    cella = row[0]
-                    if cella.value == STATO_FATTO:
-                        cella.fill = PatternFill("solid", fgColor="C6EFCE")
-                    elif cella.value == STATO_PARZIALE:
-                        cella.fill = PatternFill("solid", fgColor="FFEB9C")
-                    elif cella.value == STATO_RESPINTO:
-                        cella.fill = PatternFill("solid", fgColor="FFC7CE")
-                    else:
-                        cella.fill = PatternFill("solid", fgColor="E7E6E6")
-
-                buffer_excel = BytesIO()
-                wb.save(buffer_excel)
-                buffer_excel.seek(0)
-                nome_resoconto = f"resoconto_giro_{st.session_state.utente_corrente}.xlsx"
-                st.download_button(
-                    "📊 ESPORTA RESOCONTO GIRO (EXCEL)",
-                    data=buffer_excel.getvalue(),
-                    file_name=nome_resoconto,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    key="btn_esporta_resoconto_giro"
-                )
-            except Exception as e:
-                st.error(f"❌ Impossibile preparare il resoconto Excel: {e}")
-            st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
-        
 
     if st.button("🧠 OTTIMIZZA GIRO", use_container_width=True, key="btn_ottimizza"):
         if st.session_state.giro_corrente.empty:
@@ -2054,6 +1977,83 @@ else:
                 st.session_state.vista_pulita = not st.session_state.vista_pulita
                 st.rerun()
             st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+        # Resoconto scaricabile: un solo tasto, sempre aggiornato con lo stato corrente.
+        if st.session_state.pagina_attiva == "giro" and not st.session_state.giro_corrente.empty:
+                # Esporta il resoconto del giro in Excel.
+                # Il file viene rigenerato ad ogni aggiornamento della pagina, quindi
+                # contiene sempre lo stato consegna piu' recente senza usare un secondo tasto.
+                try:
+                    from openpyxl import Workbook
+                    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+                    from openpyxl.utils import get_column_letter
+
+                    df_export = prepara_vista_giro(st.session_state.giro_corrente).copy()
+                    righe_export = []
+                    for i, (_, r) in enumerate(df_export.iterrows(), start=1):
+                        stato = str(r.get("STATO", "")).strip() or STATO_DA_FARE
+                        if stato not in STATI_CONSEGNA:
+                            stato = STATO_DA_FARE
+                        righe_export.append({
+                            "N°": i,
+                            "CLIENTE": str(r.get("CLIENTE", "")).strip(),
+                            "STATO CONSEGNA": stato,
+                        })
+
+                    wb = Workbook()
+                    ws = wb.active
+                    ws.title = "Resoconto Giro"
+                    intestazioni = ["N°", "CLIENTE", "STATO CONSEGNA"]
+                    ws.append(intestazioni)
+
+                    for riga in righe_export:
+                        ws.append([riga[col] for col in intestazioni])
+
+                    # Formattazione semplice e leggibile, pensata per l'uso quotidiano.
+                    for cella in ws[1]:
+                        cella.font = Font(bold=True)
+                        cella.alignment = Alignment(horizontal="center", vertical="center")
+                    ws.freeze_panes = "A2"
+                    ws.auto_filter.ref = ws.dimensions
+                    ws.row_dimensions[1].height = 24
+
+                    larghezze = {"A": 8, "B": 42, "C": 24}
+                    for col, larghezza in larghezze.items():
+                        ws.column_dimensions[col].width = larghezza
+
+                    bordo = Side(style="thin")
+                    for row in ws.iter_rows():
+                        for cella in row:
+                            cella.border = Border(bottom=bordo)
+                            cella.alignment = Alignment(vertical="center")
+
+                    # Colori automatici solo sulla colonna dello stato.
+                    for row in ws.iter_rows(min_row=2, min_col=3, max_col=3):
+                        cella = row[0]
+                        if cella.value == STATO_FATTO:
+                            cella.fill = PatternFill("solid", fgColor="C6EFCE")
+                        elif cella.value == STATO_PARZIALE:
+                            cella.fill = PatternFill("solid", fgColor="FFEB9C")
+                        elif cella.value == STATO_RESPINTO:
+                            cella.fill = PatternFill("solid", fgColor="FFC7CE")
+                        else:
+                            cella.fill = PatternFill("solid", fgColor="E7E6E6")
+
+                    buffer_excel = BytesIO()
+                    wb.save(buffer_excel)
+                    buffer_excel.seek(0)
+                    nome_resoconto = f"resoconto_giro_{st.session_state.utente_corrente}.xlsx"
+                    st.download_button(
+                        "📊 ESPORTA RESOCONTO GIRO (EXCEL)",
+                        data=buffer_excel.getvalue(),
+                        file_name=nome_resoconto,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        key="btn_esporta_resoconto_giro"
+                    )
+                except Exception as e:
+                    st.error(f"❌ Impossibile preparare il resoconto Excel: {e}")
+                st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
+        
 
         col_m1, col_m2, col_m3 = st.columns(3)
         col_m1.metric("Fermate Totali", f"{tot_clienti}")
