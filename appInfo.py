@@ -3,6 +3,7 @@ import pandas as pd
 import urllib.parse
 import os
 import base64
+import json
 import time
 import requests
 from io import BytesIO
@@ -1172,15 +1173,8 @@ def carica_utenti_da_sheets():
     return utenti_default
 
 def salva_utenti_su_sheets(dict_utenti):
-    try:
-        if sheet_utenti:
-            time.sleep(1.0)
-            sheet_utenti.clear()
-            data_to_update = [["USERNAME", "PASSWORD"]] + [[u, p] for u, p in dict_utenti.items()]
-            sheet_utenti.update(data_to_update)
-            st.cache_data.clear()
-    except Exception as e:
-        st.error(f"Errore nel salvataggio utenti su Google Sheets: {e}")
+    """PROTEZIONE UTENTI: la scheda Utenti e' esclusivamente in lettura."""
+    raise RuntimeError("Protezione VanGo: la scheda Utenti non puo' essere modificata dall'app.")
 
 # Funzioni di utilità per i dati
 def pulisci_orario(valore):
@@ -1251,15 +1245,12 @@ def salva_coordinate_su_google_sheets(df):
 
 
 def salva_db_su_google_sheets(df):
-    try:
-        if sheet_db:
-            time.sleep(1.0)
-            sheet_db.clear()
-            data_to_update = [df.columns.values.tolist()] + df.astype(str).values.tolist()
-            sheet_db.update(data_to_update)
-            st.cache_data.clear()
-    except Exception as e:
-        st.error(f"Errore nel salvataggio su Google Sheets: {e}")
+    """PROTEZIONE DATABASE: Foglio1 non viene mai riscritto.
+    L'unica scrittura consentita su Foglio1 e' la colonna H (COORDINATE).
+    Questa funzione resta solo per compatibilita' con vecchio codice e inoltra
+    esclusivamente il salvataggio della colonna H.
+    """
+    return salva_coordinate_su_google_sheets(df)
 
 # Database Clienti con TTL ottimizzato a 300s
 @st.cache_data(ttl=300, show_spinner=False)
@@ -1326,124 +1317,186 @@ def carica_giro_utente_da_sheets(nome_utente):
     return df_vuoto
 
 def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
+    """Salva il giro esclusivamente su GiroAttivo.
+
+    Foglio1 e Utenti non vengono mai modificati da questa funzione.
+    Le eventuali righe tecniche di backup presenti in GiroAttivo vengono mantenute.
+    """
+    cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'TIPO_RIGA', 'BACKUP_JSON']
     for tentativo in range(5):
         try:
             if sheet_giro:
                 time.sleep(1.5 * (tentativo + 1))
-                
+
                 data_totale = sheet_giro.get_all_records()
-                df_tutti = pd.DataFrame(data_totale) if data_totale else pd.DataFrame(columns=['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO'])
-                
+                df_tutti = pd.DataFrame(data_totale) if data_totale else pd.DataFrame(columns=cols_ordine)
+
                 if not df_tutti.empty:
                     df_tutti.columns = df_tutti.columns.str.strip().str.upper()
                     if 'Q.TA' in df_tutti.columns:
                         df_tutti = df_tutti.rename(columns={'Q.TA': 'Q.ta'})
-                    df_tutti = df_tutti[df_tutti['UTENTE'].astype(str).str.strip().str.lower() != nome_utente.strip().lower()]
-                
+                    for c in cols_ordine:
+                        if c not in df_tutti.columns:
+                            df_tutti[c] = ""
+                    df_tutti = df_tutti[cols_ordine]
+                    # Rimuove solo il giro normale dell'utente corrente.
+                    # Le righe tecniche di backup vengono preservate.
+                    mask_utente = df_tutti['UTENTE'].astype(str).str.strip().str.lower() == nome_utente.strip().lower()
+                    df_tutti = df_tutti.loc[~mask_utente].copy()
+
                 if not df_nuovo_giro.empty:
                     df_agg = df_nuovo_giro.copy()
                     df_agg['UTENTE'] = nome_utente
                     df_agg['POSIZIONE'] = range(1, len(df_agg) + 1)
-                    cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO']
                     for c in cols_ordine:
                         if c not in df_agg.columns:
                             df_agg[c] = ""
+                    df_agg['TIPO_RIGA'] = ""
+                    df_agg['BACKUP_JSON'] = ""
                     df_agg = df_agg[cols_ordine]
-                    
-                    if df_tutti.empty:
-                        df_tutti = df_agg
-                    else:
-                        for c in cols_ordine:
-                            if c not in df_tutti.columns:
-                                df_tutti[c] = ""
-                        df_tutti = pd.concat([df_tutti[cols_ordine], df_agg[cols_ordine]], ignore_index=True)
-                
+                    df_tutti = pd.concat([df_tutti, df_agg], ignore_index=True)
+
                 sheet_giro.clear()
-                intestazioni = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO']
                 if df_tutti.empty:
-                    sheet_giro.update([intestazioni])
+                    sheet_giro.update([cols_ordine])
                 else:
-                    data_to_update = [intestazioni] + df_tutti.astype(str).values.tolist()
+                    data_to_update = [cols_ordine] + df_tutti.astype(str).values.tolist()
                     sheet_giro.update(data_to_update)
-                
+
                 st.cache_data.clear()
-                return
+                return True
         except Exception as e:
             if "429" in str(e) and tentativo < 4:
                 continue
-            elif tentativo == 4:
+            if tentativo == 4:
                 st.error(f"Errore nel salvataggio del giro su Google Sheets dopo vari tentativi: {e}")
             else:
                 st.error(f"Errore nel salvataggio del giro su Google Sheets: {e}")
                 break
+    return False
 
-STATO_DA_FARE = "⚪ DA CONSEGNARE"
-STATO_FATTO = "🟢 FATTO"
-STATO_PARZIALE = "🟡 PARZIALE"
-STATO_RESPINTO = "🔴 RESPINTO"
-STATI_CONSEGNA = [STATO_DA_FARE, STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
 
-def salva_stato_consegna(idx, stato):
-    """Aggiorna solo lo stato della consegna e lo salva su GiroAttivo."""
+BACKUP_UTENTE_PREFIX = "__VANGO_BACKUP__::"
+
+def _chiave_cliente_giro(row):
+    """Chiave stabile per riconoscere una fermata senza usare POSIZIONE."""
+    return (
+        str(row.get('CLIENTE', '')).strip().casefold(),
+        str(row.get('COMUNE', '')).strip().casefold(),
+        str(row.get('VIA', '')).strip().casefold(),
+        str(row.get('ORA', '')).strip().casefold(),
+    )
+
+def _crea_snapshot_ordine(df):
+    """Memorizza solo l'ordine delle fermate, non una copia del database."""
+    occorrenze = {}
+    snapshot = []
+    for _, row in df.reset_index(drop=True).iterrows():
+        chiave = _chiave_cliente_giro(row)
+        n = occorrenze.get(chiave, 0)
+        occorrenze[chiave] = n + 1
+        snapshot.append({"chiave": list(chiave), "occorrenza": n})
+    return snapshot
+
+def _trova_riga_snapshot(df, item, usati):
+    chiave = tuple(item.get('chiave', []))
+    occ = int(item.get('occorrenza', 0))
+    candidati = [
+        i for i, row in df.iterrows()
+        if i not in usati and _chiave_cliente_giro(row) == chiave
+    ]
+    if 0 <= occ < len(candidati):
+        return candidati[occ]
+    return candidati[0] if candidati else None
+
+def salva_posizione_giro():
+    """Salva l'ordine corrente in una riga tecnica di GiroAttivo."""
     df = st.session_state.giro_corrente.copy()
-    if df.empty or idx < 0 or idx >= len(df):
-        return
-    if 'STATO' not in df.columns:
-        df['STATO'] = STATO_DA_FARE
-    df.at[idx, 'STATO'] = stato
-    st.session_state.giro_corrente = df
-    salva_giro_utente_su_sheets(st.session_state.utente_corrente, df)
-    st.rerun()
+    if df.empty or not st.session_state.utente_corrente:
+        return False
+    snapshot = _crea_snapshot_ordine(df)
+    payload = json.dumps(snapshot, ensure_ascii=False, separators=(',', ':'))
+    backup_utente = BACKUP_UTENTE_PREFIX + str(st.session_state.utente_corrente).strip()
 
-def prepara_vista_giro(df):
-    """Restituisce una vista operativa con i clienti da fare prima e quelli gestiti in fondo.
-    Non modifica l'ordine reale salvato del giro: e' solo una vista grafica.
-    """
-    if df is None or df.empty:
-        return df.copy() if df is not None else pd.DataFrame()
-    out = df.copy().reset_index(drop=True)
-    if "STATO" not in out.columns:
-        out["STATO"] = STATO_DA_FARE
-    out["STATO"] = out["STATO"].fillna("").astype(str)
-    out["__IDX_ORIGINALE"] = list(range(len(out)))
-    completati = out["STATO"].isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO])
-    return pd.concat([out.loc[~completati], out.loc[completati]], ignore_index=True)
+    for tentativo in range(5):
+        try:
+            if not sheet_giro:
+                return False
+            time.sleep(1.5 * (tentativo + 1))
+            data = sheet_giro.get_all_records()
+            df_all = pd.DataFrame(data) if data else pd.DataFrame(columns=['UTENTE','POSIZIONE','CLIENTE','COMUNE','VIA','ORA','Q.ta','STATO','TIPO_RIGA','BACKUP_JSON'])
+            df_all.columns = [str(c).strip() for c in df_all.columns]
+            for c in ['UTENTE','POSIZIONE','CLIENTE','COMUNE','VIA','ORA','Q.ta','STATO','TIPO_RIGA','BACKUP_JSON']:
+                if c not in df_all.columns:
+                    df_all[c] = ''
+            df_all = df_all[['UTENTE','POSIZIONE','CLIENTE','COMUNE','VIA','ORA','Q.ta','STATO','TIPO_RIGA','BACKUP_JSON']]
+            df_all = df_all[df_all['UTENTE'].astype(str) != backup_utente].copy()
+            nuova = pd.DataFrame([{
+                'UTENTE': backup_utente, 'POSIZIONE': str(st.session_state.utente_corrente),
+                'CLIENTE': 'BACKUP POSIZIONE GIRO', 'COMUNE': '', 'VIA': '', 'ORA': '', 'Q.ta': '', 'STATO': '',
+                'TIPO_RIGA': 'BACKUP_POSIZIONE', 'BACKUP_JSON': payload
+            }])
+            df_all = pd.concat([df_all, nuova], ignore_index=True)
+            sheet_giro.clear()
+            sheet_giro.update([['UTENTE','POSIZIONE','CLIENTE','COMUNE','VIA','ORA','Q.ta','STATO','TIPO_RIGA','BACKUP_JSON']] + df_all.astype(str).values.tolist())
+            st.cache_data.clear()
+            st.session_state.giro_backup_disponibile = True
+            return True
+        except Exception as e:
+            if "429" in str(e) and tentativo < 4:
+                continue
+            if tentativo == 4:
+                st.error(f"❌ Impossibile salvare il backup del giro: {e}")
+            break
+    return False
 
-def indirizzo_partenza_giro(df):
-    """Ultimo cliente gestito; se non esiste, usa il deposito."""
-    if df is not None and not df.empty and "STATO" in df.columns:
-        gestiti = df[df["STATO"].fillna("").astype(str).isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO])]
-        if not gestiti.empty:
-            row = gestiti.iloc[-1]
-            return f"{row['VIA']}, {row['COMUNE']}"
-    return DEPOSITO_VANGO
+def carica_snapshot_posizione():
+    """Legge l'ultimo backup dell'utente da GiroAttivo."""
+    if not sheet_giro or not st.session_state.utente_corrente:
+        return None
+    try:
+        data = sheet_giro.get_all_records()
+        if not data:
+            return None
+        df_all = pd.DataFrame(data)
+        df_all.columns = [str(c).strip() for c in df_all.columns]
+        backup_utente = BACKUP_UTENTE_PREFIX + str(st.session_state.utente_corrente).strip()
+        righe = df_all[df_all.get('UTENTE', '').astype(str) == backup_utente] if 'UTENTE' in df_all.columns else pd.DataFrame()
+        if righe.empty:
+            return None
+        payload = str(righe.iloc[-1].get('BACKUP_JSON', '') or '').strip()
+        if not payload:
+            return None
+        return json.loads(payload)
+    except Exception:
+        return None
 
-def indirizzi_per_percorso_giro(df):
-    """Costruisce il percorso Maps senza clienti gia' gestiti."""
-    if df is None or df.empty:
-        return []
-    pending = df[~df["STATO"].fillna("").astype(str).isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO])].copy()
-    return [f"{r['VIA']}, {r['COMUNE']}" for _, r in pending.iterrows()]
-
-def elimina_cliente_dal_giro(idx):
-    """Elimina una sola fermata dal giro corrente e aggiorna GiroAttivo.
-
-    Il cliente resta nel database Foglio1: viene rimosso solo dal giro corrente.
-    """
+def ripristina_posizione_giro():
+    """Ripristina l'ordine salvato senza modificare dati cliente, quantita' o stato."""
+    snapshot = carica_snapshot_posizione()
     df = st.session_state.giro_corrente.copy()
-    if df.empty or idx < 0 or idx >= len(df):
-        return
-    cliente = str(df.iloc[idx].get("CLIENTE", "Cliente"))
-    df = df.drop(df.index[idx]).reset_index(drop=True)
-    df["POSIZIONE"] = [str(i) for i in range(1, len(df) + 1)]
+    if not snapshot or df.empty:
+        return False
+
+    usati = set()
+    indici = []
+    for item in snapshot:
+        idx = _trova_riga_snapshot(df, item, usati)
+        if idx is not None:
+            indici.append(idx)
+            usati.add(idx)
+    # Eventuali fermate aggiunte dopo il backup restano in fondo.
+    indici.extend([i for i in df.index if i not in usati])
+    if not indici:
+        return False
+    df = df.loc[indici].reset_index(drop=True)
+    df['POSIZIONE'] = [str(i) for i in range(1, len(df) + 1)]
     st.session_state.giro_corrente = df
     st.session_state.metriche_giro_corrente = None
     st.session_state.giro_ottimizzato_proposto = None
     st.session_state.metriche_ottimizzazione = None
-    st.session_state.conferma_eliminazione_idx = None
     salva_giro_utente_su_sheets(st.session_state.utente_corrente, df)
-    st.session_state.cliente_eliminato_messaggio = f"🗑️ {cliente} eliminato dal giro."
-    st.rerun()
+    return True
 
 
 # Inizializzazione dati di sessione.
@@ -1528,6 +1581,9 @@ if 'metriche_ottimizzazione' not in st.session_state:
 
 if 'metriche_giro_corrente' not in st.session_state:
     st.session_state.metriche_giro_corrente = None
+
+if 'giro_backup_disponibile' not in st.session_state:
+    st.session_state.giro_backup_disponibile = False
 
 if "nav" in st.query_params and st.query_params["nav"] == "login":
     st.session_state.pagina_attiva = "login"
@@ -1880,6 +1936,26 @@ else:
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
+    col_backup1, col_backup2 = st.columns(2)
+    with col_backup1:
+        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
+        if st.button("💾 SALVA POSIZIONE GIRO", use_container_width=True, key="btn_salva_posizione"):
+            if st.session_state.giro_corrente.empty:
+                st.warning("⚠️ Il giro è vuoto: non c'è nulla da memorizzare.")
+            elif salva_posizione_giro():
+                st.success("💾 Ordine attuale del giro memorizzato. Potrai ripristinarlo in qualsiasi momento.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col_backup2:
+        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
+        if st.button("↩️ RIPRISTINA GIRO SALVATO", use_container_width=True, key="btn_ripristina_posizione"):
+            if ripristina_posizione_giro():
+                st.success("↩️ Giro riportato all'ordine memorizzato.")
+                st.rerun()
+            else:
+                st.warning("⚠️ Nessun backup del giro disponibile per questo utente.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
 
     if st.button("🧠 OTTIMIZZA GIRO", use_container_width=True, key="btn_ottimizza"):
         if st.session_state.giro_corrente.empty:
@@ -1901,7 +1977,7 @@ else:
                         st.session_state.giro_corrente,
                         coordinate_da_salvare
                     )
-                    salva_db_su_google_sheets(st.session_state.db_clienti)
+                    salva_coordinate_su_google_sheets(st.session_state.db_clienti)
                 st.session_state.giro_ottimizzato_proposto = df_opt
                 st.session_state.metriche_ottimizzazione = metriche_opt
                 st.success("Giro ottimizzato pronto: controllalo e poi scegli se applicarlo.")
@@ -2341,24 +2417,9 @@ else:
                     st.error(f"❌ Geolocalizzazione non riuscita: {e}")
 
         if st.session_state.is_admin:
-            caricamento_file = st.file_uploader("Carica Database Clienti su Google Sheets (Excel o CSV)", type=["xlsx", "csv"])
-            
-            if caricamento_file is not None:
-                try:
-                    if caricamento_file.name.endswith('.csv'):
-                        df_up = pd.read_csv(caricamento_file)
-                    else:
-                        df_up = pd.read_excel(caricamento_file)
-                    
-                    st.session_state.db_clienti = elabora_dataframe_db(df_up)
-                    salva_db_su_google_sheets(st.session_state.db_clienti)
-                    st.session_state.clienti_selezionati_m = []
-                    
-                    st.success(f"Database caricato e sincronizzato su Google Sheets! ({len(st.session_state.db_clienti)} clienti)")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Errore nel caricamento del file: {e}")
-            
+            st.info("🔒 PROTEZIONE DATABASE: Foglio1 è in sola lettura. L'app può scrivere esclusivamente le COORDINATE in colonna H.")
+            st.caption("Il caricamento/sovrascrittura dell'anagrafica da questa schermata è disabilitato per proteggere il database.")
+
             st.markdown("---")
 
         if not st.session_state.db_clienti.empty:
@@ -2411,17 +2472,13 @@ else:
                 
             if st.session_state.is_admin:
                 st.markdown("---")
-                with st.expander("👀 Visualizza o Modifica Anagrafica Clienti intera"):
-                    edited_db = st.data_editor(
+                with st.expander("👀 Visualizza Anagrafica Clienti (sola lettura)"):
+                    st.dataframe(
                         st.session_state.db_clienti,
-                        num_rows="dynamic",
-                        use_container_width=True,
-                        key="db_editor_switch"
+                        hide_index=True,
+                        use_container_width=True
                     )
-                    if not edited_db.equals(st.session_state.db_clienti):
-                        st.session_state.db_clienti = elabora_dataframe_db(edited_db)
-                        salva_db_su_google_sheets(st.session_state.db_clienti)
-                        st.rerun()
+                    st.caption("🔒 Foglio1 è protetto: nessuna modifica all'anagrafica. Solo la colonna H (COORDINATE) può essere aggiornata automaticamente.")
         else:
             st.warning("Nessun cliente trovato su Google Sheets.")
 
@@ -2435,25 +2492,9 @@ else:
         dict_u = carica_utenti_da_sheets()
         df_utenti_attuali = pd.DataFrame(list(dict_u.items()), columns=["USERNAME", "PASSWORD"])
 
-        edited_utenti = st.data_editor(
+        st.dataframe(
             df_utenti_attuali,
-            num_rows="dynamic",
-            use_container_width=True,
-            key="editor_utenti_sheets"
+            hide_index=True,
+            use_container_width=True
         )
-
-        if st.button("💾 SALVA MODIFICHE UTENTI SU GOOGLE SHEETS", use_container_width=True, type="primary"):
-            nuovo_dict = {}
-            for _, row in edited_utenti.iterrows():
-                u = str(row["USERNAME"]).strip()
-                p = str(row["PASSWORD"]).strip()
-                if u and u.lower() != "nan":
-                    nuovo_dict[u] = p
-            
-            if "admin" not in nuovo_dict:
-                nuovo_dict["admin"] = "vango2026"
-
-            salva_utenti_su_sheets(nuovo_dict)
-            st.session_state.utenti_sistema = nuovo_dict
-            st.success("Tabella utenti aggiornata e salvata su Google Sheets con successo!")
-            st.rerun()
+        st.info("🔒 La scheda Utenti è protetta e viene utilizzata esclusivamente in lettura dall'app.")
