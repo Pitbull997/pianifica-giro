@@ -1795,18 +1795,18 @@ else:
         col_sw1, col_sw2 = st.columns(2)
 
     with col_sw1:
-        css_class = "btn-active" if st.session_state.pagina_attiva == "giro" else "btn-inactive"
-        st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
-        if st.button("📍 GIRO", use_container_width=True, key="btn_giro"):
-            st.session_state.pagina_attiva = "giro"
-            st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with col_sw2:
         css_class = "btn-active" if st.session_state.pagina_attiva == "db" else "btn-inactive"
         st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
         if st.button("📁 CLIENTI", use_container_width=True, key="btn_db"):
             st.session_state.pagina_attiva = "db"
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col_sw2:
+        css_class = "btn-active" if st.session_state.pagina_attiva == "giro" else "btn-inactive"
+        st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
+        if st.button("📍 GIRO", use_container_width=True, key="btn_giro"):
+            st.session_state.pagina_attiva = "giro"
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1819,25 +1819,9 @@ else:
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
-    st.session_state.forza_gruppamento_zona = st.select_slider(
-        "🎯 Forza raggruppamento ZONA",
-        options=[0, 25, 50, 75, 100],
-        value=int(st.session_state.forza_gruppamento_zona) if int(st.session_state.forza_gruppamento_zona) in [0, 25, 50, 75, 100] else 50,
-        format_func=lambda x: f"{x}%",
-        help="0% = strada libera. 25% = ZONA leggera. 50% = compromesso. 75% = ZONA prioritarie. 100% = ordine ZONA obbligatorio e clienti ottimizzati dentro ogni ZONA.",
-    )
-    if st.session_state.forza_gruppamento_zona == 0:
-        st.caption("Forza attuale: **0%** — ZONA completamente ignorata: ottimizzo solo la strada.")
-    elif st.session_state.forza_gruppamento_zona == 25:
-        st.caption("Forza attuale: **25%** — leggera preferenza per restare nelle stesse ZONA, ma le ZONA possono mescolarsi.")
-    elif st.session_state.forza_gruppamento_zona == 50:
-        st.caption("Forza attuale: **50%** — compromesso strada + ZONA: le ZONA possono mescolarsi se conviene al percorso.")
-    elif st.session_state.forza_gruppamento_zona == 75:
-        st.caption("Forza attuale: **75%** — ZONA molto prioritarie: il percorso tende a completare le ZONA prima di passare alla successiva, ma può ancora privilegiare la strada.")
-    else:
-        st.caption("Forza attuale: **100%** — ordine macro-ZONA obbligatorio (1 → 2 → 3 → ...); clienti ottimizzati dentro ogni ZONA.")
 
-    col_act1, col_act2, col_act3 = st.columns(3)
+
+    col_act1, col_act2 = st.columns(2)
 
     with col_act1:
         st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
@@ -1862,36 +1846,61 @@ else:
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-    with col_act3:
-        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-        if st.button("🧠 OTTIMIZZA GIRO", use_container_width=True, key="btn_ottimizza"):
-            if st.session_state.giro_corrente.empty:
-                st.warning("⚠️ Il giro è vuoto.")
-            elif len(st.session_state.giro_corrente) < 2:
-                st.info("ℹ️ Servono almeno 2 fermate per ottimizzare il giro.")
-            else:
-                try:
-                    with st.spinner("🧠 Analizzo indirizzi e percorso stradale..."):
-                        df_opt, metriche_opt = ottimizza_giro_free(
-                            st.session_state.giro_corrente,
-                            st.session_state.db_clienti,
-                            forza_gruppamento_zona=st.session_state.forza_gruppamento_zona
-                        )
-                    coordinate_da_salvare = metriche_opt.pop("coordinate_da_salvare", {})
-                    if coordinate_da_salvare:
-                        st.session_state.db_clienti = _aggiorna_coordinate_db(
-                            st.session_state.db_clienti,
-                            st.session_state.giro_corrente,
-                            coordinate_da_salvare
-                        )
-                        salva_db_su_google_sheets(st.session_state.db_clienti)
-                    st.session_state.giro_ottimizzato_proposto = df_opt
-                    st.session_state.metriche_ottimizzazione = metriche_opt
-                    st.success("Giro ottimizzato pronto: controllalo e poi scegli se applicarlo.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Ottimizzazione non riuscita: {e}")
-        st.markdown('</div>', unsafe_allow_html=True)
+    if st.session_state.pagina_attiva == "giro" and not st.session_state.giro_corrente.empty:
+        label_btn_vista = "👁️ TORNA ALLA VISTA OPERATIVA" if st.session_state.vista_pulita else "📋 VISTA RIEPILOGO PULITA"
+        if st.button(label_btn_vista, use_container_width=True):
+            st.session_state.vista_pulita = not st.session_state.vista_pulita
+            st.rerun()
+        st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
+    if st.button("🧠 OTTIMIZZA GIRO", use_container_width=True, key="btn_ottimizza"):
+        if st.session_state.giro_corrente.empty:
+            st.warning("⚠️ Il giro è vuoto.")
+        elif len(st.session_state.giro_corrente) < 2:
+            st.info("ℹ️ Servono almeno 2 fermate per ottimizzare il giro.")
+        else:
+            try:
+                with st.spinner("🧠 Analizzo indirizzi e percorso stradale..."):
+                    df_opt, metriche_opt = ottimizza_giro_free(
+                        st.session_state.giro_corrente,
+                        st.session_state.db_clienti,
+                        forza_gruppamento_zona=st.session_state.forza_gruppamento_zona
+                    )
+                coordinate_da_salvare = metriche_opt.pop("coordinate_da_salvare", {})
+                if coordinate_da_salvare:
+                    st.session_state.db_clienti = _aggiorna_coordinate_db(
+                        st.session_state.db_clienti,
+                        st.session_state.giro_corrente,
+                        coordinate_da_salvare
+                    )
+                    salva_db_su_google_sheets(st.session_state.db_clienti)
+                st.session_state.giro_ottimizzato_proposto = df_opt
+                st.session_state.metriche_ottimizzazione = metriche_opt
+                st.success("Giro ottimizzato pronto: controllalo e poi scegli se applicarlo.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Ottimizzazione non riuscita: {e}")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
+    st.session_state.forza_gruppamento_zona = st.select_slider(
+        "🎯 Forza raggruppamento ZONA",
+        options=[0, 25, 50, 75, 100],
+        value=int(st.session_state.forza_gruppamento_zona) if int(st.session_state.forza_gruppamento_zona) in [0, 25, 50, 75, 100] else 50,
+        format_func=lambda x: f"{x}%",
+        help="0% = strada libera. 25% = ZONA leggera. 50% = compromesso. 75% = ZONA prioritarie. 100% = ordine ZONA obbligatorio e clienti ottimizzati dentro ogni ZONA.",
+    )
+    if st.session_state.forza_gruppamento_zona == 0:
+        st.caption("Forza attuale: **0%** — ZONA completamente ignorata: ottimizzo solo la strada.")
+    elif st.session_state.forza_gruppamento_zona == 25:
+        st.caption("Forza attuale: **25%** — leggera preferenza per restare nelle stesse ZONA, ma le ZONA possono mescolarsi.")
+    elif st.session_state.forza_gruppamento_zona == 50:
+        st.caption("Forza attuale: **50%** — compromesso strada + ZONA: le ZONA possono mescolarsi se conviene al percorso.")
+    elif st.session_state.forza_gruppamento_zona == 75:
+        st.caption("Forza attuale: **75%** — ZONA molto prioritarie: il percorso tende a completare le ZONA prima di passare alla successiva, ma può ancora privilegiare la strada.")
+    else:
+        st.caption("Forza attuale: **100%** — ordine macro-ZONA obbligatorio (1 → 2 → 3 → ...); clienti ottimizzati dentro ogni ZONA.")
 
     st.markdown("<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
 
@@ -1949,11 +1958,6 @@ else:
         tot_qta = int(st.session_state.giro_corrente['Q.ta'].sum()) if not st.session_state.giro_corrente.empty else 0
         tot_comuni = int(st.session_state.giro_corrente['COMUNE'].nunique()) if not st.session_state.giro_corrente.empty else 0
 
-        col_m1, col_m2, col_m3 = st.columns(3)
-        col_m1.metric("Fermate Totali", f"{tot_clienti}")
-        col_m2.metric("Pezzi Totali", f"{tot_qta}")
-        col_m3.metric("Comuni", f"{tot_comuni}")
-
         # Avanzamento del giro: immediato e visibile a colpo d'occhio.
         # I clienti FATTO/PARZIALE/RESPINTO sono considerati consegne gestite.
         if tot_clienti > 0:
@@ -1973,14 +1977,12 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
-        st.markdown("---")
+        col_m1, col_m2, col_m3 = st.columns(3)
+        col_m1.metric("Fermate Totali", f"{tot_clienti}")
+        col_m2.metric("Pezzi Totali", f"{tot_qta}")
+        col_m3.metric("Comuni", f"{tot_comuni}")
 
-        if not st.session_state.giro_corrente.empty:
-            label_btn_vista = "👁️ TORNA ALLA VISTA OPERATIVA" if st.session_state.vista_pulita else "📋 VISTA RIEPILOGO PULITA"
-            if st.button(label_btn_vista, use_container_width=True):
-                st.session_state.vista_pulita = not st.session_state.vista_pulita
-                st.rerun()
-            st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+        st.markdown("---")
 
         if not st.session_state.giro_corrente.empty:
             st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
