@@ -1259,8 +1259,9 @@ def carica_db_da_google_sheets_cached():
         if sheet_db:
             valori_grezzi = sheet_db.get_all_values()
             if not valori_grezzi:
+                # Foglio1 e' protetto: non riscriviamo mai l'intestazione completa.
+                # L'unica cella che l'app puo' aggiornare e' H1/H2:H (COORDINATE).
                 intestazioni_default = ['POSIZIONE', 'ZONA', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'QTA_DEFAULT', 'COORDINATE']
-                sheet_db.update([intestazioni_default])
                 return pd.DataFrame(columns=intestazioni_default)
             
             data = sheet_db.get_all_records()
