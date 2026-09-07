@@ -1954,6 +1954,25 @@ else:
         col_m2.metric("Pezzi Totali", f"{tot_qta}")
         col_m3.metric("Comuni", f"{tot_comuni}")
 
+        # Avanzamento del giro: immediato e visibile a colpo d'occhio.
+        # I clienti FATTO/PARZIALE/RESPINTO sono considerati consegne gestite.
+        if tot_clienti > 0:
+            stati = st.session_state.giro_corrente.get("STATO", pd.Series([STATO_DA_FARE] * tot_clienti)).fillna("").astype(str)
+            completate = int(stati.isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]).sum())
+            percentuale = completate / tot_clienti
+            st.markdown(f"""
+            <div style="border:1px solid rgba(148,163,184,0.28); border-radius:12px; padding:12px 14px 10px 14px; margin:4px 0 14px 0; background:rgba(30,41,59,0.22);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:7px;">
+                    <span style="font-size:15px; font-weight:700;">🚚 AVANZAMENTO GIRO</span>
+                    <span style="font-size:16px; font-weight:800;">{completate} / {tot_clienti}</span>
+                </div>
+                <div style="height:10px; border-radius:999px; background:rgba(148,163,184,0.18); overflow:hidden;">
+                    <div style="height:100%; width:{percentuale * 100:.1f}%; border-radius:999px; background:#22c55e;"></div>
+                </div>
+                <div style="font-size:12px; color:#94A3B8; margin-top:6px;">{completate} consegne completate su {tot_clienti}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
         st.markdown("---")
 
         if not st.session_state.giro_corrente.empty:
