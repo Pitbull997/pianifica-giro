@@ -1108,6 +1108,33 @@ def _formatta_ora_minuti(minuti):
     return f"{ore:02d}:{mins:02d}"
 
 
+def _simula_tempo_percorso_orari(ordine, durate, orari_apertura, ora_partenza_minuti=300, minuti_servizio=6):
+    """Simula l'orario reale fermata per fermata.
+
+    Regola: si viaggia, si arriva, si attende solo se necessario per l'apertura,
+    poi si effettuano 6 minuti di parcheggio+scarico prima di ripartire.
+    Il servizio viene applicato a ogni cliente, ma non al deposito finale.
+    """
+    tempo = float(ora_partenza_minuti)
+    arrivi = {}
+    attese = {}
+    servizi = {}
+    for a, b in zip(ordine[:-1], ordine[1:]):
+        viaggio = durate[a][b]
+        if viaggio is None:
+            return None
+        tempo += float(viaggio) / 60.0
+        if b != 0:
+            apertura = orari_apertura[b - 1] if b - 1 < len(orari_apertura) else None
+            attesa = max(0.0, float(apertura) - tempo) if apertura is not None else 0.0
+            tempo += attesa
+            arrivi[b] = tempo
+            attese[b] = attesa
+            tempo += float(minuti_servizio)
+            servizi[b] = float(minuti_servizio)
+    return {"arrivi": arrivi, "attese": attese, "servizi": servizi, "fine": tempo}
+
+
 def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=300):
     """V10.2 TEST: un solo furgone + aperture + 6 min medi per fermata.
 
@@ -1148,8 +1175,9 @@ def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=
         t = durate[a][b]
         if t is None:
             return 10**9
-        # Tempo di viaggio arrotondato al minuto superiore + servizio della
-        # fermata di partenza. Il deposito (nodo 0) non ha servizio.
+        # Il servizio della fermata di partenza viene conteggiato qui.
+        # Usiamo minuti interi perché la dimensione Tempo di OR-Tools è in minuti.
+        # Il calcolo dettagliato finale usa comunque i secondi OSRM.
         viaggio_min = max(0, int(round(float(t) / 60.0)))
         servizio_min = MINUTI_SERVIZIO_PER_FERMATA if a != 0 else 0
         return viaggio_min + servizio_min
@@ -1293,25 +1321,26 @@ def ottimizza_giro_orari_test(df_giro, df_db=None, ora_partenza_minuti=300):
     df_ottimizzato = df_originale.iloc[indici_clienti].reset_index(drop=True).copy()
     df_ottimizzato["POSIZIONE"] = [str(i) for i in range(1, len(df_ottimizzato) + 1)]
 
-    # Costruiamo un orario di arrivo leggibile per la verifica pratica.
-    arrivi = dati_tempo.get("arrivi_relativi", {}) if isinstance(dati_tempo, dict) else {}
+    # Simulazione finale con secondi OSRM: viaggio -> attesa -> 6 min servizio.
+    orari_apertura = dati_tempo.get("orari_apertura", []) if isinstance(dati_tempo, dict) else []
+    simulazione = _simula_tempo_percorso_orari(
+        ordine_ottimizzato, durate, orari_apertura,
+        ora_partenza_minuti=ora_partenza_minuti,
+        minuti_servizio=6,
+    )
+    if simulazione is None:
+        raise ValueError("Impossibile simulare il tempo del percorso ORARI.")
+
     arrivi_assoluti = []
     attese = []
     for node in indici_clienti:
-        relativo = int(arrivi.get(node + 1, 0))
-        arrivo_assoluto = ora_partenza_minuti + relativo
-        arrivi_assoluti.append(_formatta_ora_minuti(arrivo_assoluto))
-        apertura = _parse_orario_apertura(df_originale.iloc[node].get("ORA", ""))
-        if apertura is not None:
-            # Attesa vera = tempo che manca all'apertura quando si arriva prima.
-            # Se si arriva dopo l'apertura, l'attesa e' zero.
-            attese.append(max(0, apertura - arrivo_assoluto))
-        else:
-            attese.append(0)
+        arrivo_assoluto = simulazione["arrivi"].get(node + 1, float(ora_partenza_minuti))
+        arrivi_assoluti.append(_formatta_ora_minuti(round(arrivo_assoluto)))
+        attese.append(simulazione["attese"].get(node + 1, 0.0))
 
     df_ottimizzato["ARRIVO STIMATO"] = arrivi_assoluti
 
-    orari_conosciuti = sum(1 for x in dati_tempo.get("orari_apertura", []) if x is not None)
+    orari_conosciuti = sum(1 for x in orari_apertura if x is not None)
     orari_sconosciuti = len(df_originale) - orari_conosciuti
 
     metriche = {
@@ -1329,7 +1358,9 @@ def ottimizza_giro_orari_test(df_giro, df_db=None, ora_partenza_minuti=300):
         "orari_conosciuti": orari_conosciuti,
         "orari_sconosciuti": orari_sconosciuti,
         "ora_partenza": _formatta_ora_minuti(ora_partenza_minuti),
-        "attesa_totale_min": int(sum(attese)),
+        "attesa_totale_min": round(sum(attese), 1),
+        "servizio_totale_min": len(df_originale) * 6,
+        "tempo_totale_reale_min": round(simulazione["fine"] - ora_partenza_minuti, 1),
         "coordinate_da_salvare": coordinate_da_salvare,
     }
     return df_ottimizzato, metriche
