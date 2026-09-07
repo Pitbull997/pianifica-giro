@@ -1109,7 +1109,7 @@ def _formatta_ora_minuti(minuti):
 
 
 def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=300):
-    """V10 TEST: un solo furgone + vincoli di apertura minima.
+    """V10.2 TEST: un solo furgone + aperture + 6 min medi per fermata.
 
     OSRM fornisce i tempi stradali; OR-Tools decide l'ordine.
     Non esistono orari di chiusura nel DB, quindi ogni ORA valida e' trattata
@@ -1137,14 +1137,22 @@ def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=
     costo_callback = routing.RegisterTransitCallback(costo_arco)
     routing.SetArcCostEvaluatorOfAllVehicles(costo_callback)
 
+    # Ogni cliente richiede in media 6 minuti per parcheggio + scarico.
+    # Il tempo di servizio viene aggiunto dopo l'arrivo al cliente e quindi
+    # influisce sull'orario di arrivo di tutte le fermate successive.
+    MINUTI_SERVIZIO_PER_FERMATA = 6
+
     def tempo_arco(from_index, to_index):
         a = manager.IndexToNode(from_index)
         b = manager.IndexToNode(to_index)
         t = durate[a][b]
         if t is None:
             return 10**9
-        # Tempo di viaggio arrotondato al minuto superiore.
-        return max(0, int(round(float(t) / 60.0)))
+        # Tempo di viaggio arrotondato al minuto superiore + servizio della
+        # fermata di partenza. Il deposito (nodo 0) non ha servizio.
+        viaggio_min = max(0, int(round(float(t) / 60.0)))
+        servizio_min = MINUTI_SERVIZIO_PER_FERMATA if a != 0 else 0
+        return viaggio_min + servizio_min
 
     tempo_callback = routing.RegisterTransitCallback(tempo_arco)
 
@@ -1190,6 +1198,9 @@ def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=
     COEFFICIENTE_ATTESA_MINUTO = 600
     try:
         dimensione_tempo.SetSlackCostCoefficientForAllVehicles(COEFFICIENTE_ATTESA_MINUTO)
+        # Minimizza anche il tempo complessivo del giro, includendo viaggio,
+        # attese e i 6 minuti medi di servizio per ogni cliente.
+        dimensione_tempo.SetSpanCostCoefficientForAllVehicles(COEFFICIENTE_ATTESA_MINUTO)
     except Exception:
         pass
 
@@ -1224,10 +1235,11 @@ def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=
 
 
 def ottimizza_giro_orari_test(df_giro, df_db=None, ora_partenza_minuti=300):
-    """V10 TEST ORARI: percorso stradale ottimizzato rispettando le aperture.
+    """V10.2 TEST ORARI: aperture + 6 min medi di servizio per fermata.
 
     E' una modalita' separata: non usa ZONA come criterio.
-    01:00 e' sconosciuto e quindi non impone alcun vincolo.
+    01:00 e' sconosciuto e quindi non impone alcun vincolo temporale.
+    Ogni cliente aggiunge 6 minuti di parcheggio + scarico al giro.
     """
     if df_giro is None or df_giro.empty:
         raise ValueError("Il giro è vuoto.")
@@ -1303,7 +1315,9 @@ def ottimizza_giro_orari_test(df_giro, df_db=None, ora_partenza_minuti=300):
     orari_sconosciuti = len(df_originale) - orari_conosciuti
 
     metriche = {
-        "metodo": "ORARI — TEST",
+        "metodo": "ORARI — TEST + 6 MIN/FERMATA",
+        "minuti_servizio_per_fermata": 6,
+        "minuti_servizio_totali": len(df_originale) * 6,
         "fermate": len(df_originale),
         "km_originali": km_originali / 1000.0,
         "min_originali": minuti_originali / 60.0,
