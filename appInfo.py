@@ -1386,6 +1386,67 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
 
 BACKUP_UTENTE_PREFIX = "__VANGO_BACKUP__::"
 
+def salva_stato_consegna(idx, stato):
+    """Aggiorna solo lo stato della consegna e lo salva su GiroAttivo."""
+    df = st.session_state.giro_corrente.copy()
+    if df.empty or idx < 0 or idx >= len(df):
+        return
+    if 'STATO' not in df.columns:
+        df['STATO'] = STATO_DA_FARE
+    df.at[idx, 'STATO'] = stato
+    st.session_state.giro_corrente = df
+    salva_giro_utente_su_sheets(st.session_state.utente_corrente, df)
+    st.rerun()
+
+def prepara_vista_giro(df):
+    """Restituisce una vista operativa con i clienti da fare prima e quelli gestiti in fondo.
+    Non modifica l'ordine reale salvato del giro: e' solo una vista grafica.
+    """
+    if df is None or df.empty:
+        return df.copy() if df is not None else pd.DataFrame()
+    out = df.copy().reset_index(drop=True)
+    if "STATO" not in out.columns:
+        out["STATO"] = STATO_DA_FARE
+    out["STATO"] = out["STATO"].fillna("").astype(str)
+    out["__IDX_ORIGINALE"] = list(range(len(out)))
+    completati = out["STATO"].isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO])
+    return pd.concat([out.loc[~completati], out.loc[completati]], ignore_index=True)
+
+def indirizzo_partenza_giro(df):
+    """Ultimo cliente gestito; se non esiste, usa il deposito."""
+    if df is not None and not df.empty and "STATO" in df.columns:
+        gestiti = df[df["STATO"].fillna("").astype(str).isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO])]
+        if not gestiti.empty:
+            row = gestiti.iloc[-1]
+            return f"{row['VIA']}, {row['COMUNE']}"
+    return DEPOSITO_VANGO
+
+def indirizzi_per_percorso_giro(df):
+    """Costruisce il percorso Maps senza clienti gia' gestiti."""
+    if df is None or df.empty:
+        return []
+    pending = df[~df["STATO"].fillna("").astype(str).isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO])].copy()
+    return [f"{r['VIA']}, {r['COMUNE']}" for _, r in pending.iterrows()]
+
+def elimina_cliente_dal_giro(idx):
+    """Elimina una sola fermata dal giro corrente e aggiorna GiroAttivo.
+
+    Il cliente resta nel database Foglio1: viene rimosso solo dal giro corrente.
+    """
+    df = st.session_state.giro_corrente.copy()
+    if df.empty or idx < 0 or idx >= len(df):
+        return
+    cliente = str(df.iloc[idx].get("CLIENTE", "Cliente"))
+    df = df.drop(df.index[idx]).reset_index(drop=True)
+    df["POSIZIONE"] = [str(i) for i in range(1, len(df) + 1)]
+    st.session_state.giro_corrente = df
+    st.session_state.giro_ottimizzato_proposto = None
+    st.session_state.metriche_ottimizzazione = None
+    st.session_state.conferma_eliminazione_idx = None
+    salva_giro_utente_su_sheets(st.session_state.utente_corrente, df)
+    st.session_state.cliente_eliminato_messaggio = f"🗑️ {cliente} eliminato dal giro."
+    st.rerun()
+
 def _chiave_cliente_giro(row):
     """Chiave stabile per riconoscere una fermata senza usare POSIZIONE."""
     return (
