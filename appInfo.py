@@ -18,6 +18,13 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# Stati consegna: definiti PRIMA di qualsiasi uso nel codice.
+STATO_DA_FARE = "⚪ DA CONSEGNARE"
+STATO_FATTO = "🟢 FATTO"
+STATO_PARZIALE = "🟡 PARZIALE"
+STATO_RESPINTO = "🔴 RESPINTO"
+STATI_CONSEGNA = [STATO_DA_FARE, STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
+
 # Sessione persistente per singolo browser/dispositivo
 # Richiede: streamlit-local-storage
 # Il token viene salvato nel localStorage del singolo browser.
