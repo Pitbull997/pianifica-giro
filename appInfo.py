@@ -5,6 +5,8 @@ import os
 import base64
 import time
 import requests
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -1266,10 +1268,10 @@ def carica_tutti_i_giri_da_sheets():
                 return pd.DataFrame(data)
     except Exception as e:
         pass
-    return pd.DataFrame(columns=['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
+    return pd.DataFrame(columns=['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO'])
 
 def carica_giro_utente_da_sheets(nome_utente):
-    cols_giro = ['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']
+    cols_giro = ['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO']
     df_vuoto = pd.DataFrame(columns=cols_giro)
     try:
         df = carica_tutti_i_giri_da_sheets()
@@ -1288,6 +1290,9 @@ def carica_giro_utente_da_sheets(nome_utente):
                     df_utente[c] = ""
             
             df_utente = df_utente[cols_giro]
+            if 'STATO' not in df_utente.columns:
+                df_utente['STATO'] = ''
+            df_utente['STATO'] = df_utente['STATO'].fillna('').astype(str)
             if not df_utente.empty and len(df_utente.dropna(how='all')) > 0:
                 df_utente['POSIZIONE'] = [str(i) for i in range(1, len(df_utente) + 1)]
                 return df_utente.reset_index(drop=True)
@@ -1302,7 +1307,7 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
                 time.sleep(1.5 * (tentativo + 1))
                 
                 data_totale = sheet_giro.get_all_records()
-                df_tutti = pd.DataFrame(data_totale) if data_totale else pd.DataFrame(columns=['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
+                df_tutti = pd.DataFrame(data_totale) if data_totale else pd.DataFrame(columns=['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO'])
                 
                 if not df_tutti.empty:
                     df_tutti.columns = df_tutti.columns.str.strip().str.upper()
@@ -1314,7 +1319,7 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
                     df_agg = df_nuovo_giro.copy()
                     df_agg['UTENTE'] = nome_utente
                     df_agg['POSIZIONE'] = range(1, len(df_agg) + 1)
-                    cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']
+                    cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO']
                     for c in cols_ordine:
                         if c not in df_agg.columns:
                             df_agg[c] = ""
@@ -1329,7 +1334,7 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
                         df_tutti = pd.concat([df_tutti[cols_ordine], df_agg[cols_ordine]], ignore_index=True)
                 
                 sheet_giro.clear()
-                intestazioni = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']
+                intestazioni = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO']
                 if df_tutti.empty:
                     sheet_giro.update([intestazioni])
                 else:
@@ -1346,6 +1351,24 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
             else:
                 st.error(f"Errore nel salvataggio del giro su Google Sheets: {e}")
                 break
+
+STATO_DA_FARE = "⚪ DA CONSEGNARE"
+STATO_FATTO = "🟢 FATTO"
+STATO_PARZIALE = "🟡 PARZIALE"
+STATO_RESPINTO = "🔴 RESPINTO"
+STATI_CONSEGNA = [STATO_DA_FARE, STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
+
+def salva_stato_consegna(idx, stato):
+    """Aggiorna solo lo stato della consegna e lo salva su GiroAttivo."""
+    df = st.session_state.giro_corrente.copy()
+    if df.empty or idx < 0 or idx >= len(df):
+        return
+    if 'STATO' not in df.columns:
+        df['STATO'] = STATO_DA_FARE
+    df.at[idx, 'STATO'] = stato
+    st.session_state.giro_corrente = df
+    salva_giro_utente_su_sheets(st.session_state.utente_corrente, df)
+    st.rerun()
 
 def elimina_cliente_dal_giro(idx):
     """Elimina una sola fermata dal giro corrente e aggiorna GiroAttivo.
@@ -1428,7 +1451,7 @@ if 'giro_corrente' not in st.session_state or st.session_state.get('ultimo_utent
         st.session_state.giro_corrente = carica_giro_utente_da_sheets(st.session_state.utente_corrente)
         st.session_state.ultimo_utente_caricato = st.session_state.utente_corrente
     else:
-        st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
+        st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO'])
 
 if 'clienti_selezionati_m' not in st.session_state:
     st.session_state.clienti_selezionati_m = []
@@ -1803,7 +1826,7 @@ else:
         st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
         if st.button("🗑️ SVUOTA GIRO", use_container_width=True, key="btn_svuota"):
             if not st.session_state.giro_corrente.empty:
-                st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta'])
+                st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO'])
                 salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
                 st.session_state.giro_ottimizzato_proposto = None
                 st.session_state.metriche_ottimizzazione = None
@@ -1936,15 +1959,32 @@ else:
                     cliente = str(r.get('CLIENTE', '')).strip()
                     if cliente:
                         clienti_resoconto.append(cliente)
-                testo_resoconto = "\n".join(
-                    f"{i}. {cliente}" for i, cliente in enumerate(clienti_resoconto, start=1)
-                )
-                nome_resoconto = f"resoconto_giro_{st.session_state.utente_corrente}.txt"
+                # Esporta il resoconto come JPEG, mantenendo solo la lista clienti.
+                try:
+                    font_path = "C:/Windows/Fonts/arial.ttf"
+                    font_bold_path = "C:/Windows/Fonts/arialbd.ttf"
+                    font = ImageFont.truetype(font_path, 34) if os.path.exists(font_path) else ImageFont.load_default()
+                    font_bold = ImageFont.truetype(font_bold_path, 46) if os.path.exists(font_bold_path) else font
+                except Exception:
+                    font = ImageFont.load_default()
+                    font_bold = font
+                righe = [f"{i}. {cliente}" for i, cliente in enumerate(clienti_resoconto, start=1)]
+                altezza = max(260, 130 + len(righe) * 58)
+                img = Image.new("RGB", (1100, altezza), "white")
+                draw = ImageDraw.Draw(img)
+                draw.text((55, 35), "RESOCONTO GIRO", fill="black", font=font_bold)
+                y = 110
+                for riga in righe:
+                    draw.text((65, y), riga, fill="black", font=font)
+                    y += 58
+                buffer_jpeg = BytesIO()
+                img.save(buffer_jpeg, format="JPEG", quality=95)
+                nome_resoconto = f"resoconto_giro_{st.session_state.utente_corrente}.jpg"
                 st.download_button(
-                    "📄 ESPORTA RESOCONTO GIRO",
-                    data=testo_resoconto,
+                    "🖼️ ESPORTA RESOCONTO GIRO (JPEG)",
+                    data=buffer_jpeg.getvalue(),
                     file_name=nome_resoconto,
-                    mime="text/plain",
+                    mime="image/jpeg",
                     use_container_width=True,
                     key="btn_esporta_resoconto_giro"
                 )
@@ -1968,6 +2008,17 @@ else:
                                 <div class="clean-subtitle">{row['COMUNE']} — Cliente: {row['CLIENTE']} (🕒 {row['ORA']} | 📦 {row['Q.ta']} pz)</div>
                             </div>
                             """, unsafe_allow_html=True)
+                            stato_attuale = str(row.get('STATO', '')).strip() or STATO_DA_FARE
+                            if stato_attuale not in STATI_CONSEGNA:
+                                stato_attuale = STATO_DA_FARE
+                            stato_nuovo = st.selectbox(
+                                "Stato consegna",
+                                options=STATI_CONSEGNA,
+                                index=STATI_CONSEGNA.index(stato_attuale),
+                                key=f"stato_consegna_pulita_{idx}_{row['CLIENTE']}"
+                            )
+                            if stato_nuovo != stato_attuale:
+                                salva_stato_consegna(idx, stato_nuovo)
 
                         with col_cestino:
                             if st.button("🗑️", help="Elimina cliente dal giro", key=f"elimina_pulita_{idx}_{row['CLIENTE']}"):
@@ -2004,6 +2055,18 @@ else:
                         <div class="stop-meta">🕒 Ora: {row['ORA']} | 📦 Q.tà: {row['Q.ta']} pz</div>
                     </div>
                     """, unsafe_allow_html=True)
+
+                    stato_attuale = str(row.get('STATO', '')).strip() or STATO_DA_FARE
+                    if stato_attuale not in STATI_CONSEGNA:
+                        stato_attuale = STATO_DA_FARE
+                    stato_nuovo = st.selectbox(
+                        "Stato consegna",
+                        options=STATI_CONSEGNA,
+                        index=STATI_CONSEGNA.index(stato_attuale),
+                        key=f"stato_consegna_operativa_{idx}_{row['CLIENTE']}"
+                    )
+                    if stato_nuovo != stato_attuale:
+                        salva_stato_consegna(idx, stato_nuovo)
 
                     col_c1, col_c2, col_c3, col_c4 = st.columns([1, 1, 1, 1])
                     
@@ -2166,6 +2229,7 @@ else:
                     nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(qta_dict)
                     
                     nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']] if 'POSIZIONE' in nuovi_clienti.columns else nuovi_clienti[['CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
+                    nuovi_clienti['STATO'] = STATO_DA_FARE
                     
                     st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
                     st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
