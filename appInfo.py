@@ -2414,7 +2414,7 @@ else:
         m = st.session_state.metriche_ottimizzazione or {}
         st.markdown("---")
         st.subheader("🧠 Anteprima percorso ottimizzato")
-        if m.get("metodo") == "ORARI — TEST":
+        if str(m.get("metodo", "")).startswith("ORARI"):
             st.caption("Start e fine giro: Dolciaria Acquaviva — Via Enrico Fermi 10, Burago di Molgora. Partenza test alle 05:00. 01:00 = orario sconosciuto, quindi nessun vincolo.")
             st.info(f"🕐 Orari conosciuti: **{m.get('orari_conosciuti', 0)}** — sconosciuti (01:00/vuoti): **{m.get('orari_sconosciuti', 0)}** — attesa totale: **{m.get('attesa_totale_min', 0)} min**")
         else:
@@ -2435,8 +2435,28 @@ else:
         c3.metric("Fermate", f"{m.get('fermate', len(df_proposto))}")
         c4.metric("Metodo", "FREE")
 
+        # Per la modalità ORARI mostriamo subito sotto le metriche attuali
+        # il dettaglio del tempo reale del giro.
+        if str(m.get("metodo", "")).startswith("ORARI"):
+            def _formatta_durata_totale(minuti):
+                minuti = max(0, int(round(float(minuti or 0))))
+                ore, minuti_restanti = divmod(minuti, 60)
+                return f"{ore} h {minuti_restanti:02d} min" if ore else f"{minuti_restanti} min"
+
+            t_viaggio = m.get("min_ottimizzati", 0)
+            t_attesa = m.get("attesa_totale_min", 0)
+            t_servizio = m.get("servizio_totale_min", len(df_proposto) * 6)
+            t_reale = m.get("tempo_totale_reale_min", t_viaggio + t_attesa + t_servizio)
+
+            st.markdown("**Dettaglio tempi del giro ORARI**")
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("🚚 Tempo di viaggio", _formatta_durata_totale(t_viaggio))
+            d2.metric("⏳ Attesa totale", f"{int(round(float(t_attesa or 0)))} min")
+            d3.metric("🅿️ Servizio totale", f"{int(round(float(t_servizio or 0)))} min")
+            d4.metric("🕐 Tempo totale reale giro", _formatta_durata_totale(t_reale))
+
         colonne_anteprima = ['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']
-        if m.get("metodo") == "ORARI — TEST" and 'ARRIVO STIMATO' in df_proposto.columns:
+        if str(m.get("metodo", "")).startswith("ORARI") and 'ARRIVO STIMATO' in df_proposto.columns:
             colonne_anteprima = ['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'ARRIVO STIMATO', 'Q.ta']
         st.dataframe(
             df_proposto[colonne_anteprima],
