@@ -1929,6 +1929,26 @@ else:
 
             if st.session_state.vista_pulita:
                 st.markdown(f"<p style='color: #94A3B8; font-size: 14px; margin-bottom: 15px;'>{tot_clienti} indirizzi trovati nel giro.</p>", unsafe_allow_html=True)
+
+                # Esporta un resoconto semplice: solo i nomi dei clienti nell'ordine del giro.
+                clienti_resoconto = []
+                for _, r in st.session_state.giro_corrente.iterrows():
+                    cliente = str(r.get('CLIENTE', '')).strip()
+                    if cliente:
+                        clienti_resoconto.append(cliente)
+                testo_resoconto = "\n".join(
+                    f"{i}. {cliente}" for i, cliente in enumerate(clienti_resoconto, start=1)
+                )
+                nome_resoconto = f"resoconto_giro_{st.session_state.utente_corrente}.txt"
+                st.download_button(
+                    "📄 ESPORTA RESOCONTO GIRO",
+                    data=testo_resoconto,
+                    file_name=nome_resoconto,
+                    mime="text/plain",
+                    use_container_width=True,
+                    key="btn_esporta_resoconto_giro"
+                )
+                st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
                 
                 for idx in range(tot_clienti):
                     row = st.session_state.giro_corrente.iloc[idx]
