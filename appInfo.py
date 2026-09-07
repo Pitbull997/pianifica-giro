@@ -1370,6 +1370,36 @@ def salva_stato_consegna(idx, stato):
     salva_giro_utente_su_sheets(st.session_state.utente_corrente, df)
     st.rerun()
 
+def prepara_vista_giro(df):
+    """Restituisce una vista operativa con i clienti da fare prima e quelli gestiti in fondo.
+    Non modifica l'ordine reale salvato del giro: e' solo una vista grafica.
+    """
+    if df is None or df.empty:
+        return df.copy() if df is not None else pd.DataFrame()
+    out = df.copy().reset_index(drop=True)
+    if "STATO" not in out.columns:
+        out["STATO"] = STATO_DA_FARE
+    out["STATO"] = out["STATO"].fillna("").astype(str)
+    out["__IDX_ORIGINALE"] = list(range(len(out)))
+    completati = out["STATO"].isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO])
+    return pd.concat([out.loc[~completati], out.loc[completati]], ignore_index=True)
+
+def indirizzo_partenza_giro(df):
+    """Ultimo cliente gestito; se non esiste, usa il deposito."""
+    if df is not None and not df.empty and "STATO" in df.columns:
+        gestiti = df[df["STATO"].fillna("").astype(str).isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO])]
+        if not gestiti.empty:
+            row = gestiti.iloc[-1]
+            return f"{row['VIA']}, {row['COMUNE']}"
+    return DEPOSITO_VANGO
+
+def indirizzi_per_percorso_giro(df):
+    """Costruisce il percorso Maps senza clienti gia' gestiti."""
+    if df is None or df.empty:
+        return []
+    pending = df[~df["STATO"].fillna("").astype(str).isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO])].copy()
+    return [f"{r['VIA']}, {r['COMUNE']}" for _, r in pending.iterrows()]
+
 def elimina_cliente_dal_giro(idx):
     """Elimina una sola fermata dal giro corrente e aggiorna GiroAttivo.
 
@@ -1936,19 +1966,25 @@ else:
 
         if not st.session_state.giro_corrente.empty:
             st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
+            df_vista_giro = prepara_vista_giro(st.session_state.giro_corrente)
             
-            addresses = [f"{r['VIA']}, {r['COMUNE']}" for _, r in st.session_state.giro_corrente.iterrows()]
-            if len(addresses) == 1:
-                maps_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(addresses[0])}"
-            else:
-                origin = urllib.parse.quote(addresses[0])
-                destination = urllib.parse.quote(addresses[-1])
-                
-                if len(addresses) > 2:
-                    waypoints = "/".join([urllib.parse.quote(a) for a in addresses[1:-1]])
-                    maps_url = f"https://www.google.com/maps/dir/{origin}/{waypoints}/{destination}"
+            # Il percorso NON viene riottimizzato automaticamente.
+            # Si mantiene l'ordine gia' ottimizzato e si escludono solo le consegne gia' gestite.
+            addresses = indirizzi_per_percorso_giro(st.session_state.giro_corrente)
+            partenza = indirizzo_partenza_giro(st.session_state.giro_corrente)
+            if addresses:
+                origin = urllib.parse.quote(partenza)
+                if len(addresses) == 1:
+                    maps_url = f"https://www.google.com/maps/dir/{origin}/{urllib.parse.quote(addresses[0])}"
                 else:
-                    maps_url = f"https://www.google.com/maps/dir/{origin}/{destination}"
+                    destination = urllib.parse.quote(addresses[-1])
+                    if len(addresses) > 1:
+                        waypoints = "/".join([urllib.parse.quote(a) for a in addresses[:-1]])
+                        maps_url = f"https://www.google.com/maps/dir/{origin}/{waypoints}/{destination}"
+                    else:
+                        maps_url = f"https://www.google.com/maps/dir/{origin}/{destination}"
+            else:
+                maps_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(DEPOSITO_VANGO)}"
 
             if st.session_state.vista_pulita:
                 st.markdown(f"<p style='color: #94A3B8; font-size: 14px; margin-bottom: 15px;'>{tot_clienti} indirizzi trovati nel giro.</p>", unsafe_allow_html=True)
@@ -1991,10 +2027,12 @@ else:
                 st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
                 
                 for idx in range(tot_clienti):
-                    row = st.session_state.giro_corrente.iloc[idx]
+                    row = df_vista_giro.iloc[idx]
+                    idx_reale = int(row["__IDX_ORIGINALE"])
 
                     # Card riepilogo: il cestino e' integrato NELLA STESSA CARD, a destra.
                     # Usiamo un container con bordo per evitare che il pulsante finisca sotto la card.
+                    card_opacita = 0.52 if str(row.get("STATO", "")).strip() in [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO] else 1.0
                     with st.container(border=True):
                         col_badge, col_info, col_cestino = st.columns([0.08, 0.84, 0.08], gap="small", vertical_alignment="top")
 
@@ -2015,24 +2053,24 @@ else:
                                 "Stato consegna",
                                 options=STATI_CONSEGNA,
                                 index=STATI_CONSEGNA.index(stato_attuale),
-                                key=f"stato_consegna_pulita_{idx}_{row['CLIENTE']}"
+                                key=f"stato_consegna_pulita_{idx_reale}_{row['CLIENTE']}"
                             )
                             if stato_nuovo != stato_attuale:
-                                salva_stato_consegna(idx, stato_nuovo)
+                                salva_stato_consegna(idx_reale, stato_nuovo)
 
                         with col_cestino:
                             if st.button("🗑️", help="Elimina cliente dal giro", key=f"elimina_pulita_{idx}_{row['CLIENTE']}"):
-                                st.session_state.conferma_eliminazione_idx = idx
+                                st.session_state.conferma_eliminazione_idx = idx_reale
                                 st.rerun()
 
-                    if st.session_state.conferma_eliminazione_idx == idx:
+                    if st.session_state.conferma_eliminazione_idx == idx_reale:
                         st.warning(f"Eliminare {row['CLIENTE']} dal giro?")
                         c_ok, c_no = st.columns(2)
                         with c_ok:
-                            if st.button("✅ CONFERMA", use_container_width=True, key=f"conferma_elimina_pulita_{idx}"):
+                            if st.button("✅ CONFERMA", use_container_width=True, key=f"conferma_elimina_pulita_{idx_reale}"):
                                 elimina_cliente_dal_giro(idx)
                         with c_no:
-                            if st.button("❌ ANNULLA", use_container_width=True, key=f"annulla_elimina_pulita_{idx}"):
+                            if st.button("❌ ANNULLA", use_container_width=True, key=f"annulla_elimina_pulita_{idx_reale}"):
                                 st.session_state.conferma_eliminazione_idx = None
                                 st.rerun()
 
@@ -2046,10 +2084,12 @@ else:
                 ''', unsafe_allow_html=True)
             else:
                 for idx in range(tot_clienti):
-                    row = st.session_state.giro_corrente.iloc[idx]
+                    row = df_vista_giro.iloc[idx]
+                    idx_reale = int(row["__IDX_ORIGINALE"])
                     
+                    opacita_card = 0.52 if str(row.get("STATO", "")).strip() in [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO] else 1.0
                     st.markdown(f"""
-                    <div class="stop-card">
+                    <div class="stop-card" style="opacity:{opacita_card};">
                         <div class="stop-title">{idx + 1}. {row['CLIENTE']}</div>
                         <div class="stop-address">📍 {row['VIA']}, {row['COMUNE']}</div>
                         <div class="stop-meta">🕒 Ora: {row['ORA']} | 📦 Q.tà: {row['Q.ta']} pz</div>
@@ -2063,10 +2103,10 @@ else:
                         "Stato consegna",
                         options=STATI_CONSEGNA,
                         index=STATI_CONSEGNA.index(stato_attuale),
-                        key=f"stato_consegna_operativa_{idx}_{row['CLIENTE']}"
+                        key=f"stato_consegna_operativa_{idx_reale}_{row['CLIENTE']}"
                     )
                     if stato_nuovo != stato_attuale:
-                        salva_stato_consegna(idx, stato_nuovo)
+                        salva_stato_consegna(idx_reale, stato_nuovo)
 
                     col_c1, col_c2, col_c3, col_c4 = st.columns([1, 1, 1, 1])
                     
@@ -2110,18 +2150,18 @@ else:
                             st.rerun()
 
                     with col_c4:
-                        if st.button("🗑️", help="Elimina cliente dal giro", key=f"elimina_operativa_{idx}_{row['CLIENTE']}"):
-                            st.session_state.conferma_eliminazione_idx = idx
+                        if st.button("🗑️", help="Elimina cliente dal giro", key=f"elimina_operativa_{idx_reale}_{row['CLIENTE']}"):
+                            st.session_state.conferma_eliminazione_idx = idx_reale
                             st.rerun()
 
-                        if st.session_state.conferma_eliminazione_idx == idx:
+                        if st.session_state.conferma_eliminazione_idx == idx_reale:
                             st.warning(f"Eliminare {row['CLIENTE']} dal giro?")
                             c_ok, c_no = st.columns(2)
                             with c_ok:
-                                if st.button("✅ CONFERMA", use_container_width=True, key=f"conferma_elimina_operativa_{idx}"):
+                                if st.button("✅ CONFERMA", use_container_width=True, key=f"conferma_elimina_operativa_{idx_reale}"):
                                     elimina_cliente_dal_giro(idx)
                             with c_no:
-                                if st.button("❌ ANNULLA", use_container_width=True, key=f"annulla_elimina_operativa_{idx}"):
+                                if st.button("❌ ANNULLA", use_container_width=True, key=f"annulla_elimina_operativa_{idx_reale}"):
                                     st.session_state.conferma_eliminazione_idx = None
                                     st.rerun()
 
