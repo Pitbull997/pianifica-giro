@@ -405,6 +405,17 @@ def calcola_metriche_giro_corrente(df_giro, df_db):
     }
 
 
+
+def _firma_ordine_giro(df):
+    """Firma stabile dell'ordine corrente, per non mostrare metriche ORARI vecchie."""
+    if df is None or df.empty:
+        return tuple()
+    cols = ["CLIENTE", "COMUNE", "VIA", "ORA"]
+    return tuple(
+        tuple(str(row.get(c, "")).strip() for c in cols)
+        for _, row in df.reset_index(drop=True).iterrows()
+    )
+
 def _gruppo_da_zona(valore):
     """Converte la ZONA numerica in un macro-gruppo.
 
@@ -1955,6 +1966,8 @@ if 'metriche_ottimizzazione' not in st.session_state:
 
 if 'metriche_giro_corrente' not in st.session_state:
     st.session_state.metriche_giro_corrente = None
+if 'metriche_tempo_orari_corrente' not in st.session_state:
+    st.session_state.metriche_tempo_orari_corrente = None
 
 if 'giro_backup_disponibile' not in st.session_state:
     st.session_state.giro_backup_disponibile = False
@@ -2472,6 +2485,16 @@ else:
                     df_da_applicare = df_da_applicare.drop(columns=['ARRIVO STIMATO'])
                 st.session_state.giro_corrente = df_da_applicare
                 st.session_state.metriche_giro_corrente = None
+                # Conserva i dati temporali ORARI del giro appena applicato.
+                if str(m.get("metodo", "")).startswith("ORARI"):
+                    st.session_state.metriche_tempo_orari_corrente = {
+                        "firma": _firma_ordine_giro(df_da_applicare),
+                        "attesa_totale_min": float(m.get("attesa_totale_min", 0) or 0),
+                        "servizio_totale_min": float(m.get("servizio_totale_min", len(df_da_applicare) * 6) or 0),
+                        "tempo_totale_reale_min": float(m.get("tempo_totale_reale_min", 0) or 0),
+                    }
+                else:
+                    st.session_state.metriche_tempo_orari_corrente = None
                 salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
                 st.session_state.giro_ottimizzato_proposto = None
                 st.session_state.metriche_ottimizzazione = None
@@ -2629,6 +2652,21 @@ else:
         else:
             tempo_display = "—"
         col_m5.metric("Tempo Giro", tempo_display)
+
+        # Dopo aver applicato un giro ORARI, mostra sotto le metriche principali
+        # attesa, servizio e tempo reale complessivo.
+        metriche_orari_correnti = st.session_state.get("metriche_tempo_orari_corrente") or {}
+        if metriche_orari_correnti and metriche_orari_correnti.get("firma") == _firma_ordine_giro(st.session_state.giro_corrente):
+            def _formatta_durata_metriche(minuti):
+                minuti = max(0, int(round(float(minuti or 0))))
+                ore, minuti_restanti = divmod(minuti, 60)
+                return f"{ore} h {minuti_restanti:02d} min" if ore else f"{minuti_restanti} min"
+
+            st.markdown("**Dettaglio tempi ORARI del giro applicato**")
+            d1, d2, d3 = st.columns(3)
+            d1.metric("⏳ Attesa totale", f"{int(round(metriche_orari_correnti.get('attesa_totale_min', 0)))} min")
+            d2.metric("🅿️ Servizio totale", f"{int(round(metriche_orari_correnti.get('servizio_totale_min', 0)))} min")
+            d3.metric("🕐 Tempo totale reale giro", _formatta_durata_metriche(metriche_orari_correnti.get('tempo_totale_reale_min', 0)))
 
         st.markdown("---")
 
