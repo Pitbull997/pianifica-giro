@@ -1181,10 +1181,15 @@ def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=
                 fine_giornata - ora_partenza_minuti
             )
 
-    # Evitiamo che il solver preferisca attese inutili quando esistono
-    # alternative con lo stesso costo stradale.
+    # IMPORTANTE: il costo stradale V9 usa:
+    #   distanza (metri) + durata_stradale (secondi) * 10
+    # 1 minuto di strada vale quindi circa 600 unita'.
+    # L'attesa davanti a un cliente deve avere un peso reale nello stesso
+    # ordine di grandezza, altrimenti OR-Tools la considera quasi gratis.
+    # Con 600, 1 minuto di attesa pesa circa come 1 minuto di guida.
+    COEFFICIENTE_ATTESA_MINUTO = 600
     try:
-        dimensione_tempo.SetSlackCostCoefficientForAllVehicles(1)
+        dimensione_tempo.SetSlackCostCoefficientForAllVehicles(COEFFICIENTE_ATTESA_MINUTO)
     except Exception:
         pass
 
@@ -1286,7 +1291,9 @@ def ottimizza_giro_orari_test(df_giro, df_db=None, ora_partenza_minuti=300):
         arrivi_assoluti.append(_formatta_ora_minuti(arrivo_assoluto))
         apertura = _parse_orario_apertura(df_originale.iloc[node].get("ORA", ""))
         if apertura is not None:
-            attese.append(max(0, arrivo_assoluto - apertura))
+            # Attesa vera = tempo che manca all'apertura quando si arriva prima.
+            # Se si arriva dopo l'apertura, l'attesa e' zero.
+            attese.append(max(0, apertura - arrivo_assoluto))
         else:
             attese.append(0)
 
