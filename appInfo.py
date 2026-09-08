@@ -3343,6 +3343,8 @@ else:
                         min-width: 0 !important;
                         box-sizing: border-box !important;
                         overflow: hidden !important;
+                        padding-top: 0 !important;
+                        padding-bottom: 0 !important;
                     }
 
                     /* Il trigger del popover e' SOLO la freccia: nessun riquadro bianco.
@@ -3605,22 +3607,32 @@ else:
                         max-width: 100% !important;
                         min-width: 0 !important;
                         box-sizing: border-box !important;
-                        min-height: 52px !important;
-                        height: 52px !important;
-                        padding: 0 18px !important;
+                        min-height: 34px !important;
+                        height: 34px !important;
+                        padding: 0 10px !important;
                         margin: 0 !important;
                         border: 0 !important;
                         border-radius: 10px !important;
                         background: transparent !important;
                         box-shadow: none !important;
                         color: #FFFFFF !important;
-                        font-size: 18px !important;
+                        font-size: 16px !important;
                         font-weight: 800 !important;
-                        line-height: 1.2 !important;
+                        line-height: 34px !important;
                         text-align: left !important;
+                        justify-content: flex-start !important;
+                        align-items: center !important;
                         white-space: nowrap !important;
                         overflow: hidden !important;
                         text-overflow: ellipsis !important;
+                    }}
+                    [data-testid="stPopover"] > button > div,
+                    [data-testid="stPopover"] > button > div > p,
+                    [data-testid="stPopover"] > button p {{
+                        width: 100% !important;
+                        text-align: left !important;
+                        justify-content: flex-start !important;
+                        margin: 0 !important;
                     }}
                     [data-testid="stPopover"] > button:hover,
                     [data-testid="stPopover"] > button:focus,
