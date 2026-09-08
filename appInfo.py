@@ -2952,21 +2952,46 @@ else:
         km_giro = metriche_giro.get("km")
         minuti_giro = metriche_giro.get("minuti")
 
+        # In CAMPO le metriche sono sempre quelle del percorso ancora da fare:
+        # fermate pendenti + rientro in sede. A consegne completate resta quindi
+        # visibile solo il rientro ultima consegna -> sede, finche' non si preme
+        # TERMINA GIRO; dopo TERMINA GIRO il residuo diventa 0.
+        km_visualizzati = km_giro
+        minuti_visualizzati = minuti_giro
+        if st.session_state.vista_giro == "CAMPO":
+            if bool(st.session_state.get("giro_terminato", False)):
+                km_visualizzati = 0.0
+                minuti_visualizzati = 0.0
+            else:
+                try:
+                    metriche_campo = calcola_metriche_giro_campo(
+                        st.session_state.giro_corrente,
+                        st.session_state.db_clienti
+                    )
+                    if metriche_campo is not None:
+                        km_visualizzati = metriche_campo.get("km")
+                        minuti_visualizzati = metriche_campo.get("minuti")
+                except Exception:
+                    pass
+
         col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
         col_m1.metric("Fermate Totali", f"{tot_clienti}")
         col_m2.metric("Pezzi Totali", f"{tot_qta}")
         col_m3.metric("Comuni", f"{tot_comuni}")
-        col_m4.metric("KM Totali", f"{km_giro:.1f}" if km_giro is not None else "—")
-        if minuti_giro is not None:
-            ore = int(minuti_giro // 60)
-            minuti = int(round(minuti_giro - ore * 60))
+        if st.session_state.vista_giro == "CAMPO":
+            col_m4.metric("KM Rimanenti", f"{km_visualizzati:.1f}" if km_visualizzati is not None else "—")
+        else:
+            col_m4.metric("KM Totali", f"{km_visualizzati:.1f}" if km_visualizzati is not None else "—")
+        if minuti_visualizzati is not None:
+            ore = int(minuti_visualizzati // 60)
+            minuti = int(round(minuti_visualizzati - ore * 60))
             if minuti == 60:
                 ore += 1
                 minuti = 0
             tempo_display = f"{ore}h {minuti:02d}m" if ore > 0 else f"{minuti} min"
         else:
             tempo_display = "—"
-        col_m5.metric("Tempo Giro", tempo_display)
+        col_m5.metric("Tempo rimanente" if st.session_state.vista_giro == "CAMPO" else "Tempo Giro", tempo_display)
 
         # Dettaglio tempi del giro: SEMPRE visibile quando esiste un giro,
         # indipendentemente dal tipo di ottimizzazione o dal fatto che sia stato
@@ -2974,7 +2999,7 @@ else:
         #
         # Attesa: per un giro normale/manuale e per ROUTE/ZONE/ZONE+ROUTE = 0.
         # Per un giro ORARI appena applicato usiamo l'attesa calcolata dal motore.
-        # Servizio: sempre 6 minuti per fermata.
+        # Servizio: sempre 12 minuti per fermata.
         # Tempo reale: viaggio + attesa + servizio.
         metriche_orari_correnti = st.session_state.get("metriche_tempo_orari_corrente") or {}
         firma_corrente = _firma_ordine_giro(st.session_state.giro_corrente)
@@ -3002,7 +3027,7 @@ else:
             servizio_corrente = float(len(df_servizio) * MINUTI_SERVIZIO_PER_FERMATA)
         else:
             servizio_corrente = float(len(st.session_state.giro_corrente) * MINUTI_SERVIZIO_PER_FERMATA)
-        viaggio_corrente = float(minuti_giro or 0)
+        viaggio_corrente = float(minuti_visualizzati or 0)
         tempo_reale_corrente = viaggio_corrente + attesa_corrente + servizio_corrente
 
         st.markdown("**Dettaglio tempi reali del giro**")
@@ -3067,8 +3092,8 @@ else:
 
             # Anche a consegne terminate resta da completare il rientro in sede.
             if st.session_state.vista_giro == "CAMPO":
-                rientro_km = float(km_giro or 0.0) if not giro_terminato else 0.0
-                rientro_min = float(minuti_giro or 0.0) if not giro_terminato else 0.0
+                rientro_km = float(km_visualizzati or 0.0) if not giro_terminato else 0.0
+                rientro_min = float(minuti_visualizzati or 0.0) if not giro_terminato else 0.0
                 st.markdown("**🚐 Rientro in sede**")
                 r1, r2 = st.columns(2)
                 r1.metric("📍 Distanza residua alla sede", f"{rientro_km:.1f} km")
