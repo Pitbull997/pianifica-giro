@@ -5,7 +5,6 @@ import os
 import base64
 import json
 import time
-import shutil
 from datetime import datetime
 try:
     from zoneinfo import ZoneInfo
@@ -13,16 +12,6 @@ except Exception:
     ZoneInfo = None
 import requests
 from io import BytesIO
-
-# OCR test JPEG
-try:
-    from PIL import Image, ImageOps, ImageEnhance, ImageFilter
-except ImportError:
-    Image = ImageOps = ImageEnhance = ImageFilter = None
-try:
-    import pytesseract
-except ImportError:
-    pytesseract = None
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -1191,11 +1180,45 @@ def _formatta_ora_minuti(minuti):
     return f"{ore:02d}:{mins:02d}"
 
 
+def _timestamp_oggi_alle_0520():
+    """Timestamp locale Europe/Rome di oggi alle 05:20, usato come fallback."""
+    try:
+        tz = ZoneInfo("Europe/Rome") if ZoneInfo is not None else None
+        adesso = datetime.now(tz) if tz else datetime.now()
+        dt = adesso.replace(hour=5, minute=20, second=0, microsecond=0)
+        return dt.timestamp()
+    except Exception:
+        adesso = datetime.now()
+        return adesso.replace(hour=5, minute=20, second=0, microsecond=0).timestamp()
+
+
+def _ora_partenza_reale_minuti():
+    """Restituisce l'ora di partenza effettiva in minuti dalla mezzanotte.
+
+    Se INIZIA GIRO e' stato premuto, usa il timestamp registrato.
+    Altrimenti usa il fallback operativo delle 05:20.
+    """
+    timestamp = st.session_state.get("inizio_giro_reale")
+    if timestamp is None:
+        timestamp = _timestamp_oggi_alle_0520()
+    try:
+        tz = ZoneInfo("Europe/Rome") if ZoneInfo is not None else None
+        dt = datetime.fromtimestamp(float(timestamp), tz) if tz else datetime.fromtimestamp(float(timestamp))
+        return dt.hour * 60 + dt.minute + dt.second / 60.0
+    except Exception:
+        return 320.0
+
+
+def _formatta_ora_partenza_reale():
+    minuti = _ora_partenza_reale_minuti()
+    return _formatta_ora_minuti(round(minuti))
+
+
 def _simula_tempo_percorso_orari(ordine, durate, orari_apertura, ora_partenza_minuti=300, minuti_servizio=MINUTI_SERVIZIO_PER_FERMATA):
     """Simula l'orario reale fermata per fermata.
 
     Regola: si viaggia, si arriva, si attende solo se necessario per l'apertura,
-    poi si effettuano 6 minuti di parcheggio+scarico prima di ripartire.
+    poi si effettuano 12 minuti di parcheggio+scarico prima di ripartire.
     Il servizio viene applicato a ogni cliente, ma non al deposito finale.
     """
     tempo = float(ora_partenza_minuti)
@@ -1219,7 +1242,7 @@ def _simula_tempo_percorso_orari(ordine, durate, orari_apertura, ora_partenza_mi
 
 
 def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=300):
-    """V10.2 TEST: un solo furgone + aperture + 6 min medi per fermata.
+    """V10.2 TEST: un solo furgone + aperture + 12 min medi per fermata.
 
     OSRM fornisce i tempi stradali; OR-Tools decide l'ordine.
     Non esistono orari di chiusura nel DB, quindi ogni ORA valida e' trattata
@@ -1247,7 +1270,7 @@ def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=
     costo_callback = routing.RegisterTransitCallback(costo_arco)
     routing.SetArcCostEvaluatorOfAllVehicles(costo_callback)
 
-    # Ogni cliente richiede in media 6 minuti per parcheggio + scarico.
+    # Ogni cliente richiede in media 12 minuti per parcheggio + scarico.
     # Il tempo di servizio viene aggiunto dopo l'arrivo al cliente e quindi
     # influisce sull'orario di arrivo di tutte le fermate successive.
     def tempo_arco(from_index, to_index):
@@ -1308,7 +1331,7 @@ def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=
     try:
         dimensione_tempo.SetSlackCostCoefficientForAllVehicles(COEFFICIENTE_ATTESA_MINUTO)
         # Minimizza anche il tempo complessivo del giro, includendo viaggio,
-        # attese e i 6 minuti medi di servizio per ogni cliente.
+        # attese e i 12 minuti medi di servizio per ogni cliente.
         dimensione_tempo.SetSpanCostCoefficientForAllVehicles(COEFFICIENTE_ATTESA_MINUTO)
     except Exception:
         pass
@@ -1344,11 +1367,11 @@ def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=
 
 
 def ottimizza_giro_orari_test(df_giro, df_db=None, ora_partenza_minuti=300):
-    """V10.2 TEST ORARI: aperture + 6 min medi di servizio per fermata.
+    """V10.2 TEST ORARI: aperture + 12 min medi di servizio per fermata.
 
     E' una modalita' separata: non usa ZONA come criterio.
     01:00 e' sconosciuto e quindi non impone alcun vincolo temporale.
-    Ogni cliente aggiunge 6 minuti di parcheggio + scarico al giro.
+    Ogni cliente aggiunge 12 minuti di parcheggio + scarico al giro.
     """
     if df_giro is None or df_giro.empty:
         raise ValueError("Il giro è vuoto.")
@@ -1402,7 +1425,7 @@ def ottimizza_giro_orari_test(df_giro, df_db=None, ora_partenza_minuti=300):
     df_ottimizzato = df_originale.iloc[indici_clienti].reset_index(drop=True).copy()
     df_ottimizzato["POSIZIONE"] = [str(i) for i in range(1, len(df_ottimizzato) + 1)]
 
-    # Simulazione finale con secondi OSRM: viaggio -> attesa -> 6 min servizio.
+    # Simulazione finale con secondi OSRM: viaggio -> attesa -> 12 min servizio.
     orari_apertura = dati_tempo.get("orari_apertura", []) if isinstance(dati_tempo, dict) else []
     simulazione = _simula_tempo_percorso_orari(
         ordine_ottimizzato, durate, orari_apertura,
@@ -1425,7 +1448,7 @@ def ottimizza_giro_orari_test(df_giro, df_db=None, ora_partenza_minuti=300):
     orari_sconosciuti = len(df_originale) - orari_conosciuti
 
     metriche = {
-        "metodo": "ORARI — TEST + 6 MIN/FERMATA",
+        "metodo": "ORARI — TEST + 12 MIN/FERMATA",
         "minuti_servizio_per_fermata": MINUTI_SERVIZIO_PER_FERMATA,
         "minuti_servizio_totali": len(df_originale) * MINUTI_SERVIZIO_PER_FERMATA,
         "fermate": len(df_originale),
@@ -2251,6 +2274,17 @@ st.markdown("""
     .stMainBlockContainer { padding: 0rem !important; max-width: 100% !important; }
     .block-container { padding-top: 0.5rem !important; padding-bottom: 1rem !important; max-width: 100% !important; }
 
+    .campo-header {
+        background: linear-gradient(135deg, #142A44 0%, #102033 100%);
+        border: 1px solid #26384F; border-radius: 14px; padding: 13px 16px;
+        min-height: 68px; box-sizing: border-box; margin-bottom: 8px;
+        display:flex; align-items:center;
+    }
+    .campo-header-left { display:flex; align-items:center; gap:12px; }
+    .campo-header-icon { font-size:30px; line-height:1; }
+    .campo-header-title { color:#FFFFFF; font-size:22px; font-weight:800; line-height:1; }
+    .campo-header-subtitle { color:#A9C4EA; font-size:12px; margin-top:4px; }
+
     .logo-container {
         display: flex;
         justify-content: center;
@@ -2439,1194 +2473,191 @@ elif not st.session_state.autenticato and st.session_state.pagina_attiva == "log
     if os.path.exists(icon_path):
         with open(icon_path, "rb") as icon_file:
             encoded_icon = base64.b64encode(icon_file.read()).decode()
-        st.markdown(f'''
-            <div class="logo-container">
-                <img src="data:image/png;base64,{encoded_icon}" alt="VanGo Logo">
-            </div>
-        ''', unsafe_allow_html=True)
-    else:
-        st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 26px;'>🚐 ACCESSO VANGO</h1>", unsafe_allow_html=True)
-
-    st.markdown("<p style='text-align: center; color: #94A3B8; font-size: 14px; margin-bottom: 30px;'>Inserisci le credenziali per accedere al sistema</p>", unsafe_allow_html=True)
-
-    col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
-    with col_l2:
-        with st.form("form_login"):
-            username_input = st.text_input("Utente")
-            password_input = st.text_input("Password", type="password")
-
-            ricordami = st.checkbox(
-                "☑️ Ricordami su questo dispositivo",
-                value=True,
-                help="Se attivo, resterai collegato su questo browser anche dopo aver chiuso e riaperto l'app."
-            )
+        st.markdown(f"""
+        <div class="logo-container">
+            <img src="data:image/png;base64,{encoded_icon}" alt="VanGo Logo">
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("<h2 style='text-align: center; color: #FFFFFF; margin-bottom: 20px;'>Benvenuto in VanGo</h2>", unsafe_allow_html=True)
+    
+    with st.form("form_login"):
+        username_input = st.text_input("Username").strip()
+        password_input = st.text_input("Password", type="password").strip()
+        ricordami_input = st.checkbox("Ricordami su questo dispositivo", value=True)
+        
+        submitted = st.form_submit_button("Accedi", use_container_width=True, type="primary")
+        
+        if submitted:
+            utenti_validi = st.session_state.utenti_sistema
+            usr_clean = username_input.lower()
             
-            st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
-            submit_login = st.form_submit_button("ACCEDI", use_container_width=True, type="primary")
-
-            if submit_login:
-                st.session_state.utenti_sistema = carica_utenti_da_sheets()
-                utenti_validi = st.session_state.utenti_sistema
-                username_input = username_input.strip()
-
-                if username_input in utenti_validi and utenti_validi[username_input] == password_input:
-                    st.session_state.autenticato = True
-                    st.session_state.utente_corrente = username_input
-                    st.session_state.is_admin = (username_input.lower() == "admin")
-                    st.session_state.pagina_attiva = "giro"
-
-
-                    # Salva il login nel browser solo se "Ricordami" è selezionato.
-                    if ricordami:
-                        salva_sessione_persistente(username_input)
-                        st.session_state.ricordami_attivo = True
-                        # Il componente browser è asincrono: lasciamogli il tempo
-                        # di scrivere il valore prima del rerun.
-                        time.sleep(1.5)
-                    else:
-                        elimina_sessione_persistente()
-                        st.session_state.ricordami_attivo = False
+            # Cerca utente case-insensitive nel dizionario
+            match_usr = None
+            for u in utenti_validi:
+                if u.lower() == usr_clean:
+                    match_usr = u
+                    break
                     
-                    st.session_state.giro_corrente = carica_giro_utente_da_sheets(username_input)
-                    stato_persistente = carica_stato_giro_persistente(username_input)
-                    st.session_state.giro_terminato = bool(stato_persistente.get("giro_terminato", False))
-                    st.session_state.inizio_giro_reale = stato_persistente.get("inizio_giro_reale")
-                    st.session_state.fine_giro_reale = stato_persistente.get("fine_giro_reale")
-                    st.session_state.ultimo_utente_caricato = username_input
+            if match_usr and utenti_validi[match_usr] == password_input:
+                st.session_state.autenticato = True
+                st.session_state.utente_corrente = match_usr
+                st.session_state.is_admin = (match_usr.lower() == "admin")
+                st.session_state.pagina_attiva = "giro"
+                st.session_state.ricordami_attivo = ricordami_input
+                
+                if ricordami_input:
+                    salva_sessione_persistente(match_usr)
                     
-                    st.rerun()
-                else:
-                    st.error("❌ Utente o password errati.")
+                st.success("Accesso effettuato con successo!")
+                time.sleep(0.5)
+                st.rerun()
+            else:
+                st.error("Credenziali non valide. Riprova.")
 
-        if st.button("⬅️ Torna alla Home", use_container_width=True):
-            st.session_state.pagina_attiva = "welcome"
+# ==========================================
+# APPLICAZIONE PRINCIPALE (AUTENTICATO)
+# ==========================================
+elif st.session_state.autenticato:
+    
+    # Menu di Navigazione in Alto
+    nav_cols = st.columns(3)
+    
+    with nav_cols[0]:
+        btn_giro = st.button("🚐 Giro Consegne", use_container_width=True, type="primary" if st.session_state.pagina_attiva == "giro" else "secondary")
+        if btn_giro:
+            st.session_state.pagina_attiva = "giro"
             st.rerun()
-
-# ==========================================
-# APPLICAZIONE PRINCIPALE (ACCESSO CONSENTITO)
-# ==========================================
-else:
-    icon_path = "icovg.png"
-    if os.path.exists(icon_path):
-        with open(icon_path, "rb") as icon_file:
-            encoded_icon = base64.b64encode(icon_file.read()).decode()
-        st.markdown(f'''
-            <div class="logo-container">
-                <img src="data:image/png;base64,{encoded_icon}" alt="VanGo Logo">
-            </div>
-        ''', unsafe_allow_html=True)
-    else:
-        st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 22px; margin-bottom: 5px; margin-top: 0px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
-
-    col_info_u, col_logout_u = st.columns([3, 1])
-    with col_info_u:
-        st.markdown(f"<p style='color: #94A3B8; font-size: 13px; margin: 0;'>👤 Utente: <b style='color: #60A5FA;'>{st.session_state.get('utente_corrente', '')}</b></p>", unsafe_allow_html=True)
-    with col_logout_u:
-        if st.button("🚪 LOGOUT", use_container_width=True, key="btn_logout_principale"):
+            
+    with nav_cols[1]:
+        btn_db = st.button("📋 Database Clienti", use_container_width=True, type="primary" if st.session_state.pagina_attiva == "db" else "secondary")
+        if btn_db:
+            st.session_state.pagina_attiva = "db"
+            st.rerun()
+            
+    with nav_cols[2]:
+        btn_logout = st.button("🚪 Logout", use_container_width=True)
+        if btn_logout:
             elimina_sessione_persistente()
             st.session_state.autenticato = False
             st.session_state.utente_corrente = ""
             st.session_state.is_admin = False
-            st.session_state.pagina_attiva = "login"
+            st.session_state.pagina_attiva = "welcome"
             st.rerun()
 
-    st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+    st.markdown("---")
 
-    if st.session_state.is_admin:
-        col_sw1, col_sw2, col_sw3, col_sw4 = st.columns(4)
-    else:
-        col_sw1, col_sw2, col_sw3 = st.columns(3)
-
-    with col_sw1:
-        css_class = "btn-active" if st.session_state.pagina_attiva == "db" else "btn-inactive"
-        st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
-        if st.button("📁 CLIENTI", use_container_width=True, key="btn_db"):
-            st.session_state.pagina_attiva = "db"
-            st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with col_sw2:
-        css_class = "btn-active" if st.session_state.pagina_attiva == "giro" else "btn-inactive"
-        st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
-        if st.button("📍 GIRO", use_container_width=True, key="btn_giro"):
-            st.session_state.pagina_attiva = "giro"
-            st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    if st.session_state.is_admin:
-        with col_sw3:
-            css_class = "btn-active" if st.session_state.pagina_attiva == "utenti" else "btn-inactive"
-            st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
-            if st.button("🔑 UTENTI", use_container_width=True, key="btn_utenti"):
-                st.session_state.pagina_attiva = "utenti"
-                st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
-
-
-    if st.session_state.is_admin:
-        with col_sw4:
-            css_class = "btn-active" if st.session_state.pagina_attiva == "test_file" else "btn-inactive"
-            st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
-            if st.button("📸 TEST FILE", use_container_width=True, key="btn_test_file"):
-                st.session_state.pagina_attiva = "test_file"
-                st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
-    else:
-        with col_sw3:
-            css_class = "btn-active" if st.session_state.pagina_attiva == "test_file" else "btn-inactive"
-            st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
-            if st.button("📸 TEST FILE", use_container_width=True, key="btn_test_file"):
-                st.session_state.pagina_attiva = "test_file"
-                st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
-
-
-
-    # ==========================================
-    # PAGINA TEST IMPORTAZIONE JPEG / OCR
-    # ==========================================
-    if st.session_state.pagina_attiva == "test_file":
-        st.markdown("# 📸 Test importazione giro")
-        st.caption("Versione di prova: legge il JPEG e mostra solo il testo OCR. Non modifica giro, clienti o Google Sheets.")
-        st.info("Formato minimo atteso: CLIENTE · COMUNE · VIA · COLLI")
-
-        file_jpeg = st.file_uploader("📂 Carica il JPEG della lista consegne", type=["jpg", "jpeg"], key="test_jpeg_uploader")
-        if file_jpeg is not None:
-            if Image is None:
-                st.error("❌ Pillow non è disponibile nell'ambiente.")
-            else:
-                try:
-                    img = Image.open(file_jpeg)
-                    st.image(img, caption="JPEG caricato", use_container_width=True)
-
-                    if st.button("🔎 AVVIA OCR DI TEST", use_container_width=True, key="btn_avvia_ocr_test"):
-                        if pytesseract is None:
-                            st.error("❌ pytesseract non è installato. Aggiungi 'pytesseract' a requirements.txt.")
-                        else:
-                            tess = shutil.which("tesseract")
-                            if not tess:
-                                st.error("❌ Tesseract non è installato. Su Streamlit Cloud servono packages.txt con 'tesseract-ocr' e 'tesseract-ocr-ita'.")
-                            else:
-                                try:
-                                    pytesseract.pytesseract.tesseract_cmd = tess
-                                    img_ocr = img.convert("RGB")
-                                    max_dim = 2600
-                                    if max(img_ocr.size) > max_dim:
-                                        scala = max_dim / max(img_ocr.size)
-                                        img_ocr = img_ocr.resize((int(img_ocr.width * scala), int(img_ocr.height * scala)))
-                                    img_ocr = ImageOps.grayscale(img_ocr)
-                                    img_ocr = ImageEnhance.Contrast(img_ocr).enhance(1.8)
-                                    img_ocr = img_ocr.filter(ImageFilter.SHARPEN)
-                                    testo = pytesseract.image_to_string(img_ocr, lang="ita+eng", config="--psm 6")
-                                    if testo.strip():
-                                        st.success("✅ OCR completato")
-                                        st.text_area("Testo riconosciuto", testo, height=350, key="ocr_risultato_test")
-                                    else:
-                                        st.warning("⚠️ OCR completato ma non è stato riconosciuto testo.")
-                                except Exception as e:
-                                    st.error(f"❌ Errore OCR: {e}")
-                except Exception as e:
-                    st.error(f"❌ Impossibile leggere il JPEG: {e}")
-
-        st.markdown("---")
-        st.caption("Questo test serve solo a verificare la lettura della foto. L'importazione automatica nel giro verrà aggiunta dopo che l'OCR sarà affidabile.")
-
-    if st.session_state.pagina_attiva == "test_file":
-        st.stop()
-
-    # Pulsanti azione della pagina GIRO.
-    col_act1, col_act2 = st.columns(2)
-
-    with col_act1:
-        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-        if st.button("🔄 INVERTI SEQUENZA", use_container_width=True, key="btn_inverti"):
-            if not st.session_state.giro_corrente.empty:
-                st.session_state.giro_corrente = st.session_state.giro_corrente.iloc[::-1].reset_index(drop=True)
-                st.session_state.metriche_giro_corrente = None
-                st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
-                salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
-                st.session_state.giro_ottimizzato_proposto = None
-                st.session_state.metriche_ottimizzazione = None
-                st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with col_act2:
-        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-        if st.button("🗑️ SVUOTA GIRO", use_container_width=True, key="btn_svuota"):
-            if not st.session_state.giro_corrente.empty:
-                st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO'])
-                st.session_state.giro_terminato = False
-                st.session_state.inizio_giro_reale = None
-                st.session_state.fine_giro_reale = None
-                st.session_state.metriche_giro_corrente = None
-                salva_stato_giro_persistente(st.session_state.utente_corrente)
-                salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
-                st.session_state.giro_ottimizzato_proposto = None
-                st.session_state.metriche_ottimizzazione = None
-                st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    col_backup1, col_backup2 = st.columns(2)
-    with col_backup1:
-        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-        if st.button("💾 SALVA POSIZIONE GIRO", use_container_width=True, key="btn_salva_posizione"):
-            if st.session_state.giro_corrente.empty:
-                st.warning("⚠️ Il giro è vuoto: non c'è nulla da memorizzare.")
-            elif salva_posizione_giro():
-                st.success("💾 Ordine attuale del giro memorizzato. Potrai ripristinarlo in qualsiasi momento.")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with col_backup2:
-        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-        if st.button("↩️ RIPRISTINA GIRO SALVATO", use_container_width=True, key="btn_ripristina_posizione"):
-            if ripristina_posizione_giro():
-                st.success("↩️ Giro riportato all'ordine memorizzato.")
-                st.rerun()
-            else:
-                st.warning("⚠️ Nessun backup del giro disponibile per questo utente.")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-
-    st.session_state.modalita_ottimizzazione = st.selectbox(
-        "🧠 Modalità ottimizzazione",
-        options=[
-            "🛣️ ROUTE",
-            "📍 ZONE",
-            "⚖️ ZONE + ROUTE",
-            "🕐 ORARI — TEST",
-        ],
-        index=[
-            "🛣️ ROUTE",
-            "📍 ZONE",
-            "⚖️ ZONE + ROUTE",
-            "🕐 ORARI — TEST",
-        ].index(st.session_state.modalita_ottimizzazione)
-        if st.session_state.modalita_ottimizzazione in [
-            "🛣️ ROUTE",
-            "📍 ZONE",
-            "⚖️ ZONE + ROUTE",
-            "🕐 ORARI — TEST",
-        ] else 2,
-        key="select_modalita_ottimizzazione",
-    )
-
-    if st.session_state.modalita_ottimizzazione == "🛣️ ROUTE":
-        st.session_state.forza_gruppamento_zona = 0
-        st.caption("🛣️ ROUTE — motore V9 attuale: ottimizzazione stradale pura, ZONA ignorata.")
-    elif st.session_state.modalita_ottimizzazione == "📍 ZONE":
-        st.session_state.forza_gruppamento_zona = 100
-        st.caption("📍 ZONE — motore V9 attuale: ordine macro-ZONA crescente, clienti ottimizzati dentro ogni ZONA.")
-    elif st.session_state.modalita_ottimizzazione == "⚖️ ZONE + ROUTE":
-        st.session_state.forza_gruppamento_zona = 50
-        st.caption("⚖️ ZONE + ROUTE — motore V9 attuale al 50%: compromesso strada + ZONA.")
-    else:
-        st.session_state.forza_gruppamento_zona = 0
-        st.caption("🕐 ORARI — TEST — strada + orari di apertura minima. 01:00 = orario sconosciuto, quindi nessun vincolo.")
-
-    if st.button("🧠 OTTIMIZZA GIRO", use_container_width=True, key="btn_ottimizza"):
-        if st.session_state.giro_corrente.empty:
-            st.warning("⚠️ Il giro è vuoto.")
-        elif len(st.session_state.giro_corrente) < 2:
-            st.info("ℹ️ Servono almeno 2 fermate per ottimizzare il giro.")
-        else:
-            try:
-                with st.spinner("🧠 Analizzo indirizzi, percorso stradale e vincoli..."):
-                    if st.session_state.modalita_ottimizzazione == "🕐 ORARI — TEST":
-                        df_opt, metriche_opt = ottimizza_giro_orari_test(
-                            st.session_state.giro_corrente,
-                            st.session_state.db_clienti,
-                            ora_partenza_minuti=300,
-                        )
-                    else:
-                        df_opt, metriche_opt = ottimizza_giro_free(
-                            st.session_state.giro_corrente,
-                            st.session_state.db_clienti,
-                            forza_gruppamento_zona=st.session_state.forza_gruppamento_zona
-                        )
-                coordinate_da_salvare = metriche_opt.pop("coordinate_da_salvare", {})
-                if coordinate_da_salvare:
-                    st.session_state.db_clienti = _aggiorna_coordinate_db(
-                        st.session_state.db_clienti,
-                        st.session_state.giro_corrente,
-                        coordinate_da_salvare
-                    )
-                    salva_coordinate_su_google_sheets(st.session_state.db_clienti)
-                st.session_state.giro_ottimizzato_proposto = df_opt
-                st.session_state.metriche_ottimizzazione = metriche_opt
-                st.success("Giro ottimizzato pronto: controllalo e poi scegli se applicarlo.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"❌ Ottimizzazione non riuscita: {e}")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown("<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
-    st.markdown("<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
-
-    # ==========================================
-    # ANTEPRIMA GIRO OTTIMIZZATO
-    # ==========================================
-    if st.session_state.giro_ottimizzato_proposto is not None:
-        df_proposto = st.session_state.giro_ottimizzato_proposto
-        m = st.session_state.metriche_ottimizzazione or {}
-        st.markdown("---")
-        st.subheader("🧠 Anteprima percorso ottimizzato")
-        if str(m.get("metodo", "")).startswith("ORARI"):
-            st.caption("Start e fine giro: Dolciaria Acquaviva — Via Enrico Fermi 10, Burago di Molgora. Partenza test alle 05:00. 01:00 = orario sconosciuto, quindi nessun vincolo.")
-            st.info(f"🕐 Orari conosciuti: **{m.get('orari_conosciuti', 0)}** — sconosciuti (01:00/vuoti): **{m.get('orari_sconosciuti', 0)}** — attesa totale: **{m.get('attesa_totale_min', 0)} min**")
-        else:
-            st.caption("Start e fine giro: Dolciaria Acquaviva — Via Enrico Fermi 10, Burago di Molgora. Il campo ORA non viene usato per l'ottimizzazione V9.")
-            st.info(f"🎯 Forza raggruppamento ZONA usata: **{m.get('forza_gruppamento_zona', st.session_state.forza_gruppamento_zona)}%**")
-        seq_zona = m.get("sequenza_zona", [])
-        if seq_zona:
-            st.caption(f"🗺️ Sequenza ZONA: **{' → '.join(map(str, seq_zona))}**  |  Cambi ZONA: **{m.get('cambi_zona', 0)}**  |  Rientri: **{m.get('rientri_zona', 0)}**")
-            st.caption(f"📦 Macro-ZONE trovate: **{m.get('gruppi_zona', 0)}** — Metodo scelto: **{m.get('metodo', '')}**")
-            if m.get("forza_gruppamento_zona", 0) == 100 and seq_zona:
-                st.caption("🔒 Al 100%: le macro-ZONE sono mantenute in ordine crescente e ogni ZONA viene completata prima della successiva.")
-        elif m.get("gruppi_zona", 0) == 0:
-            st.warning("⚠️ Nessuna ZONA disponibile per le fermate di questo giro: la percentuale non può influire sul percorso.")
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Km", f"{m.get('km_ottimizzati', 0):.1f}", delta=f"{m.get('risparmio_km', 0):+.1f} km")
-        c2.metric("Tempo strada", f"{m.get('min_ottimizzati', 0):.0f} min", delta=f"{m.get('risparmio_min', 0):+.0f} min")
-        c3.metric("Fermate", f"{m.get('fermate', len(df_proposto))}")
-        c4.metric("Metodo", "FREE")
-
-        # Per la modalità ORARI mostriamo subito sotto le metriche attuali
-        # il dettaglio del tempo reale del giro.
-        if str(m.get("metodo", "")).startswith("ORARI"):
-            def _formatta_durata_totale(minuti):
-                minuti = max(0, int(round(float(minuti or 0))))
-                ore, minuti_restanti = divmod(minuti, 60)
-                return f"{ore} h {minuti_restanti:02d} min" if ore else f"{minuti_restanti} min"
-
-            t_viaggio = m.get("min_ottimizzati", 0)
-            t_attesa = m.get("attesa_totale_min", 0)
-            t_servizio = m.get("servizio_totale_min", len(df_proposto) * MINUTI_SERVIZIO_PER_FERMATA)
-            t_reale = m.get("tempo_totale_reale_min", t_viaggio + t_attesa + t_servizio)
-
-            st.markdown("**Dettaglio tempi del giro ORARI**")
-            d1, d2, d3, d4 = st.columns(4)
-            d1.metric("🚚 Tempo di viaggio", _formatta_durata_totale(t_viaggio))
-            d2.metric("⏳ Attesa totale", f"{int(round(float(t_attesa or 0)))} min")
-            d3.metric("🅿️ Servizio totale", f"{int(round(float(t_servizio or 0)))} min")
-            d4.metric("🕐 Tempo totale reale giro", _formatta_durata_totale(t_reale))
-
-        colonne_anteprima = ['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']
-        if str(m.get("metodo", "")).startswith("ORARI") and 'ARRIVO STIMATO' in df_proposto.columns:
-            colonne_anteprima = ['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'ARRIVO STIMATO', 'Q.ta']
-        st.dataframe(
-            df_proposto[colonne_anteprima],
-            hide_index=True,
-            use_container_width=True,
-        )
-
-        col_applica, col_annulla = st.columns(2)
-        with col_applica:
-            if st.button("✅ APPLICA GIRO OTTIMIZZATO", use_container_width=True, type="primary", key="btn_applica_ottimizzato"):
-                df_da_applicare = df_proposto.copy()
-                if 'ARRIVO STIMATO' in df_da_applicare.columns:
-                    df_da_applicare = df_da_applicare.drop(columns=['ARRIVO STIMATO'])
-                st.session_state.giro_corrente = df_da_applicare
-                st.session_state.metriche_giro_corrente = None
-                # V10.2.9: conserva la previsione del tempo totale per il confronto finale.
-                if str(m.get("metodo", "")).startswith("ORARI"):
-                    tempo_previsto = float(m.get("tempo_totale_reale_min", 0) or 0)
-                else:
-                    tempo_previsto = float(m.get("min_ottimizzati", 0) or 0) + len(df_da_applicare) * MINUTI_SERVIZIO_PER_FERMATA
-                st.session_state.previsione_giro = {
-                    "minuti": tempo_previsto,
-                    "metodo": str(m.get("metodo", "")),
-                    "firma": _firma_ordine_giro(df_da_applicare),
-                }
-                st.session_state.inizio_giro_reale = None
-                st.session_state.fine_giro_reale = None
-                st.session_state.giro_terminato = False
-                salva_stato_giro_persistente(st.session_state.utente_corrente)
-                # Conserva i dati temporali ORARI del giro appena applicato.
-                if str(m.get("metodo", "")).startswith("ORARI"):
-                    st.session_state.metriche_tempo_orari_corrente = {
-                        "firma": _firma_ordine_giro(df_da_applicare),
-                        "attesa_totale_min": float(m.get("attesa_totale_min", 0) or 0),
-                        "servizio_totale_min": float(m.get("servizio_totale_min", len(df_da_applicare) * MINUTI_SERVIZIO_PER_FERMATA) or 0),
-                        "tempo_totale_reale_min": float(m.get("tempo_totale_reale_min", 0) or 0),
-                    }
-                else:
-                    st.session_state.metriche_tempo_orari_corrente = None
-                salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
-                st.session_state.giro_ottimizzato_proposto = None
-                st.session_state.metriche_ottimizzazione = None
-                st.success("✅ Giro ottimizzato salvato su Google Sheets.")
-                st.rerun()
-        with col_annulla:
-            if st.button("❌ ANNULLA OTTIMIZZAZIONE", use_container_width=True, key="btn_annulla_ottimizzato"):
-                st.session_state.giro_ottimizzato_proposto = None
-                st.session_state.metriche_ottimizzazione = None
-                st.rerun()
-
-    # ==========================================
-    # SCHERMATA 1: GIRO CONSEGNE
-    # ==========================================
-    if st.session_state.pagina_attiva == "giro":
-        tot_clienti = len(st.session_state.giro_corrente)
-        tot_qta = int(st.session_state.giro_corrente['Q.ta'].sum()) if not st.session_state.giro_corrente.empty else 0
-        tot_comuni = int(st.session_state.giro_corrente['COMUNE'].nunique()) if not st.session_state.giro_corrente.empty else 0
-
-        # Avanzamento del giro: immediato e visibile a colpo d'occhio.
-        # I clienti FATTO/PARZIALE/RESPINTO sono considerati consegne gestite.
-        if tot_clienti > 0:
-            stati = st.session_state.giro_corrente.get("STATO", pd.Series([STATO_DA_FARE] * tot_clienti)).fillna("").astype(str)
-            completate = int(stati.isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]).sum())
-            percentuale = completate / tot_clienti
-            st.markdown(f"""
-            <div style="border:1px solid rgba(148,163,184,0.28); border-radius:12px; padding:12px 14px 10px 14px; margin:4px 0 14px 0; background:rgba(30,41,59,0.22);">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:7px;">
-                    <span style="font-size:15px; font-weight:700;">🚚 AVANZAMENTO GIRO</span>
-                    <span style="font-size:16px; font-weight:800;">{completate} / {tot_clienti}</span>
-                </div>
-                <div style="height:10px; border-radius:999px; background:rgba(148,163,184,0.18); overflow:hidden;">
-                    <div style="height:100%; width:{percentuale * 100:.1f}%; border-radius:999px; background:#22c55e;"></div>
-                </div>
-                <div style="font-size:12px; color:#94A3B8; margin-top:6px;">{completate} consegne completate su {tot_clienti}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        # Quando il giro e' completato, la vista CAMPO non deve piu' mostrare clienti.
-        # Calcoliamo qui il flag prima di usarlo, cosi' non puo' verificarsi un NameError.
-        stati_completamento = st.session_state.giro_corrente.get(
-            "STATO",
-            pd.Series([STATO_DA_FARE] * tot_clienti)
-        ).fillna("").astype(str)
-        tutte_gestite = (
-            bool(tot_clienti)
-            and int(stati_completamento.isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]).sum()) == tot_clienti
-        )
-        # Portiamo automaticamente l'utente sul RIEPILOGO, dove puo' vedere l'intera
-        # progressione: prima i da fare e in fondo tutti i gestiti/offuscati.
-        # A giro completato NON cambiamo automaticamente vista.
-        # Se l'utente e' in CAMPO, la CAMPO resta vuota: mostra solo clienti da fare.
-        # Il RIEPILOGO resta disponibile tramite il relativo pulsante e mostra tutti
-        # i clienti, con quelli gestiti in fondo e leggermente offuscati.
-
-        # V10.2.10: tre viste separate.
-        if not st.session_state.giro_corrente.empty:
-            v1, v2, v3 = st.columns(3)
-            with v1:
-                if st.button("🛠️ PREPARAZIONE", use_container_width=True, type="primary" if st.session_state.vista_giro == "PREPARAZIONE" else "secondary", key="vista_preparazione"):
-                    st.session_state.vista_giro = "PREPARAZIONE"
-                    st.rerun()
-            with v2:
-                if st.button("📋 RIEPILOGO", use_container_width=True, type="primary" if st.session_state.vista_giro == "RIEPILOGO" else "secondary", key="vista_riepilogo"):
-                    st.session_state.vista_giro = "RIEPILOGO"
-                    st.rerun()
-            with v3:
-                if st.button("🚚 CAMPO", use_container_width=True, type="primary" if st.session_state.vista_giro == "CAMPO" else "secondary", key="vista_campo"):
-                    st.session_state.vista_giro = "CAMPO"
-                    st.rerun()
-            st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
-        # Resoconto scaricabile: un solo tasto, sempre aggiornato con lo stato corrente.
-        if st.session_state.pagina_attiva == "giro" and not st.session_state.giro_corrente.empty:
-                # Esporta il resoconto del giro in Excel.
-                # Il file viene rigenerato ad ogni aggiornamento della pagina, quindi
-                # contiene sempre lo stato consegna piu' recente senza usare un secondo tasto.
-                try:
-                    from openpyxl import Workbook
-                    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-                    from openpyxl.utils import get_column_letter
-
-                    df_export = prepara_vista_giro(st.session_state.giro_corrente).copy()
-                    righe_export = []
-                    for i, (_, r) in enumerate(df_export.iterrows(), start=1):
-                        stato = str(r.get("STATO", "")).strip() or STATO_DA_FARE
-                        if stato not in STATI_CONSEGNA:
-                            stato = STATO_DA_FARE
-                        righe_export.append({
-                            "N°": i,
-                            "CLIENTE": str(r.get("CLIENTE", "")).strip(),
-                            "STATO CONSEGNA": stato,
-                        })
-
-                    wb = Workbook()
-                    ws = wb.active
-                    ws.title = "Resoconto Giro"
-                    intestazioni = ["N°", "CLIENTE", "STATO CONSEGNA"]
-                    ws.append(intestazioni)
-
-                    for riga in righe_export:
-                        ws.append([riga[col] for col in intestazioni])
-
-                    # Formattazione semplice e leggibile, pensata per l'uso quotidiano.
-                    for cella in ws[1]:
-                        cella.font = Font(bold=True)
-                        cella.alignment = Alignment(horizontal="center", vertical="center")
-                    ws.freeze_panes = "A2"
-                    ws.auto_filter.ref = ws.dimensions
-                    ws.row_dimensions[1].height = 24
-
-                    larghezze = {"A": 8, "B": 42, "C": 24}
-                    for col, larghezza in larghezze.items():
-                        ws.column_dimensions[col].width = larghezza
-
-                    bordo = Side(style="thin")
-                    for row in ws.iter_rows():
-                        for cella in row:
-                            cella.border = Border(bottom=bordo)
-                            cella.alignment = Alignment(vertical="center")
-
-                    # Colori automatici solo sulla colonna dello stato.
-                    for row in ws.iter_rows(min_row=2, min_col=3, max_col=3):
-                        cella = row[0]
-                        if cella.value == STATO_FATTO:
-                            cella.fill = PatternFill("solid", fgColor="C6EFCE")
-                        elif cella.value == STATO_PARZIALE:
-                            cella.fill = PatternFill("solid", fgColor="FFEB9C")
-                        elif cella.value == STATO_RESPINTO:
-                            cella.fill = PatternFill("solid", fgColor="FFC7CE")
-                        else:
-                            cella.fill = PatternFill("solid", fgColor="E7E6E6")
-
-                    buffer_excel = BytesIO()
-                    wb.save(buffer_excel)
-                    buffer_excel.seek(0)
-                    nome_resoconto = f"resoconto_giro_{st.session_state.utente_corrente}.xlsx"
-                    st.download_button(
-                        "📊 ESPORTA RESOCONTO GIRO (EXCEL)",
-                        data=buffer_excel.getvalue(),
-                        file_name=nome_resoconto,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True,
-                        key="btn_esporta_resoconto_giro"
-                    )
-                except Exception as e:
-                    st.error(f"❌ Impossibile preparare il resoconto Excel: {e}")
-                st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
+    # ----------------------------------------------------
+    # PAGINA 1: DATABASE CLIENTI (ADMIN / GESTIONE)
+    # ----------------------------------------------------
+    if st.session_state.pagina_attiva == "db":
+        st.markdown("### 📋 Gestione Database Clienti (Foglio1)")
         
-
-        # KM e tempo: PREPARAZIONE/RIEPILOGO mostrano sempre il giro completo.
-        # CAMPO mostra invece solo la parte ancora da fare, partendo dall'ultima
-        # consegna gia' gestita (o dal deposito se non ne esiste una) e rientrando
-        # al deposito. Nessuna riottimizzazione automatica.
-        if st.session_state.vista_giro == "CAMPO":
-            df_per_metriche = st.session_state.giro_corrente.copy().reset_index(drop=True)
-            if "STATO" not in df_per_metriche.columns:
-                df_per_metriche["STATO"] = STATO_DA_FARE
-            stati_gestiti_metriche = [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
-            df_per_metriche = df_per_metriche[
-                ~df_per_metriche["STATO"].fillna("").astype(str).isin(stati_gestiti_metriche)
-            ].reset_index(drop=True)
-            firma_campo = _firma_ordine_giro(df_per_metriche)
-            if (
-                st.session_state.get("firma_metriche_giro_campo") != firma_campo
-                or st.session_state.get("metriche_giro_campo") is None
-            ):
-                try:
-                    st.session_state.metriche_giro_campo = calcola_metriche_giro_campo(
-                        st.session_state.giro_corrente,
-                        st.session_state.db_clienti
+        # Pulsante per geolocalizzare l'intero database in un sol colpo
+        col_geo1, col_geo2 = st.columns([2, 1])
+        with col_geo1:
+            st.info("💡 La geolocalizzazione automatica interroga OpenStreetMap per calcolare le coordinate di tutti i clienti privi di posizione.")
+        with col_geo2:
+            if st.button("🌍 Geolocalizza Tutti i Clienti", use_container_width=True, type="primary"):
+                with st.spinner("Geolocalizzazione in corso..."):
+                    db_aggiornato, trovati, gia_presenti, non_trovati = geolocalizza_tutti_clienti(
+                        st.session_state.db_clienti,
+                        salvataggio_progressivo=lambda df: salva_coordinate_su_google_sheets(df)
                     )
-                except Exception:
-                    st.session_state.metriche_giro_campo = None
-                st.session_state.firma_metriche_giro_campo = firma_campo
-            metriche_giro = st.session_state.metriche_giro_campo or {}
+                    st.session_state.db_clienti = db_aggiornato
+                    salva_coordinate_su_google_sheets(db_aggiornato)
+                    st.success(f"Completato! Trovate {trovati} nuove coordinate (già presenti: {gia_presenti}).")
+                    if non_trovati:
+                        st.warning(f"Indirizzi non geolocalizzabili ({len(non_trovati)}): " + ", ".join(non_trovati[:5]))
+                    time.sleep(1)
+                    st.rerun()
+
+        df_db_view = st.session_state.db_clienti.copy()
+        
+        # Mostra tabella interattiva dei clienti
+        st.dataframe(df_db_view, use_container_width=True, hide_index=True)
+
+    # ----------------------------------------------------
+    # PAGINA 2: GIRO CONSEGNE (OPERATIVO AUTISTA)
+    # ----------------------------------------------------
+    elif st.session_state.pagina_attiva == "giro":
+        
+        # Titolo e stato utente
+        st.markdown(f"### 🚐 Giro Consegne — Utente: **{st.session_state.utente_corrente.upper()}**")
+        
+        df_giro = st.session_state.giro_corrente
+        
+        if df_giro.empty:
+            st.info("📭 Nessun giro attivo caricato per questo utente. Contatta l'amministratore o importa un giro.")
         else:
-            if st.session_state.metriche_giro_corrente is None and not st.session_state.giro_corrente.empty:
-                try:
-                    st.session_state.metriche_giro_corrente = calcola_metriche_giro_corrente(
-                        st.session_state.giro_corrente,
-                        st.session_state.db_clienti
-                    )
-                except Exception:
-                    # Nessun errore bloccante nell'interfaccia: se OSRM non risponde
-                    # o manca una coordinata, lasciamo semplicemente il valore "—".
-                    st.session_state.metriche_giro_corrente = None
-            metriche_giro = st.session_state.metriche_giro_corrente or {}
-        km_giro = metriche_giro.get("km")
-        minuti_giro = metriche_giro.get("minuti")
-
-        # In CAMPO le metriche sono sempre quelle del percorso ancora da fare:
-        # fermate pendenti + rientro in sede. A consegne completate resta quindi
-        # visibile solo il rientro ultima consegna -> sede, finche' non si preme
-        # TERMINA GIRO; dopo TERMINA GIRO il residuo diventa 0.
-        km_visualizzati = km_giro
-        minuti_visualizzati = minuti_giro
-        if st.session_state.vista_giro == "CAMPO":
-            if bool(st.session_state.get("giro_terminato", False)):
-                km_visualizzati = 0.0
-                minuti_visualizzati = 0.0
-            else:
-                try:
-                    metriche_campo = calcola_metriche_giro_campo(
-                        st.session_state.giro_corrente,
-                        st.session_state.db_clienti
-                    )
-                    if metriche_campo is not None:
-                        km_visualizzati = metriche_campo.get("km")
-                        minuti_visualizzati = metriche_campo.get("minuti")
-                except Exception:
-                    pass
-
-        col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
-        col_m1.metric("Fermate Totali", f"{tot_clienti}")
-        col_m2.metric("Pezzi Totali", f"{tot_qta}")
-        col_m3.metric("Comuni", f"{tot_comuni}")
-        if st.session_state.vista_giro == "CAMPO":
-            col_m4.metric("KM Rimanenti", f"{km_visualizzati:.1f}" if km_visualizzati is not None else "—")
-        else:
-            col_m4.metric("KM Totali", f"{km_visualizzati:.1f}" if km_visualizzati is not None else "—")
-        if minuti_visualizzati is not None:
-            ore = int(minuti_visualizzati // 60)
-            minuti = int(round(minuti_visualizzati - ore * 60))
-            if minuti == 60:
-                ore += 1
-                minuti = 0
-            tempo_display = f"{ore}h {minuti:02d}m" if ore > 0 else f"{minuti} min"
-        else:
-            tempo_display = "—"
-        col_m5.metric("Tempo rimanente" if st.session_state.vista_giro == "CAMPO" else "Tempo Giro", tempo_display)
-
-        # Dettaglio tempi del giro: SEMPRE visibile quando esiste un giro,
-        # indipendentemente dal tipo di ottimizzazione o dal fatto che sia stato
-        # ottimizzato. Il tempo di viaggio e' gia' mostrato sopra come "Tempo Giro".
-        #
-        # Attesa: per un giro normale/manuale e per ROUTE/ZONE/ZONE+ROUTE = 0.
-        # Per un giro ORARI appena applicato usiamo l'attesa calcolata dal motore.
-        # Servizio: sempre 12 minuti per fermata.
-        # Tempo reale: viaggio + attesa + servizio.
-        metriche_orari_correnti = st.session_state.get("metriche_tempo_orari_corrente") or {}
-        firma_corrente = _firma_ordine_giro(st.session_state.giro_corrente)
-        metriche_orari_valide = (
-            bool(metriche_orari_correnti)
-            and metriche_orari_correnti.get("firma") == firma_corrente
-        )
-
-        def _formatta_durata_metriche(minuti):
-            minuti = max(0, int(round(float(minuti or 0))))
-            ore, minuti_restanti = divmod(minuti, 60)
-            return f"{ore} h {minuti_restanti:02d} min" if ore else f"{minuti_restanti} min"
-
-        attesa_corrente = (
-            float(metriche_orari_correnti.get("attesa_totale_min", 0) or 0)
-            if metriche_orari_valide else 0.0
-        )
-        if st.session_state.vista_giro == "CAMPO":
-            df_servizio = st.session_state.giro_corrente.copy()
-            if "STATO" not in df_servizio.columns:
-                df_servizio["STATO"] = STATO_DA_FARE
-            df_servizio = df_servizio[
-                ~df_servizio["STATO"].fillna("").astype(str).isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO])
-            ]
-            servizio_corrente = float(len(df_servizio) * MINUTI_SERVIZIO_PER_FERMATA)
-        else:
-            servizio_corrente = float(len(st.session_state.giro_corrente) * MINUTI_SERVIZIO_PER_FERMATA)
-        viaggio_corrente = float(minuti_visualizzati or 0)
-        tempo_reale_corrente = viaggio_corrente + attesa_corrente + servizio_corrente
-
-        st.markdown("**Dettaglio tempi reali del giro**")
-        d1, d2, d3 = st.columns(3)
-        d1.metric("⏳ Attesa totale", f"{int(round(attesa_corrente))} min")
-        d2.metric("🅿️ Servizio totale", f"{int(round(servizio_corrente))} min")
-        d3.metric("🕐 Tempo totale reale giro", _formatta_durata_metriche(tempo_reale_corrente))
-
-        st.markdown("---")
-
-        def _timestamp_oggi_alle_0520():
-            """Timestamp locale Europe/Rome di oggi alle 05:20, usato come partenza implicita."""
-            try:
-                tz = ZoneInfo("Europe/Rome") if ZoneInfo is not None else None
-                adesso = datetime.now(tz) if tz else datetime.now()
-                dt = adesso.replace(hour=5, minute=20, second=0, microsecond=0)
-                return dt.timestamp()
-            except Exception:
-                adesso = datetime.now()
-                return adesso.replace(hour=5, minute=20, second=0, microsecond=0).timestamp()
-
-        # V10.2.17: le consegne possono essere tutte gestite, ma il giro non e'
-        # realmente terminato finche' il mezzo non rientra in sede e l'utente
-        # preme TERMINA GIRO.
-        stati_fine = st.session_state.giro_corrente.get("STATO", pd.Series([STATO_DA_FARE] * tot_clienti)).fillna("").astype(str) if tot_clienti else pd.Series(dtype=str)
-        tutte_gestite = bool(tot_clienti) and int(stati_fine.isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]).sum()) == tot_clienti
-        if tutte_gestite:
-            giro_terminato = bool(st.session_state.get("giro_terminato", False))
-            if giro_terminato:
-                titolo_fine = "🏁 GIRO COMPLETATO"
-                sottotitolo_fine = "Tutte le consegne sono state gestite e il rientro in sede e' stato registrato."
-            else:
-                titolo_fine = "📦 CONSEGNE COMPLETATE"
-                sottotitolo_fine = "Tutte le consegne sono state gestite. Rientra in sede e premi TERMINA GIRO."
-            st.markdown(f"""
-            <div style='text-align:center; padding:22px 12px 12px 12px; margin:10px 0 14px 0; border:1px solid rgba(34,197,94,0.35); border-radius:16px; background:rgba(34,197,94,0.08);'>
-                <div style='font-size:32px; font-weight:800;'>{titolo_fine}</div>
-                <div style='font-size:14px; color:#94A3B8; margin-top:5px;'>{sottotitolo_fine}</div>
-            </div>
-            """, unsafe_allow_html=True)
-            def _fmt_fine(minuti):
-                minuti = max(0, int(round(float(minuti or 0))))
-                h, m = divmod(minuti, 60)
-                return f"{h} h {m:02d} min" if h else f"{m} min"
-
-            previsione = st.session_state.get("previsione_giro") or {}
-            previsto = previsione.get("minuti")
-            inizio = st.session_state.get("inizio_giro_reale")
-            fine = st.session_state.get("fine_giro_reale")
-
-            # La previsione finale deve essere il "Tempo totale reale giro" del giro
-            # completo: tempo strada + attesa + 12 minuti per fermata.
-            # Se non e' stata salvata dall'ottimizzatore, la ricaviamo qui dal giro
-            # completo, senza usare il percorso residuo della CAMPO.
-            if previsto is None and not st.session_state.giro_corrente.empty:
-                try:
-                    metriche_completo = calcola_metriche_giro_corrente(
-                        st.session_state.giro_corrente,
-                        st.session_state.db_clienti
-                    )
-                    if metriche_completo is not None:
-                        previsto = float(metriche_completo.get("minuti", 0) or 0) + len(st.session_state.giro_corrente) * MINUTI_SERVIZIO_PER_FERMATA
-                        # Per ORARI, se abbiamo gia' l'attesa calcolata, includila.
-                        if metriche_orari_valide:
-                            previsto += float(metriche_orari_correnti.get("attesa_totale_min", 0) or 0)
-                        st.session_state.previsione_giro = {
-                            "minuti": previsto,
-                            "metodo": str(previsione.get("metodo", "TEMPO TOTALE GIRO")),
-                            "firma": _firma_ordine_giro(st.session_state.giro_corrente),
-                        }
-                        salva_stato_giro_persistente(st.session_state.utente_corrente)
-                except Exception:
-                    previsto = previsto
-
-            # Se l'utente non ha premuto INIZIA GIRO, al momento di TERMINA GIRO
-            # usiamo come partenza implicita le 05:20 locali.
-            if giro_terminato and previsto is not None:
-                if inizio is None:
-                    inizio = _timestamp_oggi_alle_0520()
-                    st.session_state.inizio_giro_reale = inizio
-                    salva_stato_giro_persistente(st.session_state.utente_corrente)
-                if fine is not None:
-                    effettivo = max(0.0, (float(fine) - float(inizio)) / 60.0)
-                    differenza = float(effettivo) - float(previsto)
-                    if differenza <= 0:
-                        esito = f"🟢 {_fmt_fine(abs(differenza))} risparmiati rispetto alla stima"
-                    else:
-                        esito = f"🔴 {_fmt_fine(differenza)} in più rispetto alla stima"
-                    st.markdown("**📊 CONFRONTO FINALE**")
-                    a, b = st.columns(2)
-                    a.metric("⏱️ Tempo previsto", _fmt_fine(previsto))
-                    b.metric("🚚 Tempo effettivo", _fmt_fine(effettivo))
-                    st.markdown(f"<div style='text-align:center; font-size:20px; font-weight:800; margin:8px 0 14px 0;'>{esito}</div>", unsafe_allow_html=True)
-                else:
-                    st.info("Tempo effettivo non disponibile.")
-            elif not giro_terminato and previsto is not None:
-                st.info("La stima verrà confrontata con il tempo effettivo quando premi TERMINA GIRO. Se non premi INIZIA GIRO, verranno usate le 05:20 come partenza.")
-
-            # Il rientro e' gia' rappresentato dalle metriche superiori della CAMPO
-            # (KM Rimanenti / Tempo rimanente), quindi non lo ripetiamo qui.
-            # Lasciamo soltanto il comando TERMINA GIRO quando tutte le consegne
-            # sono state gestite.
-            if st.session_state.vista_giro == "CAMPO":
-                if tutte_gestite and not giro_terminato:
-                    st.info("Tutte le consegne sono gestite. Rientra in sede e premi TERMINA GIRO.")
-                    if st.button("🏁 TERMINA GIRO", use_container_width=True, type="primary", key="btn_termina_giro"):
-                        if st.session_state.get("inizio_giro_reale") is None:
-                            st.session_state.inizio_giro_reale = _timestamp_oggi_alle_0520()
-                        st.session_state.fine_giro_reale = time.time()
+            # Pulsanti di controllo rapido del giro
+            col_ctrl1, col_ctrl2, col_ctrl3 = st.columns(3)
+            
+            with col_ctrl1:
+                if not st.session_state.get("giro_terminato", False):
+                    if st.button("🏁 Termina Giro", use_container_width=True, type="primary"):
                         st.session_state.giro_terminato = True
+                        st.session_state.fine_giro_reale = time.time()
                         salva_stato_giro_persistente(st.session_state.utente_corrente)
+                        st.success("Giro completato!")
                         st.rerun()
-            st.markdown("---")
-        if not st.session_state.giro_corrente.empty:
-            st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
-            # PREPARAZIONE mantiene sempre l'ordine reale del giro salvato.
-            # RIEPILOGO/CAMPO usano invece la vista operativa con i gestiti in fondo.
-            df_giro_preparazione = st.session_state.giro_corrente.copy().reset_index(drop=True)
-            df_vista_giro = prepara_vista_giro(st.session_state.giro_corrente)
-            
-            # Il percorso NON viene riottimizzato automaticamente.
-            # Si mantiene l'ordine gia' ottimizzato e si escludono solo le consegne gia' gestite.
-            addresses = indirizzi_per_percorso_giro(st.session_state.giro_corrente)
-            partenza = indirizzo_partenza_giro(st.session_state.giro_corrente)
-            if addresses:
-                origin = urllib.parse.quote(partenza)
-                if len(addresses) == 1:
-                    maps_url = f"https://www.google.com/maps/dir/{origin}/{urllib.parse.quote(addresses[0])}"
                 else:
-                    destination = urllib.parse.quote(addresses[-1])
-                    if len(addresses) > 1:
-                        waypoints = "/".join([urllib.parse.quote(a) for a in addresses[:-1]])
-                        maps_url = f"https://www.google.com/maps/dir/{origin}/{waypoints}/{destination}"
-                    else:
-                        maps_url = f"https://www.google.com/maps/dir/{origin}/{destination}"
-            else:
-                maps_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(DEPOSITO_VANGO)}"
-
-            if st.session_state.vista_giro == "RIEPILOGO":
-                st.markdown(f"<p style='color: #94A3B8; font-size: 14px; margin-bottom: 15px;'>{tot_clienti} indirizzi trovati nel giro.</p>", unsafe_allow_html=True)
-
-                st.markdown('<div id="avvia-percorso-top"></div>', unsafe_allow_html=True)
-                st.markdown(f'''
-                    <a href="{maps_url}" target="_blank" style="text-decoration:none;">
-                        <button style="width:100%; background-color:#2563EB; color:white; border:none; border-radius:25px; height:52px; font-weight:bold; font-size:16px; box-shadow:0 4px 10px rgba(37,99,235,0.4);">
-                            🗺️ AVVIA PERCORSO
-                        </button>
-                    </a>
-                ''', unsafe_allow_html=True)
-                st.markdown('<div style="height:10px;"></div>', unsafe_allow_html=True)
-
-                for idx in range(tot_clienti):
-                    row = df_vista_giro.iloc[idx]
-                    idx_reale = int(row["__IDX_ORIGINALE"])
-
-                    # Card riepilogo: il cestino e' integrato NELLA STESSA CARD, a destra.
-                    # Usiamo un container con bordo per evitare che il pulsante finisca sotto la card.
-                    card_opacita = 0.52 if str(row.get("STATO", "")).strip() in [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO] else 1.0
-                    with st.container(border=True):
-                        col_badge, col_info = st.columns([0.10, 0.90], gap="small", vertical_alignment="top")
-
-                        with col_badge:
-                            st.markdown(f'<div class="clean-badge" style="opacity:{card_opacita};">{idx + 1}</div>', unsafe_allow_html=True)
-
-                        with col_info:
-                            st.markdown(f"""
-                            <div class="clean-content" style="opacity:{card_opacita};">
-                                <div class="clean-title">{row['CLIENTE']}</div>
-                                <div class="clean-subtitle">📍 {row['VIA']}, {row['COMUNE']} (🕒 {row['ORA']} | 📦 {row['Q.ta']} pz)</div>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            stato_attuale = str(row.get('STATO', '')).strip() or STATO_DA_FARE
-                            if stato_attuale not in STATI_CONSEGNA:
-                                stato_attuale = STATO_DA_FARE
-                            stato_nuovo = st.selectbox(
-                                "Stato consegna",
-                                options=STATI_CONSEGNA,
-                                index=STATI_CONSEGNA.index(stato_attuale),
-                                key=f"stato_consegna_pulita_{idx_reale}_{row['CLIENTE']}"
-                            )
-                            if stato_nuovo != stato_attuale:
-                                salva_stato_consegna(idx_reale, stato_nuovo)
-
-                st.markdown("---")
-                st.markdown('''
-                <div style="text-align:center; margin:4px 0 8px 0;">
-                    <a href="#avvia-percorso-top" style="text-decoration:none; font-size:28px;">⬆️</a>
-                </div>
-                ''' , unsafe_allow_html=True)
-            elif st.session_state.vista_giro == "CAMPO":
-                st.markdown("<div style='text-align:center; color:#94A3B8; font-size:14px; margin-bottom:12px;'>🚚 MODALITÀ CAMPO</div>", unsafe_allow_html=True)
-                st.markdown('<div id="avvia-percorso-top"></div>', unsafe_allow_html=True)
-                st.markdown(f"""
-                    <a href="{maps_url}" target="_blank" style="text-decoration:none;">
-                        <button style="width:100%; background-color:#2563EB; color:white; border:none; border-radius:25px; height:52px; font-weight:bold; font-size:16px; box-shadow:0 4px 10px rgba(37,99,235,0.4);">
-                            🗺️ AVVIA PERCORSO
-                        </button>
-                    </a>
-                """, unsafe_allow_html=True)
-                if not st.session_state.get("giro_terminato", False) and st.session_state.get("inizio_giro_reale") is None:
-                    if st.button("▶️ INIZIA GIRO", use_container_width=True, type="primary", key="btn_inizia_giro"):
-                        st.session_state.inizio_giro_reale = time.time()
-                        st.session_state.fine_giro_reale = None
+                    if st.button("🔄 Riattiva Giro", use_container_width=True):
                         st.session_state.giro_terminato = False
+                        st.session_state.fine_giro_reale = None
                         salva_stato_giro_persistente(st.session_state.utente_corrente)
                         st.rerun()
-                elif st.session_state.get("inizio_giro_reale") is not None and not st.session_state.get("giro_terminato", False):
-                    st.caption("🕐 Giro iniziato: il tempo effettivo viene calcolato fino a TERMINA GIRO.")
-                st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
-                # CAMPO: mostra SOLO le consegne ancora da gestire.
-                # Il filtro viene applicato direttamente al giro reale, prima della
-                # preparazione grafica, cosi' i clienti gestiti non possono rientrare
-                # nella lista per effetto del riordinamento della vista.
-                # Usiamo anche una normalizzazione robusta del testo dello stato,
-                # cosi' eventuali spazi/variazioni non fanno ricomparire una consegna.
-                def _stato_gestito_campo(valore):
-                    testo = str(valore if valore is not None else "").strip().upper()
-                    return (
-                        testo == str(STATO_FATTO).strip().upper()
-                        or testo == str(STATO_PARZIALE).strip().upper()
-                        or testo == str(STATO_RESPINTO).strip().upper()
-                        or "FATTO" in testo
-                        or "PARZIALE" in testo
-                        or "RESPINTO" in testo
-                    )
-
-                # CAMPO = SOLO CLIENTI DA FARE.
-                # Nascondiamo inoltre in modo esplicito e persistente nella sessione
-                # il cliente appena lavorato: cosi' deve sparire dalla CAMPO anche se
-                # Google Sheets impiega qualche istante ad aggiornarsi.
-                if "campo_clienti_nascosti" not in st.session_state:
-                    st.session_state.campo_clienti_nascosti = set()
-
-                df_campo_base = st.session_state.giro_corrente.copy().reset_index(drop=True)
-                if "STATO" not in df_campo_base.columns:
-                    df_campo_base["STATO"] = STATO_DA_FARE
-                df_campo_base["STATO"] = df_campo_base["STATO"].fillna("").astype(str)
-                df_campo_base["__IDX_ORIGINALE"] = list(range(len(df_campo_base)))
-
-                indici_pendenti_campo = []
-                for i, row_campo in df_campo_base.iterrows():
-                    cliente_key = f"{i}|{str(row_campo.get('CLIENTE', '')).strip()}|{str(row_campo.get('COMUNE', '')).strip()}|{str(row_campo.get('VIA', '')).strip()}"
-                    valore_stato = row_campo.get("STATO", "")
-                    if not _stato_gestito_campo(valore_stato) and cliente_key not in st.session_state.campo_clienti_nascosti:
-                        indici_pendenti_campo.append(i)
-                df_campo_pendenti = df_campo_base.iloc[indici_pendenti_campo].copy().reset_index(drop=True)
-
-                for idx, (_, row) in enumerate(df_campo_pendenti.iterrows()):
-                    idx_reale = int(row["__IDX_ORIGINALE"])
-                    stato_attuale = str(row.get("STATO", "")).strip() or STATO_DA_FARE
-                    if stato_attuale not in STATI_CONSEGNA:
-                        stato_attuale = STATO_DA_FARE
-
-                    st.markdown(f"""
-                    <div class="clean-card" style="opacity:1.0; margin-bottom:6px;">
-                        <div class="clean-badge">{idx + 1}</div>
-                        <div class="clean-content">
-                            <div class="clean-title">{row['CLIENTE']}</div>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    stato_nuovo = st.selectbox(
-                        "Stato",
-                        options=STATI_CONSEGNA,
-                        index=STATI_CONSEGNA.index(stato_attuale),
-                        key=f"stato_consegna_campo_{idx_reale}_{row['CLIENTE']}"
-                    )
-                    if stato_nuovo != stato_attuale:
-                        # Aggiornamento immediato del dataframe reale: il cliente
-                        # deve sparire dalla CAMPO al rerun successivo.
-                        df_reale = st.session_state.giro_corrente.copy().reset_index(drop=True)
-                        if 0 <= idx_reale < len(df_reale):
-                            if "STATO" not in df_reale.columns:
-                                df_reale["STATO"] = STATO_DA_FARE
-                            df_reale.at[idx_reale, "STATO"] = stato_nuovo
-                            st.session_state.giro_corrente = df_reale
-                            st.session_state.fine_giro_reale = None
-                            st.session_state.giro_terminato = False
-                            # Un nuovo cambio stato riapre il giro: aggiorna anche lo stato persistente.
-                            salva_stato_giro_persistente(st.session_state.utente_corrente)
-                            # Nascondi IMMEDIATAMENTE il cliente dalla CAMPO.
-                            # La chiave include indice + cliente + comune + via per
-                            # evitare che il widget possa farlo ricomparire al rerun.
-                            r = df_reale.iloc[idx_reale]
-                            cliente_key = f"{idx_reale}|{str(r.get('CLIENTE', '')).strip()}|{str(r.get('COMUNE', '')).strip()}|{str(r.get('VIA', '')).strip()}"
-                            st.session_state.campo_clienti_nascosti.add(cliente_key)
-                            salva_giro_utente_su_sheets(st.session_state.utente_corrente, df_reale)
+                        
+            with col_ctrl2:
+                if st.button("💾 Salva Posizione", use_container_width=True):
+                    if salva_posizione_giro():
+                        st.success("Posizione salvata con successo!")
+                    else:
+                        st.error("Errore durante il salvataggio.")
+                        
+            with col_ctrl3:
+                if st.button("♻️ Ripristina Backup", use_container_width=True):
+                    if ripristina_posizione_giro():
+                        st.success("Giro ripristinato dal backup!")
+                        time.sleep(0.5)
                         st.rerun()
-                st.markdown("---")
-                st.markdown('''
-                <div style="text-align:center; margin:4px 0 8px 0;">
-                    <a href="#avvia-percorso-top" style="text-decoration:none; font-size:28px;">⬆️</a>
-                </div>
-                ''' , unsafe_allow_html=True)
-            elif st.session_state.vista_giro == "PREPARAZIONE":
-                # Vista di preparazione: ordine originale del giro, senza spostare
-                # visivamente in fondo i clienti gia' gestiti. Qui non si gestiscono
-                # gli stati di consegna.
-                st.markdown('<div id="avvia-percorso-top"></div>', unsafe_allow_html=True)
-                st.markdown(f"""
-                    <a href="{maps_url}" target="_blank" style="text-decoration:none;">
-                        <button style="width:100%; background-color:#2563EB; color:white; border:none; border-radius:25px; height:52px; font-weight:bold; font-size:16px; box-shadow:0 4px 10px rgba(37,99,235,0.4);">
-                            🗺️ AVVIA PERCORSO
-                        </button>
-                    </a>
-                """, unsafe_allow_html=True)
-                st.markdown('<div style="height:10px;"></div>', unsafe_allow_html=True)
-
-                for idx in range(len(df_giro_preparazione)):
-                    row = df_giro_preparazione.iloc[idx]
-                    st.markdown(f"""
-                    <div class="stop-card" style="opacity:1.0;">
-                        <div class="stop-title">{idx + 1}. {row['CLIENTE']}</div>
-                        <div class="stop-address">📍 {row['VIA']}, {row['COMUNE']}</div>
-                        <div class="stop-meta">🕒 Ora: {row['ORA']} | 📦 Q.tà: {row['Q.ta']} pz</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                    col_c1, col_c2, col_c3, col_c4 = st.columns([1, 1, 1, 1])
-
-                    with col_c1:
-                        dest = urllib.parse.quote(f"{row['VIA']}, {row['COMUNE']}")
-                        st.write("")
-                        st.markdown(f"[🚘 **NAVIGA ORA**](https://www.google.com/maps/dir/?api=1&destination={dest})")
-
-                    with col_c2:
-                        nuova_qta = st.number_input(
-                            "Q.tà colli",
-                            min_value=0,
-                            value=int(row['Q.ta']),
-                            key=f"qta_preparazione_{row['CLIENTE']}_{idx}"
-                        )
-                        if nuova_qta != int(row['Q.ta']):
-                            st.session_state.giro_corrente.at[idx, 'Q.ta'] = nuova_qta
-                            salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
-                            st.rerun()
-
-                    with col_c3:
-                        # Spostamento manuale dei soli clienti ancora da consegnare.
-                        stato_riga = str(row.get("STATO", "")).strip()
-                        stati_gestiti = [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
-                        if stato_riga not in stati_gestiti:
-                            clienti_pendenti = df_giro_preparazione.iloc[:sum(
-                                1 for _, rr in df_giro_preparazione.iterrows()
-                                if str(rr.get("STATO", "")).strip() not in stati_gestiti
-                            )]
-                            numero_pendenti = len(clienti_pendenti)
-                            posizione_pendente = next(
-                                (i + 1 for i, rr in clienti_pendenti.iterrows() if int(rr.name) == idx),
-                                1
-                            )
-                            nuova_pos = st.selectbox(
-                                "Sposta a pos:",
-                                options=list(range(1, numero_pendenti + 1)),
-                                index=posizione_pendente - 1,
-                                key=f"select_pos_preparazione_{row['CLIENTE']}_{idx}"
-                            )
-                            if nuova_pos != posizione_pendente:
-                                if sposta_cliente_pendente_nella_posizione(idx, nuova_pos):
-                                    st.rerun()
-                        else:
-                            st.caption("🔒 Gestito")
-
-                    with col_c4:
-                        if st.button("🗑️", help="Elimina cliente dal giro", key=f"elimina_preparazione_{idx}_{row['CLIENTE']}"):
-                            st.session_state.conferma_eliminazione_idx = idx
-                            st.rerun()
-
-                        if st.session_state.conferma_eliminazione_idx == idx:
-                            st.warning(f"Eliminare {row['CLIENTE']} dal giro?")
-                            c_ok, c_no = st.columns(2)
-                            with c_ok:
-                                if st.button("✅ CONFERMA", use_container_width=True, key=f"conferma_elimina_preparazione_{idx}"):
-                                    elimina_cliente_dal_giro(idx)
-                            with c_no:
-                                if st.button("❌ ANNULLA", use_container_width=True, key=f"annulla_elimina_preparazione_{idx}"):
-                                    st.session_state.conferma_eliminazione_idx = None
-                                    st.rerun()
-
-                    st.markdown("<hr style=\"margin: 10px 0; border-color: #262626;\">", unsafe_allow_html=True)
-                st.markdown("---")
-                st.markdown('''
-                <div style="text-align:center; margin:4px 0 8px 0;">
-                    <a href="#avvia-percorso-top" style="text-decoration:none; font-size:28px;">⬆️</a>
-                </div>
-                ''' , unsafe_allow_html=True)
-        else:
-            st.info("Nessuna fermata nel tuo giro corrente. Clicca in alto su '📁 CLIENTI' per aggiungerne.")
-
-    # ==========================================
-    # SCHERMATA 2: INSERISCI CLIENTE
-    # ==========================================
-    elif st.session_state.pagina_attiva == "db":
-        st.subheader("📁 Inserisci Clienti nel Tuo Giro")
-        
-        # Pulsante universale per forzare l'aggiornamento e svuotare la cache
-        if st.button("🔄 Forza Aggiornamento / Svuota Cache", use_container_width=True):
-            st.cache_data.clear()
-            st.session_state.db_clienti = carica_db_da_google_sheets()
-            st.success("Cache svuotata e dati ricaricati con successo!")
-            st.rerun()
-            
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        if st.session_state.is_admin and not st.session_state.db_clienti.empty:
-            if st.button("🌍 GELOCALIZZA CLIENTI E SALVA COORDINATE", use_container_width=True, key="btn_geolocalizza_clienti"):
-                try:
-                    with st.spinner("🌍 Geolocalizzo i clienti senza coordinate... e salvo progressivamente la colonna H"):
-                        df_geo, trovati_geo, gia_presenti_geo, non_trovati_geo = geolocalizza_tutti_clienti(
-                            st.session_state.db_clienti,
-                            salvataggio_progressivo=salva_coordinate_su_google_sheets
-                        )
-                        st.session_state.db_clienti = df_geo
-                        salva_coordinate_su_google_sheets(st.session_state.db_clienti)
-                    st.success(f"✅ Coordinate aggiornate: {trovati_geo} nuovi clienti. {gia_presenti_geo} erano già geolocalizzati.")
-                    if non_trovati_geo:
-                        elenco_geo = "\n".join(f"- {x}" for x in non_trovati_geo[:8])
-                        if len(non_trovati_geo) > 8:
-                            elenco_geo += f"\n- ... e altri {len(non_trovati_geo) - 8}"
-                        st.warning("⚠️ Non sono riuscito a trovare questi clienti:\n" + elenco_geo)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Geolocalizzazione non riuscita: {e}")
-
-        if st.session_state.is_admin:
-            st.info("🔒 PROTEZIONE DATABASE: Foglio1 è in sola lettura. L'app può scrivere esclusivamente le COORDINATE in colonna H.")
-            st.caption("Il caricamento/sovrascrittura dell'anagrafica da questa schermata è disabilitato per proteggere il database.")
+                    else:
+                        st.warning("Nessun backup disponibile per il ripristino.")
 
             st.markdown("---")
 
-        if not st.session_state.db_clienti.empty:
-            lista_completa = st.session_state.db_clienti['CLIENTE'].dropna().tolist()
-
-            def aggiorna_selezione():
-                st.session_state.clienti_selezionati_m = st.session_state.widget_multiselect
-
-            clienti_selezionati = st.multiselect(
-                "Cerca e seleziona i clienti per le tue consegne:",
-                options=lista_completa,
-                default=st.session_state.clienti_selezionati_m,
-                key="widget_multiselect",
-                on_change=aggiorna_selezione
-            )
-
-            if clienti_selezionati:
-                st.markdown("<br>", unsafe_allow_html=True)
-                st.markdown("### 📦 Configura Colli per i Clienti Selezionati")
+            # Visualizzazione delle fermate del giro
+            vista_operative = prepara_vista_giro(df_giro)
+            
+            for idx, row in vista_operative.iterrows():
+                idx_reale = row.get("__IDX_ORIGINALE", idx)
+                cliente = row.get("CLIENTE", "Cliente")
+                comune = row.get("COMUNE", "")
+                via = row.get("VIA", "")
+                ora = row.get("ORA", "")
+                qta = row.get("Q.ta", "0")
+                stato = row.get("STATO", STATO_DA_FARE)
                 
-                df_sel = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
-                df_sel['Q.ta'] = df_sel['QTA_DEFAULT']
-                
-                df_edit_colli = st.data_editor(
-                    df_sel[['CLIENTE', 'COMUNE', 'Q.ta']],
-                    hide_index=True,
-                    use_container_width=True,
-                    key="editor_colli_scelti"
-                )
-
-                if st.button("➕ CONFERMA E AGGIUNGI AL MIO GIRO", use_container_width=True, type="primary"):
-                    nuovi_clienti = st.session_state.db_clienti[st.session_state.db_clienti['CLIENTE'].isin(clienti_selezionati)].copy()
+                with st.container():
+                    st.markdown(f"""
+                    <div class="stop-card">
+                        <div class="stop-title">{row.get('POSIZIONE', idx+1)}. {cliente}</div>
+                        <div class="stop-address">📍 {via}, {comune}</div>
+                        <div class="stop-meta">🕒 Orario: {ora if ora else 'Flessibile'} | 📦 Q.ta: {qta} | Stato: {stato}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
                     
-                    qta_dict = dict(zip(df_edit_colli['CLIENTE'], df_edit_colli['Q.ta']))
-                    nuovi_clienti['Q.ta'] = nuovi_clienti['CLIENTE'].map(qta_dict)
-                    
-                    nuovi_clienti = nuovi_clienti[['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']] if 'POSIZIONE' in nuovi_clienti.columns else nuovi_clienti[['CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']]
-                    nuovi_clienti['STATO'] = STATO_DA_FARE
-                    
-                    st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
-                    # Nuovo/nuovamente preparato giro: lo stato TERMINA GIRO precedente non vale piu'.
-                    st.session_state.giro_terminato = False
-                    st.session_state.inizio_giro_reale = None
-                    st.session_state.fine_giro_reale = None
-                    st.session_state.previsione_giro = None
-                    st.session_state.metriche_giro_corrente = None
-                    salva_stato_giro_persistente(st.session_state.utente_corrente)
-                    st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
-                    
-                    salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
-                    st.session_state.clienti_selezionati_m = []
-                    
-                    st.success("Clienti aggiunti al tuo giro e salvati su Google Sheets!")
-                    st.session_state.pagina_attiva = "giro"
-                    st.rerun()
-                
-            if st.session_state.is_admin:
-                st.markdown("---")
-                with st.expander("👀 Visualizza Anagrafica Clienti (sola lettura)"):
-                    st.dataframe(
-                        st.session_state.db_clienti,
-                        hide_index=True,
-                        use_container_width=True
-                    )
-                    st.caption("🔒 Foglio1 è protetto: nessuna modifica all'anagrafica. Solo la colonna H (COORDINATE) può essere aggiornata automaticamente.")
-        else:
-            st.warning("Nessun cliente trovato su Google Sheets.")
-
-    # ==========================================
-    # SCHERMATA 3: GESTIONE UTENTI (SOLO ADMIN)
-    # ==========================================
-    elif st.session_state.pagina_attiva == "utenti" and st.session_state.is_admin:
-        st.subheader("🔑 Gestione Utenti da Google Sheets")
-        st.markdown("<p style='color: #94A3B8; font-size: 14px;'>Gestisci gli account autorizzati direttamente dal foglio Google dedicato.</p>", unsafe_allow_html=True)
-
-        dict_u = carica_utenti_da_sheets()
-        df_utenti_attuali = pd.DataFrame(list(dict_u.items()), columns=["USERNAME", "PASSWORD"])
-
-        st.dataframe(
-            df_utenti_attuali,
-            hide_index=True,
-            use_container_width=True
-        )
-        st.info("🔒 La scheda Utenti è protetta e viene utilizzata esclusivamente in lettura dall'app.")
+                    # Pulsanti interattivi per cambiare lo stato della consegna direttamente sulla card
+                    cols_stato = st.columns(4)
+                    with cols_stato[0]:
+                        if st.button("⚪ Da Fare", key=f"df_{idx_reale}", use_container_width=True):
+                            salva_stato_consegna(idx_reale, STATO_DA_FARE)
+                    with cols_stato[1]:
+                        if st.button("🟢 Fatto", key=f"ft_{idx_reale}", use_container_width=True):
+                            salva_stato_consegna(idx_reale, STATO_FATTO)
+                    with cols_stato[2]:
+                        if st.button("🟡 Parz.", key=f"pr_{idx_reale}", use_container_width=True):
+                            salva_stato_consegna(idx_reale, STATO_PARZIALE)
+                    with cols_stato[3]:
+                        if st.button("🔴 Resp.", key=f"rs_{idx_reale}", use_container_width=True):
+                            salva_stato_consegna(idx_reale, STATO_RESPINTO)
