@@ -1759,7 +1759,7 @@ def _meta_utente_giro(nome_utente):
 
 def carica_stato_giro_persistente(nome_utente):
     """Legge lo stato tecnico del giro da GiroAttivo, senza modificare Foglio1/Utenti."""
-    risultato = {"giro_terminato": False, "inizio_giro_reale": None, "fine_giro_reale": None}
+    risultato = {"giro_terminato": False, "inizio_giro_reale": None, "fine_giro_reale": None, "previsione_giro": None}
     try:
         df = carica_tutti_i_giri_da_sheets()
         if df.empty:
@@ -1780,6 +1780,7 @@ def carica_stato_giro_persistente(nome_utente):
         risultato["giro_terminato"] = bool(dati.get("giro_terminato", False))
         risultato["inizio_giro_reale"] = dati.get("inizio_giro_reale")
         risultato["fine_giro_reale"] = dati.get("fine_giro_reale")
+        risultato["previsione_giro"] = dati.get("previsione_giro")
     except Exception:
         pass
     return risultato
@@ -1792,6 +1793,7 @@ def salva_stato_giro_persistente(nome_utente):
         "giro_terminato": bool(st.session_state.get("giro_terminato", False)),
         "inizio_giro_reale": st.session_state.get("inizio_giro_reale"),
         "fine_giro_reale": st.session_state.get("fine_giro_reale"),
+        "previsione_giro": st.session_state.get("previsione_giro"),
     }
     payload = _json.dumps(meta, ensure_ascii=False)
     cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'TIPO_RIGA', 'BACKUP_JSON']
@@ -3061,54 +3063,37 @@ else:
                 minuti = max(0, int(round(float(minuti or 0))))
                 h, m = divmod(minuti, 60)
                 return f"{h} h {m:02d} min" if h else f"{m} min"
+
             previsione = st.session_state.get("previsione_giro") or {}
             previsto = previsione.get("minuti")
             inizio = st.session_state.get("inizio_giro_reale")
             fine = st.session_state.get("fine_giro_reale")
-            # Il confronto PREVISTO/REALE ha senso solo dopo TERMINA GIRO,
-            # quando anche il rientro in sede e' compreso nel tempo effettivo.
+
+            # Il confronto viene mostrato nella sezione finale e, grazie alla
+            # persistenza in GiroAttivo, resta disponibile anche dopo la riapertura.
             if giro_terminato and previsto is not None and inizio is not None and fine is not None:
                 effettivo = max(0.0, (float(fine) - float(inizio)) / 60.0)
                 differenza = float(effettivo) - float(previsto)
                 if differenza <= 0:
-                    esito = f"🟢 {_fmt_fine(abs(differenza))} risparmiati rispetto alla stima"
+                    esito = f"🟢 { _fmt_fine(abs(differenza)) } risparmiati rispetto alla stima"
                 else:
-                    esito = f"🔴 {_fmt_fine(differenza)} in più rispetto alla stima"
+                    esito = f"🔴 { _fmt_fine(differenza) } in più rispetto alla stima"
+                st.markdown("**📊 Confronto finale**")
                 a, b = st.columns(2)
                 a.metric("⏱️ Tempo previsto", _fmt_fine(previsto))
                 b.metric("🚚 Tempo effettivo", _fmt_fine(effettivo))
                 st.markdown(f"<div style='text-align:center; font-size:20px; font-weight:800; margin:8px 0 14px 0;'>{esito}</div>", unsafe_allow_html=True)
             elif giro_terminato and previsto is not None:
+                st.markdown("**📊 Confronto finale**")
                 st.metric("⏱️ Tempo previsto", _fmt_fine(previsto))
-                st.info("Il tempo effettivo non e' disponibile perché il cronometro non e' stato avviato.")
+                st.info("Il tempo effettivo non è disponibile perché il cronometro non è stato avviato.")
             elif not giro_terminato:
-                st.info("La stima iniziale verra' confrontata con il tempo effettivo quando rientri in sede e premi TERMINA GIRO.")
+                st.info("La stima iniziale verrà confrontata con il tempo effettivo quando rientri in sede e premi TERMINA GIRO.")
             else:
                 st.info("Nessuna previsione dell'ottimizzatore disponibile per questo giro.")
-            f1, f2, f3 = st.columns(3)
-            f1.metric("📍 Consegne", str(tot_clienti))
-            f2.metric("📦 Colli", str(tot_qta))
-            f3.metric("🛣️ KM", f"{km_giro:.1f}" if km_giro is not None else "—")
 
-            # Anche a consegne terminate resta da completare il rientro in sede.
-            if st.session_state.vista_giro == "CAMPO":
-                rientro_km = float(km_visualizzati or 0.0) if not giro_terminato else 0.0
-                rientro_min = float(minuti_visualizzati or 0.0) if not giro_terminato else 0.0
-                st.markdown("**🚐 Rientro in sede**")
-                r1, r2 = st.columns(2)
-                r1.metric("📍 Distanza residua alla sede", f"{rientro_km:.1f} km")
-                r2.metric("⏱️ Tempo residuo alla sede", _formatta_durata_metriche(rientro_min))
-
-                if not giro_terminato:
-                    st.info("Tutte le consegne sono gestite. Il giro si chiude quando rientri in sede.")
-                    if st.button("🏁 TERMINA GIRO", use_container_width=True, type="primary", key="btn_termina_giro"):
-                        st.session_state.fine_giro_reale = time.time()
-                        st.session_state.giro_terminato = True
-                        salva_stato_giro_persistente(st.session_state.utente_corrente)
-                        st.rerun()
-                else:
-                    st.success("🏁 Giro terminato: rientro in sede registrato.")
-
+            # Non ripetiamo qui colli, KM e tempo residuo: sono già mostrati nelle metriche
+            # superiori. In CAMPO il tempo/distanza residui sono quelli del rientro in sede.
             st.markdown("---")
         if not st.session_state.giro_corrente.empty:
             st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
