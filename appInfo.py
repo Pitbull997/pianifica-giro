@@ -2646,6 +2646,15 @@ else:
             """, unsafe_allow_html=True)
 
         # Quando il giro e' completato, la vista CAMPO non deve piu' mostrare clienti.
+        # Calcoliamo qui il flag prima di usarlo, cosi' non puo' verificarsi un NameError.
+        stati_completamento = st.session_state.giro_corrente.get(
+            "STATO",
+            pd.Series([STATO_DA_FARE] * tot_clienti)
+        ).fillna("").astype(str)
+        tutte_gestite = (
+            bool(tot_clienti)
+            and int(stati_completamento.isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]).sum()) == tot_clienti
+        )
         # Portiamo automaticamente l'utente sul RIEPILOGO, dove puo' vedere l'intera
         # progressione: prima i da fare e in fondo tutti i gestiti/offuscati.
         if tutte_gestite and st.session_state.vista_giro == "CAMPO":
