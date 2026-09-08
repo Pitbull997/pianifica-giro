@@ -3387,6 +3387,42 @@ else:
                         line-height: 42px !important;
                         text-align: center !important;
                     }
+                    /* V10.3.19: selettore robusto del trigger popover. */
+                    button[aria-haspopup="dialog"] {{
+                        width: 100% !important;
+                        max-width: 100% !important;
+                        min-width: 0 !important;
+                        box-sizing: border-box !important;
+                        justify-content: flex-start !important;
+                        text-align: left !important;
+                        margin-left: 0 !important;
+                        margin-right: 0 !important;
+                    }}
+                    button[aria-haspopup="dialog"] > div,
+                    button[aria-haspopup="dialog"] > div > div,
+                    button[aria-haspopup="dialog"] [data-testid="stMarkdownContainer"],
+                    button[aria-haspopup="dialog"] [data-testid="stMarkdownContainer"] > div,
+                    button[aria-haspopup="dialog"] p,
+                    button[aria-haspopup="dialog"] span {{
+                        width: 100% !important;
+                        max-width: 100% !important;
+                        min-width: 0 !important;
+                        box-sizing: border-box !important;
+                        margin-left: 0 !important;
+                        margin-right: 0 !important;
+                        padding-left: 0 !important;
+                        padding-right: 0 !important;
+                        text-align: left !important;
+                        justify-content: flex-start !important;
+                        align-items: flex-start !important;
+                        align-self: flex-start !important;
+                    }}
+                    button[aria-haspopup="dialog"] svg {{
+                        display: none !important;
+                        width: 0 !important;
+                        max-width: 0 !important;
+                        flex: 0 0 0 !important;
+                    }}
                     [data-testid="stPopover"] > button:hover,
                     [data-testid="stPopover"] > button:focus,
                     [data-testid="stPopover"] > button:active {
