@@ -3619,7 +3619,7 @@ else:
                     if "campo_menu_aperto" not in st.session_state:
                         st.session_state.campo_menu_aperto = None
 
-                    with st.container(border=True, key=f"campo_riga_{idx_reale}"):
+                    with st.container(key=f"campo_riga_{idx_reale}"):
                         stato_nuovo = stato_attuale
 
                         st.markdown(f"""
@@ -3630,6 +3630,13 @@ else:
                             min-width: 0 !important;
                             box-sizing: border-box !important;
                             overflow: hidden !important;
+                            padding: 0 !important;
+                            margin: 0 !important;
+                        }}
+                        [class*="st-key-campo_riga_{idx_reale}"] [data-testid="stVerticalBlock"] {{
+                            gap: 0 !important;
+                            padding: 0 !important;
+                            margin: 0 !important;
                         }}
                         [class*="st-key-campo_cliente_btn_{idx_reale}"] {{
                             width: 100% !important;
@@ -3645,9 +3652,9 @@ else:
                             height: 30px !important;
                             padding: 0 6px !important;
                             margin: 0 !important;
-                            border: 0 !important;
+                            border: 1px solid #39475A !important;
                             border-radius: 8px !important;
-                            background: transparent !important;
+                            background: #1E293B !important;
                             box-shadow: none !important;
                             color: #FFFFFF !important;
                             font-size: 16px !important;
