@@ -3086,6 +3086,30 @@ else:
             inizio = st.session_state.get("inizio_giro_reale")
             fine = st.session_state.get("fine_giro_reale")
 
+            # La previsione finale deve essere il "Tempo totale reale giro" del giro
+            # completo: tempo strada + attesa + 12 minuti per fermata.
+            # Se non e' stata salvata dall'ottimizzatore, la ricaviamo qui dal giro
+            # completo, senza usare il percorso residuo della CAMPO.
+            if previsto is None and not st.session_state.giro_corrente.empty:
+                try:
+                    metriche_completo = calcola_metriche_giro_corrente(
+                        st.session_state.giro_corrente,
+                        st.session_state.db_clienti
+                    )
+                    if metriche_completo is not None:
+                        previsto = float(metriche_completo.get("minuti", 0) or 0) + len(st.session_state.giro_corrente) * MINUTI_SERVIZIO_PER_FERMATA
+                        # Per ORARI, se abbiamo gia' l'attesa calcolata, includila.
+                        if metriche_orari_valide:
+                            previsto += float(metriche_orari_correnti.get("attesa_totale_min", 0) or 0)
+                        st.session_state.previsione_giro = {
+                            "minuti": previsto,
+                            "metodo": str(previsione.get("metodo", "TEMPO TOTALE GIRO")),
+                            "firma": _firma_ordine_giro(st.session_state.giro_corrente),
+                        }
+                        salva_stato_giro_persistente(st.session_state.utente_corrente)
+                except Exception:
+                    previsto = previsto
+
             # Se l'utente non ha premuto INIZIA GIRO, al momento di TERMINA GIRO
             # usiamo come partenza implicita le 05:20 locali.
             if giro_terminato and previsto is not None:
@@ -3100,7 +3124,7 @@ else:
                         esito = f"🟢 {_fmt_fine(abs(differenza))} risparmiati rispetto alla stima"
                     else:
                         esito = f"🔴 {_fmt_fine(differenza)} in più rispetto alla stima"
-                    st.markdown("**📊 Confronto finale**")
+                    st.markdown("**📊 CONFRONTO FINALE**")
                     a, b = st.columns(2)
                     a.metric("⏱️ Tempo previsto", _fmt_fine(previsto))
                     b.metric("🚚 Tempo effettivo", _fmt_fine(effettivo))
@@ -3108,19 +3132,13 @@ else:
                 else:
                     st.info("Tempo effettivo non disponibile.")
             elif not giro_terminato and previsto is not None:
-                st.info("La stima iniziale verrà confrontata con il tempo effettivo quando rientri in sede e premi TERMINA GIRO. Se non premi INIZIA GIRO, verranno usate le 05:20 come partenza.")
-            elif not giro_terminato:
-                st.info("Nessuna previsione dell'ottimizzatore disponibile per questo giro.")
+                st.info("La stima verrà confrontata con il tempo effettivo quando premi TERMINA GIRO. Se non premi INIZIA GIRO, verranno usate le 05:20 come partenza.")
 
-            # In CAMPO il rientro ultima consegna -> sede resta visibile anche a 16/16
-            # finche' non viene premuto TERMINA GIRO. Dopo TERMINA, il residuo va a zero.
+            # Il rientro e' gia' rappresentato dalle metriche superiori della CAMPO
+            # (KM Rimanenti / Tempo rimanente), quindi non lo ripetiamo qui.
+            # Lasciamo soltanto il comando TERMINA GIRO quando tutte le consegne
+            # sono state gestite.
             if st.session_state.vista_giro == "CAMPO":
-                rientro_km = float(km_visualizzati or 0.0) if not giro_terminato else 0.0
-                rientro_min = float(minuti_visualizzati or 0.0) if not giro_terminato else 0.0
-                st.markdown("**🚐 Rientro in sede**")
-                r1, r2 = st.columns(2)
-                r1.metric("📍 Distanza residua alla sede", f"{rientro_km:.1f} km")
-                r2.metric("⏱️ Tempo residuo alla sede", _formatta_durata_metriche(rientro_min))
                 if tutte_gestite and not giro_terminato:
                     st.info("Tutte le consegne sono gestite. Rientra in sede e premi TERMINA GIRO.")
                     if st.button("🏁 TERMINA GIRO", use_container_width=True, type="primary", key="btn_termina_giro"):
@@ -3130,8 +3148,6 @@ else:
                         st.session_state.giro_terminato = True
                         salva_stato_giro_persistente(st.session_state.utente_corrente)
                         st.rerun()
-                elif giro_terminato:
-                    st.success("🏁 Giro terminato: rientro in sede registrato.")
             st.markdown("---")
         if not st.session_state.giro_corrente.empty:
             st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
