@@ -6,4 +6,3 @@ google-auth
 requests
 ortools
 streamlit-local-storage==0.0.25
-pytesseract
