@@ -5,6 +5,11 @@ import os
 import base64
 import json
 import time
+from datetime import datetime
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 import requests
 from io import BytesIO
 import gspread
@@ -2173,6 +2178,7 @@ if 'giro_corrente' not in st.session_state or st.session_state.get('ultimo_utent
         st.session_state.giro_terminato = bool(stato_persistente.get("giro_terminato", False))
         st.session_state.inizio_giro_reale = stato_persistente.get("inizio_giro_reale")
         st.session_state.fine_giro_reale = stato_persistente.get("fine_giro_reale")
+        st.session_state.previsione_giro = stato_persistente.get("previsione_giro")
         st.session_state.metriche_giro_corrente = None
         st.session_state.ultimo_utente_caricato = st.session_state.utente_corrente
     else:
@@ -3040,6 +3046,17 @@ else:
 
         st.markdown("---")
 
+        def _timestamp_oggi_alle_0520():
+            """Timestamp locale Europe/Rome di oggi alle 05:20, usato come partenza implicita."""
+            try:
+                tz = ZoneInfo("Europe/Rome") if ZoneInfo is not None else None
+                adesso = datetime.now(tz) if tz else datetime.now()
+                dt = adesso.replace(hour=5, minute=20, second=0, microsecond=0)
+                return dt.timestamp()
+            except Exception:
+                adesso = datetime.now()
+                return adesso.replace(hour=5, minute=20, second=0, microsecond=0).timestamp()
+
         # V10.2.17: le consegne possono essere tutte gestite, ma il giro non e'
         # realmente terminato finche' il mezzo non rientra in sede e l'utente
         # preme TERMINA GIRO.
@@ -3069,31 +3086,52 @@ else:
             inizio = st.session_state.get("inizio_giro_reale")
             fine = st.session_state.get("fine_giro_reale")
 
-            # Il confronto viene mostrato nella sezione finale e, grazie alla
-            # persistenza in GiroAttivo, resta disponibile anche dopo la riapertura.
-            if giro_terminato and previsto is not None and inizio is not None and fine is not None:
-                effettivo = max(0.0, (float(fine) - float(inizio)) / 60.0)
-                differenza = float(effettivo) - float(previsto)
-                if differenza <= 0:
-                    esito = f"🟢 { _fmt_fine(abs(differenza)) } risparmiati rispetto alla stima"
+            # Se l'utente non ha premuto INIZIA GIRO, al momento di TERMINA GIRO
+            # usiamo come partenza implicita le 05:20 locali.
+            if giro_terminato and previsto is not None:
+                if inizio is None:
+                    inizio = _timestamp_oggi_alle_0520()
+                    st.session_state.inizio_giro_reale = inizio
+                    salva_stato_giro_persistente(st.session_state.utente_corrente)
+                if fine is not None:
+                    effettivo = max(0.0, (float(fine) - float(inizio)) / 60.0)
+                    differenza = float(effettivo) - float(previsto)
+                    if differenza <= 0:
+                        esito = f"🟢 {_fmt_fine(abs(differenza))} risparmiati rispetto alla stima"
+                    else:
+                        esito = f"🔴 {_fmt_fine(differenza)} in più rispetto alla stima"
+                    st.markdown("**📊 Confronto finale**")
+                    a, b = st.columns(2)
+                    a.metric("⏱️ Tempo previsto", _fmt_fine(previsto))
+                    b.metric("🚚 Tempo effettivo", _fmt_fine(effettivo))
+                    st.markdown(f"<div style='text-align:center; font-size:20px; font-weight:800; margin:8px 0 14px 0;'>{esito}</div>", unsafe_allow_html=True)
                 else:
-                    esito = f"🔴 { _fmt_fine(differenza) } in più rispetto alla stima"
-                st.markdown("**📊 Confronto finale**")
-                a, b = st.columns(2)
-                a.metric("⏱️ Tempo previsto", _fmt_fine(previsto))
-                b.metric("🚚 Tempo effettivo", _fmt_fine(effettivo))
-                st.markdown(f"<div style='text-align:center; font-size:20px; font-weight:800; margin:8px 0 14px 0;'>{esito}</div>", unsafe_allow_html=True)
-            elif giro_terminato and previsto is not None:
-                st.markdown("**📊 Confronto finale**")
-                st.metric("⏱️ Tempo previsto", _fmt_fine(previsto))
-                st.info("Il tempo effettivo non è disponibile perché il cronometro non è stato avviato.")
+                    st.info("Tempo effettivo non disponibile.")
+            elif not giro_terminato and previsto is not None:
+                st.info("La stima iniziale verrà confrontata con il tempo effettivo quando rientri in sede e premi TERMINA GIRO. Se non premi INIZIA GIRO, verranno usate le 05:20 come partenza.")
             elif not giro_terminato:
-                st.info("La stima iniziale verrà confrontata con il tempo effettivo quando rientri in sede e premi TERMINA GIRO.")
-            else:
                 st.info("Nessuna previsione dell'ottimizzatore disponibile per questo giro.")
 
-            # Non ripetiamo qui colli, KM e tempo residuo: sono già mostrati nelle metriche
-            # superiori. In CAMPO il tempo/distanza residui sono quelli del rientro in sede.
+            # In CAMPO il rientro ultima consegna -> sede resta visibile anche a 16/16
+            # finche' non viene premuto TERMINA GIRO. Dopo TERMINA, il residuo va a zero.
+            if st.session_state.vista_giro == "CAMPO":
+                rientro_km = float(km_visualizzati or 0.0) if not giro_terminato else 0.0
+                rientro_min = float(minuti_visualizzati or 0.0) if not giro_terminato else 0.0
+                st.markdown("**🚐 Rientro in sede**")
+                r1, r2 = st.columns(2)
+                r1.metric("📍 Distanza residua alla sede", f"{rientro_km:.1f} km")
+                r2.metric("⏱️ Tempo residuo alla sede", _formatta_durata_metriche(rientro_min))
+                if tutte_gestite and not giro_terminato:
+                    st.info("Tutte le consegne sono gestite. Rientra in sede e premi TERMINA GIRO.")
+                    if st.button("🏁 TERMINA GIRO", use_container_width=True, type="primary", key="btn_termina_giro"):
+                        if st.session_state.get("inizio_giro_reale") is None:
+                            st.session_state.inizio_giro_reale = _timestamp_oggi_alle_0520()
+                        st.session_state.fine_giro_reale = time.time()
+                        st.session_state.giro_terminato = True
+                        salva_stato_giro_persistente(st.session_state.utente_corrente)
+                        st.rerun()
+                elif giro_terminato:
+                    st.success("🏁 Giro terminato: rientro in sede registrato.")
             st.markdown("---")
         if not st.session_state.giro_corrente.empty:
             st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
@@ -3107,8 +3145,6 @@ else:
             addresses = indirizzi_per_percorso_giro(st.session_state.giro_corrente)
             partenza = indirizzo_partenza_giro(st.session_state.giro_corrente)
             if addresses:
-                if st.session_state.get("previsione_giro") and st.session_state.get("inizio_giro_reale") is None:
-                    st.session_state.inizio_giro_reale = time.time()
                 origin = urllib.parse.quote(partenza)
                 if len(addresses) == 1:
                     maps_url = f"https://www.google.com/maps/dir/{origin}/{urllib.parse.quote(addresses[0])}"
@@ -3183,6 +3219,15 @@ else:
                         </button>
                     </a>
                 """, unsafe_allow_html=True)
+                if not st.session_state.get("giro_terminato", False) and st.session_state.get("inizio_giro_reale") is None:
+                    if st.button("▶️ INIZIA GIRO", use_container_width=True, type="primary", key="btn_inizia_giro"):
+                        st.session_state.inizio_giro_reale = time.time()
+                        st.session_state.fine_giro_reale = None
+                        st.session_state.giro_terminato = False
+                        salva_stato_giro_persistente(st.session_state.utente_corrente)
+                        st.rerun()
+                elif st.session_state.get("inizio_giro_reale") is not None and not st.session_state.get("giro_terminato", False):
+                    st.caption("🕐 Giro iniziato: il tempo effettivo viene calcolato fino a TERMINA GIRO.")
                 st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
                 # CAMPO: mostra SOLO le consegne ancora da gestire.
                 # Il filtro viene applicato direttamente al giro reale, prima della
@@ -3447,6 +3492,7 @@ else:
                     st.session_state.giro_terminato = False
                     st.session_state.inizio_giro_reale = None
                     st.session_state.fine_giro_reale = None
+                    st.session_state.previsione_giro = None
                     st.session_state.metriche_giro_corrente = None
                     salva_stato_giro_persistente(st.session_state.utente_corrente)
                     st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
