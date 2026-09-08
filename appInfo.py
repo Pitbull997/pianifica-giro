@@ -1253,6 +1253,11 @@ def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=
     except ImportError:
         return None, "OR-Tools non installato", None
 
+    # OR-Tools richiede interi puri (int64_t) per slack/capacity/SetRange.
+    # _ora_partenza_reale_minuti() puo' restituire un float (include i secondi),
+    # quindi va arrotondato subito per evitare errori di tipo nel binding SWIG.
+    ora_partenza_minuti = int(round(float(ora_partenza_minuti)))
+
     n_clienti = len(df_giro)
     manager = pywrapcp.RoutingIndexManager(n_clienti + 1, 1, 0)
     routing = pywrapcp.RoutingModel(manager)
