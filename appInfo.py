@@ -397,8 +397,6 @@ def calcola_metriche_giro_campo(df_giro, df_db):
 
     stati_gestiti = [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
     pendenti = df[~df["STATO"].isin(stati_gestiti)].copy().reset_index(drop=True)
-    if pendenti.empty:
-        return {"km": 0.0, "minuti": 0.0}
 
     gestiti = df[df["STATO"].isin(stati_gestiti)]
     if not gestiti.empty:
@@ -408,6 +406,19 @@ def calcola_metriche_giro_campo(df_giro, df_db):
             origine = COORDINATE_DEPOSITO_VANGO
     else:
         origine = COORDINATE_DEPOSITO_VANGO
+
+    # A fine consegne resta comunque il rientro dall'ultima fermata alla sede.
+    if pendenti.empty:
+        coordinate = [origine, COORDINATE_DEPOSITO_VANGO]
+        try:
+            distanze, durate = _richiedi_matrice_osrm(coordinate)
+            d = distanze[0][1]
+            t = durate[0][1]
+            if d is None or t is None:
+                return {"km": 0.0, "minuti": 0.0}
+            return {"km": float(d) / 1000.0, "minuti": float(t) / 60.0}
+        except Exception:
+            return {"km": 0.0, "minuti": 0.0}
 
     coordinate = [origine]
     for _, row in pendenti.iterrows():
@@ -1751,6 +1762,8 @@ def salva_stato_consegna(idx, stato):
         df['STATO'] = STATO_DA_FARE
     df.at[idx, 'STATO'] = stato
     st.session_state.giro_corrente = df
+    st.session_state.fine_giro_reale = None
+    st.session_state.giro_terminato = False
     salva_giro_utente_su_sheets(st.session_state.utente_corrente, df)
     st.rerun()
 
@@ -2097,6 +2110,10 @@ if 'previsione_giro' not in st.session_state:
     st.session_state.previsione_giro = None
 if 'inizio_giro_reale' not in st.session_state:
     st.session_state.inizio_giro_reale = None
+if 'fine_giro_reale' not in st.session_state:
+    st.session_state.fine_giro_reale = None
+if 'giro_terminato' not in st.session_state:
+    st.session_state.giro_terminato = False
 
 if 'forza_gruppamento_zona' not in st.session_state:
     st.session_state.forza_gruppamento_zona = 50
@@ -2646,6 +2663,8 @@ else:
                     "firma": _firma_ordine_giro(df_da_applicare),
                 }
                 st.session_state.inizio_giro_reale = None
+                st.session_state.fine_giro_reale = None
+                st.session_state.giro_terminato = False
                 # Conserva i dati temporali ORARI del giro appena applicato.
                 if str(m.get("metodo", "")).startswith("ORARI"):
                     st.session_state.metriche_tempo_orari_corrente = {
@@ -2907,14 +2926,23 @@ else:
 
         st.markdown("---")
 
-        # V10.2.9: schermata finale sintetica quando tutte le consegne sono gestite.
+        # V10.2.17: le consegne possono essere tutte gestite, ma il giro non e'
+        # realmente terminato finche' il mezzo non rientra in sede e l'utente
+        # preme TERMINA GIRO.
         stati_fine = st.session_state.giro_corrente.get("STATO", pd.Series([STATO_DA_FARE] * tot_clienti)).fillna("").astype(str) if tot_clienti else pd.Series(dtype=str)
         tutte_gestite = bool(tot_clienti) and int(stati_fine.isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]).sum()) == tot_clienti
         if tutte_gestite:
-            st.markdown("""
+            giro_terminato = bool(st.session_state.get("giro_terminato", False))
+            if giro_terminato:
+                titolo_fine = "🏁 GIRO COMPLETATO"
+                sottotitolo_fine = "Tutte le consegne sono state gestite e il rientro in sede e' stato registrato."
+            else:
+                titolo_fine = "📦 CONSEGNE COMPLETATE"
+                sottotitolo_fine = "Tutte le consegne sono state gestite. Rientra in sede e premi TERMINA GIRO."
+            st.markdown(f"""
             <div style='text-align:center; padding:22px 12px 12px 12px; margin:10px 0 14px 0; border:1px solid rgba(34,197,94,0.35); border-radius:16px; background:rgba(34,197,94,0.08);'>
-                <div style='font-size:32px; font-weight:800;'>🏁 GIRO COMPLETATO</div>
-                <div style='font-size:14px; color:#94A3B8; margin-top:5px;'>Tutte le consegne sono state gestite.</div>
+                <div style='font-size:32px; font-weight:800;'>{titolo_fine}</div>
+                <div style='font-size:14px; color:#94A3B8; margin-top:5px;'>{sottotitolo_fine}</div>
             </div>
             """, unsafe_allow_html=True)
             def _fmt_fine(minuti):
@@ -2924,26 +2952,50 @@ else:
             previsione = st.session_state.get("previsione_giro") or {}
             previsto = previsione.get("minuti")
             inizio = st.session_state.get("inizio_giro_reale")
-            effettivo = ((time.time() - float(inizio)) / 60.0) if inizio else None
-            if previsto is not None and effettivo is not None:
+            fine = st.session_state.get("fine_giro_reale")
+            # Il confronto PREVISTO/REALE ha senso solo dopo TERMINA GIRO,
+            # quando anche il rientro in sede e' compreso nel tempo effettivo.
+            if giro_terminato and previsto is not None and inizio is not None and fine is not None:
+                effettivo = max(0.0, (float(fine) - float(inizio)) / 60.0)
                 differenza = float(effettivo) - float(previsto)
                 if differenza <= 0:
-                    esito = f"🟢 {_fmt_fine(abs(differenza))} risparmiati rispetto al previsto"
+                    esito = f"🟢 {_fmt_fine(abs(differenza))} risparmiati rispetto alla stima"
                 else:
-                    esito = f"🔴 {_fmt_fine(differenza)} in più rispetto al previsto"
+                    esito = f"🔴 {_fmt_fine(differenza)} in più rispetto alla stima"
                 a, b = st.columns(2)
                 a.metric("⏱️ Tempo previsto", _fmt_fine(previsto))
                 b.metric("🚚 Tempo effettivo", _fmt_fine(effettivo))
                 st.markdown(f"<div style='text-align:center; font-size:20px; font-weight:800; margin:8px 0 14px 0;'>{esito}</div>", unsafe_allow_html=True)
-            elif previsto is not None:
+            elif giro_terminato and previsto is not None:
                 st.metric("⏱️ Tempo previsto", _fmt_fine(previsto))
-                st.info("Il tempo effettivo non è disponibile perché il cronometro non è stato avviato.")
+                st.info("Il tempo effettivo non e' disponibile perché il cronometro non e' stato avviato.")
+            elif not giro_terminato:
+                st.info("La stima iniziale verra' confrontata con il tempo effettivo quando rientri in sede e premi TERMINA GIRO.")
             else:
                 st.info("Nessuna previsione dell'ottimizzatore disponibile per questo giro.")
             f1, f2, f3 = st.columns(3)
             f1.metric("📍 Consegne", str(tot_clienti))
             f2.metric("📦 Colli", str(tot_qta))
             f3.metric("🛣️ KM", f"{km_giro:.1f}" if km_giro is not None else "—")
+
+            # Anche a consegne terminate resta da completare il rientro in sede.
+            if st.session_state.vista_giro == "CAMPO":
+                rientro_km = float(km_giro or 0.0) if not giro_terminato else 0.0
+                rientro_min = float(minuti_giro or 0.0) if not giro_terminato else 0.0
+                st.markdown("**🚐 Rientro in sede**")
+                r1, r2 = st.columns(2)
+                r1.metric("📍 Distanza residua alla sede", f"{rientro_km:.1f} km")
+                r2.metric("⏱️ Tempo residuo alla sede", _formatta_durata_metriche(rientro_min))
+
+                if not giro_terminato:
+                    st.info("Tutte le consegne sono gestite. Il giro si chiude quando rientri in sede.")
+                    if st.button("🏁 TERMINA GIRO", use_container_width=True, type="primary", key="btn_termina_giro"):
+                        st.session_state.fine_giro_reale = time.time()
+                        st.session_state.giro_terminato = True
+                        st.rerun()
+                else:
+                    st.success("🏁 Giro terminato: rientro in sede registrato.")
+
             st.markdown("---")
         if not st.session_state.giro_corrente.empty:
             st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
@@ -3101,6 +3153,8 @@ else:
                                 df_reale["STATO"] = STATO_DA_FARE
                             df_reale.at[idx_reale, "STATO"] = stato_nuovo
                             st.session_state.giro_corrente = df_reale
+                            st.session_state.fine_giro_reale = None
+                            st.session_state.giro_terminato = False
                             # Nascondi IMMEDIATAMENTE il cliente dalla CAMPO.
                             # La chiave include indice + cliente + comune + via per
                             # evitare che il widget possa farlo ricomparire al rerun.
