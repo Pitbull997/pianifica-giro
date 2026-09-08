@@ -2274,6 +2274,17 @@ st.markdown("""
     .stMainBlockContainer { padding: 0rem !important; max-width: 100% !important; }
     .block-container { padding-top: 0.5rem !important; padding-bottom: 1rem !important; max-width: 100% !important; }
 
+    .campo-header {
+        background: linear-gradient(135deg, #142A44 0%, #102033 100%);
+        border: 1px solid #26384F; border-radius: 14px; padding: 13px 16px;
+        min-height: 68px; box-sizing: border-box; margin-bottom: 8px;
+        display:flex; align-items:center;
+    }
+    .campo-header-left { display:flex; align-items:center; gap:12px; }
+    .campo-header-icon { font-size:30px; line-height:1; }
+    .campo-header-title { color:#FFFFFF; font-size:22px; font-weight:800; line-height:1; }
+    .campo-header-subtitle { color:#A9C4EA; font-size:12px; margin-top:4px; }
+
     .logo-container {
         display: flex;
         justify-content: center;
@@ -2529,28 +2540,43 @@ elif not st.session_state.autenticato and st.session_state.pagina_attiva == "log
 # APPLICAZIONE PRINCIPALE (ACCESSO CONSENTITO)
 # ==========================================
 else:
-    icon_path = "icovg.png"
-    if os.path.exists(icon_path):
-        with open(icon_path, "rb") as icon_file:
-            encoded_icon = base64.b64encode(icon_file.read()).decode()
-        st.markdown(f'''
-            <div class="logo-container">
-                <img src="data:image/png;base64,{encoded_icon}" alt="VanGo Logo">
+    if st.session_state.vista_giro == "CAMPO":
+        # Testata CAMPO compatta: nessun logo, utente o LOGOUT durante la guida.
+        campo_h1, campo_h2 = st.columns([3.7, 1.3], gap="small")
+        with campo_h1:
+            st.markdown("""
+            <div class="campo-header">
+                <div class="campo-header-left">
+                    <div class="campo-header-icon">📍</div>
+                    <div>
+                        <div class="campo-header-title">CAMPO</div>
+                        <div class="campo-header-subtitle">Giro in corso - Consegne in lavorazione</div>
+                    </div>
+                </div>
             </div>
-        ''', unsafe_allow_html=True)
-    else:
-        st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 22px; margin-bottom: 5px; margin-top: 0px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
-
-    col_info_u, col_logout_u = st.columns([3, 1])
-    with col_info_u:
-        st.markdown(f"<p style='color: #94A3B8; font-size: 13px; margin: 0;'>👤 Utente: <b style='color: #60A5FA;'>{st.session_state.get('utente_corrente', '')}</b></p>", unsafe_allow_html=True)
-    with col_logout_u:
-        # In CAMPO sostituiamo il LOGOUT con il solo ritorno al RIEPILOGO.
-        if st.session_state.vista_giro == "CAMPO":
+            """, unsafe_allow_html=True)
+        with campo_h2:
+            st.markdown('<div style="height:7px"></div>', unsafe_allow_html=True)
             if st.button("↩️ TORNA A VISTA RIEPILOGO", use_container_width=True, key="btn_torna_riepilogo_campo"):
                 st.session_state.vista_giro = "RIEPILOGO"
                 st.rerun()
+    else:
+        icon_path = "icovg.png"
+        if os.path.exists(icon_path):
+            with open(icon_path, "rb") as icon_file:
+                encoded_icon = base64.b64encode(icon_file.read()).decode()
+            st.markdown(f'''
+                <div class="logo-container">
+                    <img src="data:image/png;base64,{encoded_icon}" alt="VanGo Logo">
+                </div>
+            ''', unsafe_allow_html=True)
         else:
+            st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 22px; margin-bottom: 5px; margin-top: 0px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
+
+        col_info_u, col_logout_u = st.columns([3, 1])
+        with col_info_u:
+            st.markdown(f"<p style='color: #94A3B8; font-size: 13px; margin: 0;'>👤 Utente: <b style='color: #60A5FA;'>{st.session_state.get('utente_corrente', '')}</b></p>", unsafe_allow_html=True)
+        with col_logout_u:
             if st.button("🚪 LOGOUT", use_container_width=True, key="btn_logout_principale"):
                 elimina_sessione_persistente()
                 st.session_state.autenticato = False
@@ -2867,8 +2893,9 @@ else:
         # Il RIEPILOGO resta disponibile tramite il relativo pulsante e mostra tutti
         # i clienti, con quelli gestiti in fondo e leggermente offuscati.
 
-        # V10.2.10: tre viste separate.
-        if not st.session_state.giro_corrente.empty:
+        # V10.3.2: in CAMPO le tre tab PREPARAZIONE/RIEPILOGO/CAMPO
+        # non vengono mostrate: il ritorno al RIEPILOGO avviene dal comando dedicato.
+        if not st.session_state.giro_corrente.empty and st.session_state.vista_giro != "CAMPO":
             v1, v2, v3 = st.columns(3)
             with v1:
                 if st.button("🛠️ PREPARAZIONE", use_container_width=True, type="primary" if st.session_state.vista_giro == "PREPARAZIONE" else "secondary", key="vista_preparazione"):
@@ -2884,7 +2911,7 @@ else:
                     st.rerun()
             st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
         # Resoconto scaricabile: un solo tasto, sempre aggiornato con lo stato corrente.
-        if st.session_state.pagina_attiva == "giro" and not st.session_state.giro_corrente.empty:
+        if st.session_state.pagina_attiva == "giro" and not st.session_state.giro_corrente.empty and st.session_state.vista_giro != "CAMPO":
                 # Esporta il resoconto del giro in Excel.
                 # Il file viene rigenerato ad ogni aggiornamento della pagina, quindi
                 # contiene sempre lo stato consegna piu' recente senza usare un secondo tasto.
@@ -3024,24 +3051,22 @@ else:
                 except Exception:
                     pass
 
-        col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
-        col_m1.metric("Fermate Totali", f"{tot_clienti}")
-        col_m2.metric("Pezzi Totali", f"{tot_qta}")
-        col_m3.metric("Comuni", f"{tot_comuni}")
-        if st.session_state.vista_giro == "CAMPO":
-            col_m4.metric("KM Rimanenti", f"{km_visualizzati:.1f}" if km_visualizzati is not None else "—")
-        else:
+        if st.session_state.vista_giro != "CAMPO":
+            col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
+            col_m1.metric("Fermate Totali", f"{tot_clienti}")
+            col_m2.metric("Pezzi Totali", f"{tot_qta}")
+            col_m3.metric("Comuni", f"{tot_comuni}")
             col_m4.metric("KM Totali", f"{km_visualizzati:.1f}" if km_visualizzati is not None else "—")
-        if minuti_visualizzati is not None:
-            ore = int(minuti_visualizzati // 60)
-            minuti = int(round(minuti_visualizzati - ore * 60))
-            if minuti == 60:
-                ore += 1
-                minuti = 0
-            tempo_display = f"{ore}h {minuti:02d}m" if ore > 0 else f"{minuti} min"
-        else:
-            tempo_display = "—"
-        col_m5.metric("Tempo rimanente" if st.session_state.vista_giro == "CAMPO" else "Tempo Giro", tempo_display)
+            if minuti_visualizzati is not None:
+                ore = int(minuti_visualizzati // 60)
+                minuti = int(round(minuti_visualizzati - ore * 60))
+                if minuti == 60:
+                    ore += 1
+                    minuti = 0
+                tempo_display = f"{ore}h {minuti:02d}m" if ore > 0 else f"{minuti} min"
+            else:
+                tempo_display = "—"
+            col_m5.metric("Tempo Giro", tempo_display)
 
         # Dettaglio tempi del giro: SEMPRE visibile quando esiste un giro,
         # indipendentemente dal tipo di ottimizzazione o dal fatto che sia stato
@@ -3080,13 +3105,14 @@ else:
         viaggio_corrente = float(minuti_visualizzati or 0)
         tempo_reale_corrente = viaggio_corrente + attesa_corrente + servizio_corrente
 
-        st.markdown("**Dettaglio tempi reali del giro**")
-        d1, d2, d3 = st.columns(3)
-        d1.metric("⏳ Attesa totale", f"{int(round(attesa_corrente))} min")
-        d2.metric("🅿️ Servizio totale", f"{int(round(servizio_corrente))} min")
-        d3.metric("🕐 Tempo totale reale giro", _formatta_durata_metriche(tempo_reale_corrente))
+        if st.session_state.vista_giro != "CAMPO":
+            st.markdown("**Dettaglio tempi reali del giro**")
+            d1, d2, d3 = st.columns(3)
+            d1.metric("⏳ Attesa totale", f"{int(round(attesa_corrente))} min")
+            d2.metric("🅿️ Servizio totale", f"{int(round(servizio_corrente))} min")
+            d3.metric("🕐 Tempo totale reale giro", _formatta_durata_metriche(tempo_reale_corrente))
 
-        st.markdown("---")
+            st.markdown("---")
 
         def _timestamp_oggi_alle_0520():
             """Timestamp locale Europe/Rome di oggi alle 05:20, usato come partenza implicita."""
@@ -3268,26 +3294,110 @@ else:
                 </div>
                 ''' , unsafe_allow_html=True)
             elif st.session_state.vista_giro == "CAMPO":
-                st.markdown("<div style='text-align:center; color:#94A3B8; font-size:14px; margin-bottom:12px;'>🚚 MODALITÀ CAMPO</div>", unsafe_allow_html=True)
-                st.markdown('<div id="avvia-percorso-top"></div>', unsafe_allow_html=True)
-                st.markdown(f"""
-                    <a href="{maps_url}" target="_blank" style="text-decoration:none;">
-                        <button style="width:100%; background-color:#2563EB; color:white; border:none; border-radius:25px; height:52px; font-weight:bold; font-size:16px; box-shadow:0 4px 10px rgba(37,99,235,0.4);">
-                            🗺️ AVVIA PERCORSO
-                        </button>
-                    </a>
+                # V10.3.2: dashboard CAMPO pulita e ottimizzata per l'uso durante la guida.
+                # Palette e icone restano coerenti con l'interfaccia VanGo.
+                st.markdown("""
+                <style>
+                    .campo-metric-card {
+                        background: linear-gradient(135deg, #142033 0%, #0F1724 100%);
+                        border: 1px solid #26384F;
+                        border-radius: 14px;
+                        padding: 14px 15px;
+                        min-height: 82px;
+                        box-sizing: border-box;
+                    }
+                    .campo-metric-label { color:#A9C4EA; font-size:11px; font-weight:700; margin-bottom:5px; }
+                    .campo-metric-value { color:#FFFFFF; font-size:22px; font-weight:800; line-height:1.05; }
+                    .campo-metric-sub { color:#7894BC; font-size:11px; margin-top:4px; }
+                    .campo-next-card {
+                        background: linear-gradient(135deg, #142033 0%, #101A29 100%);
+                        border:1px solid #26384F; border-radius:14px; padding:14px 16px; margin:4px 0 8px 0;
+                    }
+                    .campo-next-title { color:#FFFFFF; font-size:16px; font-weight:800; }
+                    .campo-next-sub { color:#A9C4EA; font-size:13px; margin-top:3px; }
+                    .campo-next-badge { color:#FFFFFF; background:#1E293B; border:1px solid #334A68; border-radius:10px; padding:7px 10px; font-size:11px; font-weight:700; }
+                    .campo-return-space { min-height: 1px; }
+                    /* Colori dei soli comandi operativi presenti nella vista CAMPO. */
+                    button[data-testid="stBaseButton-primary"] { background:#10B981 !important; border-color:#10B981 !important; color:#FFFFFF !important; border-radius:14px !important; font-weight:800 !important; }
+                    button[data-testid="stBaseButton-secondary"] { background:#111C2B !important; border-color:#334A68 !important; color:#FFFFFF !important; border-radius:14px !important; font-weight:800 !important; }
+                </style>
                 """, unsafe_allow_html=True)
+
+                # Azioni principali: verde = inizio, blu = navigazione, scuro = fine.
+                a1, a2, a3 = st.columns(3, gap="small")
+                with a1:
+                    if not st.session_state.get("giro_terminato", False) and st.session_state.get("inizio_giro_reale") is None:
+                        if st.button("▶️  INIZIA GIRO", use_container_width=True, type="primary", key="btn_inizia_giro"):
+                            st.session_state.inizio_giro_reale = time.time()
+                            st.session_state.fine_giro_reale = None
+                            st.session_state.giro_terminato = False
+                            salva_stato_giro_persistente(st.session_state.utente_corrente)
+                            st.rerun()
+                    else:
+                        st.button("▶️  GIRO INIZIATO", use_container_width=True, disabled=True, key="btn_giro_iniziato")
+                with a2:
+                    st.markdown(f"""
+                        <a href="{maps_url}" target="_blank" style="text-decoration:none;">
+                            <button style="width:100%; background:#2563EB; color:white; border:1px solid #3B82F6; border-radius:14px; height:46px; font-weight:800; font-size:14px; box-shadow:0 4px 12px rgba(37,99,235,.28);">🗺️  AVVIA PERCORSO</button>
+                        </a>
+                    """, unsafe_allow_html=True)
+                with a3:
+                    if tutte_gestite and not st.session_state.get("giro_terminato", False):
+                        if st.button("🏁  TERMINA GIRO", use_container_width=True, type="secondary", key="btn_termina_giro_dashboard"):
+                            if st.session_state.get("inizio_giro_reale") is None:
+                                st.session_state.inizio_giro_reale = _timestamp_oggi_alle_0520()
+                            st.session_state.fine_giro_reale = time.time()
+                            st.session_state.giro_terminato = True
+                            salva_stato_giro_persistente(st.session_state.utente_corrente)
+                            st.rerun()
+                    else:
+                        st.button("🏁  TERMINA GIRO", use_container_width=True, disabled=True, key="btn_termina_giro_dashboard_disabled")
+
                 if not st.session_state.get("giro_terminato", False) and st.session_state.get("inizio_giro_reale") is None:
-                    if st.button("▶️ INIZIA GIRO", use_container_width=True, type="primary", key="btn_inizia_giro"):
-                        st.session_state.inizio_giro_reale = time.time()
-                        st.session_state.fine_giro_reale = None
-                        st.session_state.giro_terminato = False
-                        salva_stato_giro_persistente(st.session_state.utente_corrente)
-                        st.rerun()
                     st.caption("🕐 Se non premi INIZIA GIRO, per il calcolo effettivo verranno usate le 05:20.")
                 elif st.session_state.get("inizio_giro_reale") is not None and not st.session_state.get("giro_terminato", False):
                     st.caption(f"🕐 Giro iniziato alle {_formatta_ora_partenza_reale()}: il tempo effettivo viene calcolato fino a TERMINA GIRO.")
-                st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
+
+                # Ultima posizione conosciuta = ultima consegna gestita; altrimenti deposito.
+                df_pos = st.session_state.giro_corrente.copy()
+                if "STATO" not in df_pos.columns:
+                    df_pos["STATO"] = STATO_DA_FARE
+                stati_pos = df_pos["STATO"].fillna("").astype(str).str.upper()
+                mask_gestiti_pos = stati_pos.str.contains("FATTO|PARZIALE|RESPINTO", regex=True)
+                gestiti_pos = df_pos[mask_gestiti_pos]
+                if not gestiti_pos.empty:
+                    ultima = gestiti_pos.iloc[-1]
+                    posizione_label = str(ultima.get("VIA", "")).strip() or "Ultima consegna"
+                    posizione_comune = str(ultima.get("COMUNE", "")).strip()
+                else:
+                    posizione_label = DEPOSITO_VANGO
+                    posizione_comune = "Punto di partenza"
+
+                df_metriche_campo = df_pos[~df_pos["STATO"].fillna("").astype(str).isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO])].copy()
+                residui_campo = len(df_metriche_campo)
+                gestiti_campo = max(0, len(df_pos) - residui_campo)
+                km_campo_display = km_visualizzati if km_visualizzati is not None else 0.0
+                minuti_campo_display = minuti_visualizzati if minuti_visualizzati is not None else 0.0
+                ore_campo = int(float(minuti_campo_display) // 60)
+                min_campo = int(round(float(minuti_campo_display) - ore_campo * 60))
+                if min_campo == 60:
+                    ore_campo += 1
+                    min_campo = 0
+                tempo_campo_display = f"{ore_campo} h {min_campo:02d} min" if ore_campo else f"{min_campo} min"
+
+                m1, m2, m3, m4 = st.columns(4, gap="small")
+                with m1:
+                    st.markdown(f'<div class="campo-metric-card"><div class="campo-metric-label">📦 CONSEGNE RIMANENTI</div><div class="campo-metric-value">{residui_campo} / {len(df_pos)}</div><div class="campo-metric-sub">{gestiti_campo} gestite</div></div>', unsafe_allow_html=True)
+                with m2:
+                    st.markdown(f'<div class="campo-metric-card"><div class="campo-metric-label">🛣️ KM RESIDUI</div><div class="campo-metric-value">{float(km_campo_display):.1f} km</div><div class="campo-metric-sub">incluso rientro in sede</div></div>', unsafe_allow_html=True)
+                with m3:
+                    st.markdown(f'<div class="campo-metric-card"><div class="campo-metric-label">🕐 TEMPO RESIDUO</div><div class="campo-metric-value">{tempo_campo_display}</div><div class="campo-metric-sub">incluso rientro in sede</div></div>', unsafe_allow_html=True)
+                with m4:
+                    st.markdown(f'<div class="campo-metric-card"><div class="campo-metric-label">📍 POSIZIONE ATTUALE</div><div class="campo-metric-value" style="font-size:15px;">{posizione_label}</div><div class="campo-metric-sub">{posizione_comune}</div></div>', unsafe_allow_html=True)
+
+                st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+                st.markdown("<div style='font-size:16px; font-weight:800; color:#FFFFFF; margin:0 0 8px 4px;'>📍 PROSSIMA CONSEGNA</div>", unsafe_allow_html=True)
+
                 # CAMPO: mostra SOLO le consegne ancora da gestire.
                 # Il filtro viene applicato direttamente al giro reale, prima della
                 # preparazione grafica, cosi' i clienti gestiti non possono rientrare
