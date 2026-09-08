@@ -3642,7 +3642,7 @@ else:
                     [data-testid="stPopover"] button > * > * > *,
                     [data-testid="stPopover"] button [data-testid="stMarkdownContainer"],
                     [data-testid="stPopover"] button p,
-                    [data-testid="stPopover"] button span {
+                    [data-testid="stPopover"] button span {{
                         width: 100% !important;
                         max-width: 100% !important;
                         min-width: 0 !important;
@@ -3656,10 +3656,10 @@ else:
                         align-items: flex-start !important;
                         align-self: flex-start !important;
                         flex: 1 1 auto !important;
-                    }
+                    }}
                     [data-testid="stPopover"] button > div,
                     [data-testid="stPopover"] button > div > div,
-                    [data-testid="stPopover"] button > div > div > div {
+                    [data-testid="stPopover"] button > div > div > div {{
                         display: flex !important;
                         flex-direction: row !important;
                         justify-content: flex-start !important;
@@ -3667,10 +3667,10 @@ else:
                         margin-left: 0 !important;
                         margin-right: 0 !important;
                         text-align: left !important;
-                    }
+                    }}
                     [data-testid="stPopover"] button [data-testid="stMarkdownContainer"] > div,
                     [data-testid="stPopover"] button [data-testid="stMarkdownContainer"] p,
-                    [data-testid="stPopover"] button [data-testid="stMarkdownContainer"] span {
+                    [data-testid="stPopover"] button [data-testid="stMarkdownContainer"] span {{
                         display: block !important;
                         width: 100% !important;
                         margin: 0 !important;
@@ -3679,14 +3679,14 @@ else:
                         white-space: nowrap !important;
                         overflow: hidden !important;
                         text-overflow: ellipsis !important;
-                    }
+                    }}
                     [data-testid="stPopover"] button svg,
-                    [data-testid="stPopover"] button [data-testid="stIcon"] {
+                    [data-testid="stPopover"] button [data-testid="stIcon"] {{
                         display: none !important;
                         width: 0 !important;
                         max-width: 0 !important;
                         flex: 0 0 0 !important;
-                    }
+                    }}
                     [data-testid="stPopover"] > button svg,
                     [data-testid="stPopover"] > button [data-testid="stIcon"] {{
                         display: none !important;
