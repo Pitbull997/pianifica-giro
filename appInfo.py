@@ -5,6 +5,7 @@ import os
 import base64
 import json
 import time
+import shutil
 from datetime import datetime
 try:
     from zoneinfo import ZoneInfo
@@ -12,39 +13,18 @@ except Exception:
     ZoneInfo = None
 import requests
 from io import BytesIO
-from PIL import Image, ImageOps, ImageEnhance, ImageFilter
+
+# OCR test JPEG
+try:
+    from PIL import Image, ImageOps, ImageEnhance, ImageFilter
+except ImportError:
+    Image = ImageOps = ImageEnhance = ImageFilter = None
 try:
     import pytesseract
 except ImportError:
     pytesseract = None
 import gspread
 from google.oauth2.service_account import Credentials
-
-# ==========================================
-# TEST IMPORTAZIONE FILE JPEG / OCR
-# ==========================================
-def _prepara_immagine_ocr(img):
-    """Prepara una foto del foglio per migliorare la lettura OCR."""
-    if img.mode not in ("RGB", "L"):
-        img = img.convert("RGB")
-    # Ridimensionamento moderato: evita immagini enormi ma mantiene i caratteri leggibili.
-    max_lato = 2600
-    if max(img.size) > max_lato:
-        rapporto = max_lato / max(img.size)
-        img = img.resize((int(img.width * rapporto), int(img.height * rapporto)))
-    gray = ImageOps.grayscale(img)
-    gray = ImageEnhance.Contrast(gray).enhance(1.8)
-    gray = gray.filter(ImageFilter.SHARPEN)
-    return gray
-
-
-def _ocr_jpeg(img):
-    """OCR locale di prova; non modifica Google Sheets e non crea il giro."""
-    if pytesseract is None:
-        raise RuntimeError("pytesseract non disponibile nell'ambiente.")
-    img_ocr = _prepara_immagine_ocr(img)
-    testo = pytesseract.image_to_string(img_ocr, lang="ita+eng", config="--psm 6")
-    return testo.strip()
 
 # Configurazione Pagina
 st.set_page_config(
@@ -2581,6 +2561,9 @@ else:
                 st.session_state.pagina_attiva = "utenti"
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
+
+
+    if st.session_state.is_admin:
         with col_sw4:
             css_class = "btn-active" if st.session_state.pagina_attiva == "test_file" else "btn-inactive"
             st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
@@ -2599,7 +2582,58 @@ else:
 
 
 
-    col_act1, col_act2 = st.columns(2)
+    # ==========================================
+    # PAGINA TEST IMPORTAZIONE JPEG / OCR
+    # ==========================================
+    if st.session_state.pagina_attiva == "test_file":
+        st.markdown("# 📸 Test importazione giro")
+        st.caption("Versione di prova: legge il JPEG e mostra solo il testo OCR. Non modifica giro, clienti o Google Sheets.")
+        st.info("Formato minimo atteso: CLIENTE · COMUNE · VIA · COLLI")
+
+        file_jpeg = st.file_uploader("📂 Carica il JPEG della lista consegne", type=["jpg", "jpeg"], key="test_jpeg_uploader")
+        if file_jpeg is not None:
+            if Image is None:
+                st.error("❌ Pillow non è disponibile nell'ambiente.")
+            else:
+                try:
+                    img = Image.open(file_jpeg)
+                    st.image(img, caption="JPEG caricato", use_container_width=True)
+
+                    if st.button("🔎 AVVIA OCR DI TEST", use_container_width=True, key="btn_avvia_ocr_test"):
+                        if pytesseract is None:
+                            st.error("❌ pytesseract non è installato. Aggiungi 'pytesseract' a requirements.txt.")
+                        else:
+                            tess = shutil.which("tesseract")
+                            if not tess:
+                                st.error("❌ Tesseract non è installato. Su Streamlit Cloud servono packages.txt con 'tesseract-ocr' e 'tesseract-ocr-ita'.")
+                            else:
+                                try:
+                                    pytesseract.pytesseract.tesseract_cmd = tess
+                                    img_ocr = img.convert("RGB")
+                                    max_dim = 2600
+                                    if max(img_ocr.size) > max_dim:
+                                        scala = max_dim / max(img_ocr.size)
+                                        img_ocr = img_ocr.resize((int(img_ocr.width * scala), int(img_ocr.height * scala)))
+                                    img_ocr = ImageOps.grayscale(img_ocr)
+                                    img_ocr = ImageEnhance.Contrast(img_ocr).enhance(1.8)
+                                    img_ocr = img_ocr.filter(ImageFilter.SHARPEN)
+                                    testo = pytesseract.image_to_string(img_ocr, lang="ita+eng", config="--psm 6")
+                                    if testo.strip():
+                                        st.success("✅ OCR completato")
+                                        st.text_area("Testo riconosciuto", testo, height=350, key="ocr_risultato_test")
+                                    else:
+                                        st.warning("⚠️ OCR completato ma non è stato riconosciuto testo.")
+                                except Exception as e:
+                                    st.error(f"❌ Errore OCR: {e}")
+                except Exception as e:
+                    st.error(f"❌ Impossibile leggere il JPEG: {e}")
+
+        st.markdown("---")
+        st.caption("Questo test serve solo a verificare la lettura della foto. L'importazione automatica nel giro verrà aggiunta dopo che l'OCR sarà affidabile.")
+
+    if st.session_state.pagina_attiva == "test_file":
+
+        st.stop()
 
     with col_act1:
         st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
@@ -3470,48 +3504,6 @@ else:
                 ''' , unsafe_allow_html=True)
         else:
             st.info("Nessuna fermata nel tuo giro corrente. Clicca in alto su '📁 CLIENTI' per aggiungerne.")
-
-    # ==========================================
-    # SCHERMATA TEST: IMPORTAZIONE GIRO DA JPEG
-    # ==========================================
-    elif st.session_state.pagina_attiva == "test_file":
-        st.markdown("# 📸 Test importazione giro")
-        st.caption("Versione di prova: carichiamo il JPEG e verifichiamo cosa riesce a leggere l'OCR. In questa fase NON viene modificato il giro e NON viene scritto nulla su Google Sheets.")
-
-        st.info("📋 Formato previsto del foglio: **CLIENTE · COMUNE · VIA · COLLI**. Le altre colonne potranno essere ignorate durante l'importazione.")
-
-        file_jpeg = st.file_uploader(
-            "Carica la foto del foglio",
-            type=["jpg", "jpeg"],
-            key="test_file_jpeg",
-            help="Se possibile usa una foto nitida, dritta e con tutto il foglio visibile."
-        )
-
-        if file_jpeg is not None:
-            try:
-                img_test = Image.open(file_jpeg)
-                st.success(f"✅ JPEG caricato: {file_jpeg.name} — {img_test.width} × {img_test.height} px")
-                st.image(img_test, caption="Foto ricevuta", use_container_width=True)
-
-                if st.button("🔎 AVVIA OCR DI TEST", use_container_width=True, type="primary", key="btn_ocr_test"):
-                    with st.spinner("🔎 Leggo il testo della foto..."):
-                        testo_ocr = _ocr_jpeg(img_test)
-                    st.session_state.test_ocr_risultato = testo_ocr
-                    st.rerun()
-
-                if st.session_state.get("test_ocr_risultato") is not None:
-                    st.markdown("### 📝 Testo riconosciuto")
-                    testo = st.session_state.test_ocr_risultato
-                    if testo:
-                        st.text_area("OCR", value=testo, height=320, key="test_ocr_textarea")
-                        st.success("✅ OCR completato. Il prossimo passo sarà trasformare questo testo nelle colonne CLIENTE / COMUNE / VIA / COLLI e confrontarlo con Foglio1.")
-                    else:
-                        st.warning("⚠️ OCR completato ma non è stato riconosciuto testo. Proveremo un preprocessing migliore o un altro metodo.")
-            except Exception as e:
-                st.error(f"❌ Impossibile leggere il JPEG: {e}")
-
-        st.markdown("---")
-        st.caption("🧪 QUESTA È SOLO LA PAGINA DI TEST. Il giro reale verrà toccato solo quando avremo verificato che il riconoscimento del tuo foglio funziona bene.")
 
     # ==========================================
     # SCHERMATA 2: INSERISCI CLIENTE
