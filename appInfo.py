@@ -3298,17 +3298,37 @@ else:
                 # Palette e icone restano coerenti con l'interfaccia VanGo.
                 st.markdown("""
                 <style>
-                    /* Su smartphone le colonne operative restano SEMPRE affiancate:
-                       nome cliente + menu stato devono occupare una sola riga. */
+                    /* CAMPO mobile: SOLO la riga del cliente resta affiancata.
+                       Tutto il resto dell'interfaccia mantiene il responsive normale. */
                     @media (max-width: 640px) {
-                        [data-testid="stHorizontalBlock"] {
+                        [class*="st-key-campo_riga_"] [data-testid="stHorizontalBlock"] {
                             flex-wrap: nowrap !important;
                             align-items: center !important;
-                        }
-                        [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+                            width: 100% !important;
                             min-width: 0 !important;
                         }
-                        [data-testid="stHorizontalBlock"] [data-testid="stSelectbox"] {
+                        [class*="st-key-campo_riga_"] [data-testid="column"] {
+                            min-width: 0 !important;
+                            width: 0 !important;
+                            flex: 1 1 0% !important;
+                        }
+                        [class*="st-key-campo_riga_"] [data-testid="column"]:first-child {
+                            flex: 1 1 55% !important;
+                            max-width: 55% !important;
+                        }
+                        [class*="st-key-campo_riga_"] [data-testid="column"]:last-child {
+                            flex: 1 1 45% !important;
+                            max-width: 45% !important;
+                        }
+                        [class*="st-key-campo_riga_"] [data-testid="stSelectbox"],
+                        [class*="st-key-campo_riga_"] [data-baseweb="select"],
+                        [class*="st-key-campo_riga_"] [data-baseweb="select"] > div {
+                            width: 100% !important;
+                            min-width: 0 !important;
+                            max-width: 100% !important;
+                            box-sizing: border-box !important;
+                        }
+                        [class*="st-key-campo_riga_"] [data-testid="stMarkdownContainer"] {
                             min-width: 0 !important;
                         }
                     }
@@ -3457,12 +3477,12 @@ else:
                     if stato_attuale not in STATI_CONSEGNA:
                         stato_attuale = STATO_DA_FARE
 
-                    # V10.3.3: su smartphone ogni cliente occupa UNA SOLA RIGA.
+                    # V10.3.5: su smartphone ogni cliente occupa UNA SOLA RIGA, mantenendo il responsive del resto della CAMPO.
                     # Mostriamo esclusivamente nome cliente + menu stato, senza badge,
                     # indirizzo o altri dettagli: durante la guida la priorita' e' la
                     # gestione rapida della consegna.
-                    with st.container(border=True):
-                        col_cliente, col_stato = st.columns([0.54, 0.46], gap="small", vertical_alignment="center")
+                    with st.container(border=True, key=f"campo_riga_{idx_reale}"):
+                        col_cliente, col_stato = st.columns([0.55, 0.45], gap="small", vertical_alignment="center")
                         with col_cliente:
                             st.markdown(
                                 f"<div style='font-size:15px; font-weight:800; color:#FFFFFF; line-height:1.15; padding:5px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;'>{row['CLIENTE']}</div>",
