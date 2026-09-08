@@ -2657,8 +2657,10 @@ else:
         )
         # Portiamo automaticamente l'utente sul RIEPILOGO, dove puo' vedere l'intera
         # progressione: prima i da fare e in fondo tutti i gestiti/offuscati.
-        if tutte_gestite and st.session_state.vista_giro == "CAMPO":
-            st.session_state.vista_giro = "RIEPILOGO"
+        # A giro completato NON cambiamo automaticamente vista.
+        # Se l'utente e' in CAMPO, la CAMPO resta vuota: mostra solo clienti da fare.
+        # Il RIEPILOGO resta disponibile tramite il relativo pulsante e mostra tutti
+        # i clienti, con quelli gestiti in fondo e leggermente offuscati.
 
         # V10.2.10: tre viste separate.
         if not st.session_state.giro_corrente.empty:
