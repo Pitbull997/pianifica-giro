@@ -3298,6 +3298,21 @@ else:
                 # Palette e icone restano coerenti con l'interfaccia VanGo.
                 st.markdown("""
                 <style>
+                    /* Su smartphone le colonne operative restano SEMPRE affiancate:
+                       nome cliente + menu stato devono occupare una sola riga. */
+                    @media (max-width: 640px) {
+                        [data-testid="stHorizontalBlock"] {
+                            flex-wrap: nowrap !important;
+                            align-items: center !important;
+                        }
+                        [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+                            min-width: 0 !important;
+                        }
+                        [data-testid="stHorizontalBlock"] [data-testid="stSelectbox"] {
+                            min-width: 0 !important;
+                        }
+                    }
+
                     .campo-metric-card {
                         background: linear-gradient(135deg, #142033 0%, #0F1724 100%);
                         border: 1px solid #26384F;
@@ -3447,10 +3462,10 @@ else:
                     # indirizzo o altri dettagli: durante la guida la priorita' e' la
                     # gestione rapida della consegna.
                     with st.container(border=True):
-                        col_cliente, col_stato = st.columns([0.58, 0.42], gap="small", vertical_alignment="center")
+                        col_cliente, col_stato = st.columns([0.54, 0.46], gap="small", vertical_alignment="center")
                         with col_cliente:
                             st.markdown(
-                                f"<div style='font-size:16px; font-weight:800; color:#FFFFFF; line-height:1.2; padding:8px 0;'>{row['CLIENTE']}</div>",
+                                f"<div style='font-size:15px; font-weight:800; color:#FFFFFF; line-height:1.15; padding:5px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;'>{row['CLIENTE']}</div>",
                                 unsafe_allow_html=True
                             )
                         with col_stato:
