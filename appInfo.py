@@ -2751,6 +2751,16 @@ else:
             if st.session_state.vista_pulita:
                 st.markdown(f"<p style='color: #94A3B8; font-size: 14px; margin-bottom: 15px;'>{tot_clienti} indirizzi trovati nel giro.</p>", unsafe_allow_html=True)
 
+                st.markdown('<div id="avvia-percorso-top"></div>', unsafe_allow_html=True)
+                st.markdown(f'''
+                    <a href="{maps_url}" target="_blank" style="text-decoration:none;">
+                        <button style="width:100%; background-color:#2563EB; color:white; border:none; border-radius:25px; height:52px; font-weight:bold; font-size:16px; box-shadow:0 4px 10px rgba(37,99,235,0.4);">
+                            🗺️ AVVIA PERCORSO
+                        </button>
+                    </a>
+                ''', unsafe_allow_html=True)
+                st.markdown('<div style="height:10px;"></div>', unsafe_allow_html=True)
+
                 for idx in range(tot_clienti):
                     row = df_vista_giro.iloc[idx]
                     idx_reale = int(row["__IDX_ORIGINALE"])
@@ -2800,14 +2810,22 @@ else:
                                 st.rerun()
 
                 st.markdown("---")
+                st.markdown('''
+                <div style="text-align:center; margin:4px 0 8px 0;">
+                    <a href="#avvia-percorso-top" style="text-decoration:none; font-size:28px;">⬆️</a>
+                </div>
+                ''' , unsafe_allow_html=True)
+            else:
+                st.markdown('<div id="avvia-percorso-top"></div>', unsafe_allow_html=True)
                 st.markdown(f'''
                     <a href="{maps_url}" target="_blank" style="text-decoration:none;">
-                        <button style="width:100%; background-color:#2563EB; color:white; border:none; border-radius:25px; height:52px; font-weight:bold; font-size:16px; box-shadow: 0 4px 10px rgba(37, 99, 235, 0.4);">
+                        <button style="width:100%; background-color:#2563EB; color:white; border:none; border-radius:25px; height:52px; font-weight:bold; font-size:16px; box-shadow:0 4px 10px rgba(37,99,235,0.4);">
                             🗺️ AVVIA PERCORSO
                         </button>
                     </a>
                 ''', unsafe_allow_html=True)
-            else:
+                st.markdown('<div style="height:10px;"></div>', unsafe_allow_html=True)
+
                 for idx in range(tot_clienti):
                     row = df_vista_giro.iloc[idx]
                     idx_reale = int(row["__IDX_ORIGINALE"])
@@ -2894,13 +2912,11 @@ else:
                     st.markdown("<hr style='margin: 10px 0; border-color: #262626;'>", unsafe_allow_html=True)
 
                 st.markdown("---")
-                st.markdown(f'''
-                    <a href="{maps_url}" target="_blank" style="text-decoration:none;">
-                        <button style="width:100%; background-color:#2563EB; color:white; border:none; border-radius:25px; height:52px; font-weight:bold; font-size:16px; box-shadow: 0 4px 10px rgba(37, 99, 235, 0.4);">
-                            🗺️ AVVIA PERCORSO
-                        </button>
-                    </a>
-                ''', unsafe_allow_html=True)
+                st.markdown('''
+                <div style="text-align:center; margin:4px 0 8px 0;">
+                    <a href="#avvia-percorso-top" style="text-decoration:none; font-size:28px;">⬆️</a>
+                </div>
+                ''' , unsafe_allow_html=True)
         else:
             st.info("Nessuna fermata nel tuo giro corrente. Clicca in alto su '📁 CLIENTI' per aggiungerne.")
 
