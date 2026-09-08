@@ -12,8 +12,39 @@ except Exception:
     ZoneInfo = None
 import requests
 from io import BytesIO
+from PIL import Image, ImageOps, ImageEnhance, ImageFilter
+try:
+    import pytesseract
+except ImportError:
+    pytesseract = None
 import gspread
 from google.oauth2.service_account import Credentials
+
+# ==========================================
+# TEST IMPORTAZIONE FILE JPEG / OCR
+# ==========================================
+def _prepara_immagine_ocr(img):
+    """Prepara una foto del foglio per migliorare la lettura OCR."""
+    if img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+    # Ridimensionamento moderato: evita immagini enormi ma mantiene i caratteri leggibili.
+    max_lato = 2600
+    if max(img.size) > max_lato:
+        rapporto = max_lato / max(img.size)
+        img = img.resize((int(img.width * rapporto), int(img.height * rapporto)))
+    gray = ImageOps.grayscale(img)
+    gray = ImageEnhance.Contrast(gray).enhance(1.8)
+    gray = gray.filter(ImageFilter.SHARPEN)
+    return gray
+
+
+def _ocr_jpeg(img):
+    """OCR locale di prova; non modifica Google Sheets e non crea il giro."""
+    if pytesseract is None:
+        raise RuntimeError("pytesseract non disponibile nell'ambiente.")
+    img_ocr = _prepara_immagine_ocr(img)
+    testo = pytesseract.image_to_string(img_ocr, lang="ita+eng", config="--psm 6")
+    return testo.strip()
 
 # Configurazione Pagina
 st.set_page_config(
@@ -1180,45 +1211,11 @@ def _formatta_ora_minuti(minuti):
     return f"{ore:02d}:{mins:02d}"
 
 
-def _timestamp_oggi_alle_0520():
-    """Timestamp locale Europe/Rome di oggi alle 05:20, usato come fallback."""
-    try:
-        tz = ZoneInfo("Europe/Rome") if ZoneInfo is not None else None
-        adesso = datetime.now(tz) if tz else datetime.now()
-        dt = adesso.replace(hour=5, minute=20, second=0, microsecond=0)
-        return dt.timestamp()
-    except Exception:
-        adesso = datetime.now()
-        return adesso.replace(hour=5, minute=20, second=0, microsecond=0).timestamp()
-
-
-def _ora_partenza_reale_minuti():
-    """Restituisce l'ora di partenza effettiva in minuti dalla mezzanotte.
-
-    Se INIZIA GIRO e' stato premuto, usa il timestamp registrato.
-    Altrimenti usa il fallback operativo delle 05:20.
-    """
-    timestamp = st.session_state.get("inizio_giro_reale")
-    if timestamp is None:
-        timestamp = _timestamp_oggi_alle_0520()
-    try:
-        tz = ZoneInfo("Europe/Rome") if ZoneInfo is not None else None
-        dt = datetime.fromtimestamp(float(timestamp), tz) if tz else datetime.fromtimestamp(float(timestamp))
-        return dt.hour * 60 + dt.minute + dt.second / 60.0
-    except Exception:
-        return 320.0
-
-
-def _formatta_ora_partenza_reale():
-    minuti = _ora_partenza_reale_minuti()
-    return _formatta_ora_minuti(round(minuti))
-
-
 def _simula_tempo_percorso_orari(ordine, durate, orari_apertura, ora_partenza_minuti=300, minuti_servizio=MINUTI_SERVIZIO_PER_FERMATA):
     """Simula l'orario reale fermata per fermata.
 
     Regola: si viaggia, si arriva, si attende solo se necessario per l'apertura,
-    poi si effettuano 12 minuti di parcheggio+scarico prima di ripartire.
+    poi si effettuano 6 minuti di parcheggio+scarico prima di ripartire.
     Il servizio viene applicato a ogni cliente, ma non al deposito finale.
     """
     tempo = float(ora_partenza_minuti)
@@ -1242,7 +1239,7 @@ def _simula_tempo_percorso_orari(ordine, durate, orari_apertura, ora_partenza_mi
 
 
 def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=300):
-    """V10.2 TEST: un solo furgone + aperture + 12 min medi per fermata.
+    """V10.2 TEST: un solo furgone + aperture + 6 min medi per fermata.
 
     OSRM fornisce i tempi stradali; OR-Tools decide l'ordine.
     Non esistono orari di chiusura nel DB, quindi ogni ORA valida e' trattata
@@ -1270,7 +1267,7 @@ def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=
     costo_callback = routing.RegisterTransitCallback(costo_arco)
     routing.SetArcCostEvaluatorOfAllVehicles(costo_callback)
 
-    # Ogni cliente richiede in media 12 minuti per parcheggio + scarico.
+    # Ogni cliente richiede in media 6 minuti per parcheggio + scarico.
     # Il tempo di servizio viene aggiunto dopo l'arrivo al cliente e quindi
     # influisce sull'orario di arrivo di tutte le fermate successive.
     def tempo_arco(from_index, to_index):
@@ -1331,7 +1328,7 @@ def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=
     try:
         dimensione_tempo.SetSlackCostCoefficientForAllVehicles(COEFFICIENTE_ATTESA_MINUTO)
         # Minimizza anche il tempo complessivo del giro, includendo viaggio,
-        # attese e i 12 minuti medi di servizio per ogni cliente.
+        # attese e i 6 minuti medi di servizio per ogni cliente.
         dimensione_tempo.SetSpanCostCoefficientForAllVehicles(COEFFICIENTE_ATTESA_MINUTO)
     except Exception:
         pass
@@ -1367,11 +1364,11 @@ def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=
 
 
 def ottimizza_giro_orari_test(df_giro, df_db=None, ora_partenza_minuti=300):
-    """V10.2 TEST ORARI: aperture + 12 min medi di servizio per fermata.
+    """V10.2 TEST ORARI: aperture + 6 min medi di servizio per fermata.
 
     E' una modalita' separata: non usa ZONA come criterio.
     01:00 e' sconosciuto e quindi non impone alcun vincolo temporale.
-    Ogni cliente aggiunge 12 minuti di parcheggio + scarico al giro.
+    Ogni cliente aggiunge 6 minuti di parcheggio + scarico al giro.
     """
     if df_giro is None or df_giro.empty:
         raise ValueError("Il giro è vuoto.")
@@ -1425,7 +1422,7 @@ def ottimizza_giro_orari_test(df_giro, df_db=None, ora_partenza_minuti=300):
     df_ottimizzato = df_originale.iloc[indici_clienti].reset_index(drop=True).copy()
     df_ottimizzato["POSIZIONE"] = [str(i) for i in range(1, len(df_ottimizzato) + 1)]
 
-    # Simulazione finale con secondi OSRM: viaggio -> attesa -> 12 min servizio.
+    # Simulazione finale con secondi OSRM: viaggio -> attesa -> 6 min servizio.
     orari_apertura = dati_tempo.get("orari_apertura", []) if isinstance(dati_tempo, dict) else []
     simulazione = _simula_tempo_percorso_orari(
         ordine_ottimizzato, durate, orari_apertura,
@@ -1448,7 +1445,7 @@ def ottimizza_giro_orari_test(df_giro, df_db=None, ora_partenza_minuti=300):
     orari_sconosciuti = len(df_originale) - orari_conosciuti
 
     metriche = {
-        "metodo": "ORARI — TEST + 12 MIN/FERMATA",
+        "metodo": "ORARI — TEST + 6 MIN/FERMATA",
         "minuti_servizio_per_fermata": MINUTI_SERVIZIO_PER_FERMATA,
         "minuti_servizio_totali": len(df_originale) * MINUTI_SERVIZIO_PER_FERMATA,
         "fermate": len(df_originale),
@@ -2274,17 +2271,6 @@ st.markdown("""
     .stMainBlockContainer { padding: 0rem !important; max-width: 100% !important; }
     .block-container { padding-top: 0.5rem !important; padding-bottom: 1rem !important; max-width: 100% !important; }
 
-    .campo-header {
-        background: linear-gradient(135deg, #142A44 0%, #102033 100%);
-        border: 1px solid #26384F; border-radius: 14px; padding: 13px 16px;
-        min-height: 68px; box-sizing: border-box; margin-bottom: 8px;
-        display:flex; align-items:center;
-    }
-    .campo-header-left { display:flex; align-items:center; gap:12px; }
-    .campo-header-icon { font-size:30px; line-height:1; }
-    .campo-header-title { color:#FFFFFF; font-size:22px; font-weight:800; line-height:1; }
-    .campo-header-subtitle { color:#A9C4EA; font-size:12px; margin-top:4px; }
-
     .logo-container {
         display: flex;
         justify-content: center;
@@ -2540,209 +2526,201 @@ elif not st.session_state.autenticato and st.session_state.pagina_attiva == "log
 # APPLICAZIONE PRINCIPALE (ACCESSO CONSENTITO)
 # ==========================================
 else:
-    if st.session_state.vista_giro == "CAMPO":
-        # Testata CAMPO compatta: nessun logo, utente o LOGOUT durante la guida.
-        campo_h1, campo_h2 = st.columns([3.7, 1.3], gap="small")
-        with campo_h1:
-            st.markdown("""
-            <div class="campo-header">
-                <div class="campo-header-left">
-                    <div class="campo-header-icon">📍</div>
-                    <div>
-                        <div class="campo-header-title">CAMPO</div>
-                        <div class="campo-header-subtitle">Giro in corso - Consegne in lavorazione</div>
-                    </div>
-                </div>
+    icon_path = "icovg.png"
+    if os.path.exists(icon_path):
+        with open(icon_path, "rb") as icon_file:
+            encoded_icon = base64.b64encode(icon_file.read()).decode()
+        st.markdown(f'''
+            <div class="logo-container">
+                <img src="data:image/png;base64,{encoded_icon}" alt="VanGo Logo">
             </div>
-            """, unsafe_allow_html=True)
-        with campo_h2:
-            st.markdown('<div style="height:7px"></div>', unsafe_allow_html=True)
-            if st.button("↩️ TORNA A VISTA RIEPILOGO", use_container_width=True, key="btn_torna_riepilogo_campo"):
-                st.session_state.vista_giro = "RIEPILOGO"
-                st.rerun()
+        ''', unsafe_allow_html=True)
     else:
-        icon_path = "icovg.png"
-        if os.path.exists(icon_path):
-            with open(icon_path, "rb") as icon_file:
-                encoded_icon = base64.b64encode(icon_file.read()).decode()
-            st.markdown(f'''
-                <div class="logo-container">
-                    <img src="data:image/png;base64,{encoded_icon}" alt="VanGo Logo">
-                </div>
-            ''', unsafe_allow_html=True)
-        else:
-            st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 22px; margin-bottom: 5px; margin-top: 0px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
+        st.markdown("<h1 style='text-align: center; color: #FFFFFF; font-size: 22px; margin-bottom: 5px; margin-top: 0px;'>🚐 VANGO</h1>", unsafe_allow_html=True)
 
-        col_info_u, col_logout_u = st.columns([3, 1])
-        with col_info_u:
-            st.markdown(f"<p style='color: #94A3B8; font-size: 13px; margin: 0;'>👤 Utente: <b style='color: #60A5FA;'>{st.session_state.get('utente_corrente', '')}</b></p>", unsafe_allow_html=True)
-        with col_logout_u:
-            if st.button("🚪 LOGOUT", use_container_width=True, key="btn_logout_principale"):
-                elimina_sessione_persistente()
-                st.session_state.autenticato = False
-                st.session_state.utente_corrente = ""
-                st.session_state.is_admin = False
-                st.session_state.pagina_attiva = "login"
-                st.rerun()
+    col_info_u, col_logout_u = st.columns([3, 1])
+    with col_info_u:
+        st.markdown(f"<p style='color: #94A3B8; font-size: 13px; margin: 0;'>👤 Utente: <b style='color: #60A5FA;'>{st.session_state.get('utente_corrente', '')}</b></p>", unsafe_allow_html=True)
+    with col_logout_u:
+        if st.button("🚪 LOGOUT", use_container_width=True, key="btn_logout_principale"):
+            elimina_sessione_persistente()
+            st.session_state.autenticato = False
+            st.session_state.utente_corrente = ""
+            st.session_state.is_admin = False
+            st.session_state.pagina_attiva = "login"
+            st.rerun()
 
     st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
 
-    if st.session_state.vista_giro != "CAMPO":
-        if st.session_state.is_admin:
-            col_sw1, col_sw2, col_sw3 = st.columns(3)
-        else:
-            col_sw1, col_sw2 = st.columns(2)
+    if st.session_state.is_admin:
+        col_sw1, col_sw2, col_sw3, col_sw4 = st.columns(4)
+    else:
+        col_sw1, col_sw2, col_sw3 = st.columns(3)
 
-        with col_sw1:
-            css_class = "btn-active" if st.session_state.pagina_attiva == "db" else "btn-inactive"
+    with col_sw1:
+        css_class = "btn-active" if st.session_state.pagina_attiva == "db" else "btn-inactive"
+        st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
+        if st.button("📁 CLIENTI", use_container_width=True, key="btn_db"):
+            st.session_state.pagina_attiva = "db"
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col_sw2:
+        css_class = "btn-active" if st.session_state.pagina_attiva == "giro" else "btn-inactive"
+        st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
+        if st.button("📍 GIRO", use_container_width=True, key="btn_giro"):
+            st.session_state.pagina_attiva = "giro"
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    if st.session_state.is_admin:
+        with col_sw3:
+            css_class = "btn-active" if st.session_state.pagina_attiva == "utenti" else "btn-inactive"
             st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
-            if st.button("📁 CLIENTI", use_container_width=True, key="btn_db"):
-                st.session_state.pagina_attiva = "db"
+            if st.button("🔑 UTENTI", use_container_width=True, key="btn_utenti"):
+                st.session_state.pagina_attiva = "utenti"
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+        with col_sw4:
+            css_class = "btn-active" if st.session_state.pagina_attiva == "test_file" else "btn-inactive"
+            st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
+            if st.button("📸 TEST FILE", use_container_width=True, key="btn_test_file"):
+                st.session_state.pagina_attiva = "test_file"
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        with col_sw3:
+            css_class = "btn-active" if st.session_state.pagina_attiva == "test_file" else "btn-inactive"
+            st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
+            if st.button("📸 TEST FILE", use_container_width=True, key="btn_test_file"):
+                st.session_state.pagina_attiva = "test_file"
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
-        with col_sw2:
-            css_class = "btn-active" if st.session_state.pagina_attiva == "giro" else "btn-inactive"
-            st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
-            if st.button("📍 GIRO", use_container_width=True, key="btn_giro"):
-                st.session_state.pagina_attiva = "giro"
+
+
+    col_act1, col_act2 = st.columns(2)
+
+    with col_act1:
+        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
+        if st.button("🔄 INVERTI SEQUENZA", use_container_width=True, key="btn_inverti"):
+            if not st.session_state.giro_corrente.empty:
+                st.session_state.giro_corrente = st.session_state.giro_corrente.iloc[::-1].reset_index(drop=True)
+                st.session_state.metriche_giro_corrente = None
+                st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
+                salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
+                st.session_state.giro_ottimizzato_proposto = None
+                st.session_state.metriche_ottimizzazione = None
                 st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-        if st.session_state.is_admin:
-            with col_sw3:
-                css_class = "btn-active" if st.session_state.pagina_attiva == "utenti" else "btn-inactive"
-                st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
-                if st.button("🔑 UTENTI", use_container_width=True, key="btn_utenti"):
-                    st.session_state.pagina_attiva = "utenti"
-                    st.rerun()
-                st.markdown('</div>', unsafe_allow_html=True)
+    with col_act2:
+        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
+        if st.button("🗑️ SVUOTA GIRO", use_container_width=True, key="btn_svuota"):
+            if not st.session_state.giro_corrente.empty:
+                st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO'])
+                st.session_state.giro_terminato = False
+                st.session_state.inizio_giro_reale = None
+                st.session_state.fine_giro_reale = None
+                st.session_state.metriche_giro_corrente = None
+                salva_stato_giro_persistente(st.session_state.utente_corrente)
+                salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
+                st.session_state.giro_ottimizzato_proposto = None
+                st.session_state.metriche_ottimizzazione = None
+                st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
-
-
-        col_act1, col_act2 = st.columns(2)
-
-        with col_act1:
-            st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-            if st.button("🔄 INVERTI SEQUENZA", use_container_width=True, key="btn_inverti"):
-                if not st.session_state.giro_corrente.empty:
-                    st.session_state.giro_corrente = st.session_state.giro_corrente.iloc[::-1].reset_index(drop=True)
-                    st.session_state.metriche_giro_corrente = None
-                    st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
-                    salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
-                    st.session_state.giro_ottimizzato_proposto = None
-                    st.session_state.metriche_ottimizzazione = None
-                    st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        with col_act2:
-            st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-            if st.button("🗑️ SVUOTA GIRO", use_container_width=True, key="btn_svuota"):
-                if not st.session_state.giro_corrente.empty:
-                    st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO'])
-                    st.session_state.giro_terminato = False
-                    st.session_state.inizio_giro_reale = None
-                    st.session_state.fine_giro_reale = None
-                    st.session_state.metriche_giro_corrente = None
-                    salva_stato_giro_persistente(st.session_state.utente_corrente)
-                    salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
-                    st.session_state.giro_ottimizzato_proposto = None
-                    st.session_state.metriche_ottimizzazione = None
-                    st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        col_backup1, col_backup2 = st.columns(2)
-        with col_backup1:
-            st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-            if st.button("💾 SALVA POSIZIONE GIRO", use_container_width=True, key="btn_salva_posizione"):
-                if st.session_state.giro_corrente.empty:
-                    st.warning("⚠️ Il giro è vuoto: non c'è nulla da memorizzare.")
-                elif salva_posizione_giro():
-                    st.success("💾 Ordine attuale del giro memorizzato. Potrai ripristinarlo in qualsiasi momento.")
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        with col_backup2:
-            st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-            if st.button("↩️ RIPRISTINA GIRO SALVATO", use_container_width=True, key="btn_ripristina_posizione"):
-                if ripristina_posizione_giro():
-                    st.success("↩️ Giro riportato all'ordine memorizzato.")
-                    st.rerun()
-                else:
-                    st.warning("⚠️ Nessun backup del giro disponibile per questo utente.")
-            st.markdown('</div>', unsafe_allow_html=True)
-
-
-        st.session_state.modalita_ottimizzazione = st.selectbox(
-            "🧠 Modalità ottimizzazione",
-            options=[
-                "🛣️ ROUTE",
-                "📍 ZONE",
-                "⚖️ ZONE + ROUTE",
-                "🕐 ORARI — TEST",
-            ],
-            index=[
-                "🛣️ ROUTE",
-                "📍 ZONE",
-                "⚖️ ZONE + ROUTE",
-                "🕐 ORARI — TEST",
-            ].index(st.session_state.modalita_ottimizzazione)
-            if st.session_state.modalita_ottimizzazione in [
-                "🛣️ ROUTE",
-                "📍 ZONE",
-                "⚖️ ZONE + ROUTE",
-                "🕐 ORARI — TEST",
-            ] else 2,
-            key="select_modalita_ottimizzazione",
-        )
-
-        if st.session_state.modalita_ottimizzazione == "🛣️ ROUTE":
-            st.session_state.forza_gruppamento_zona = 0
-            st.caption("🛣️ ROUTE — motore V9 attuale: ottimizzazione stradale pura, ZONA ignorata.")
-        elif st.session_state.modalita_ottimizzazione == "📍 ZONE":
-            st.session_state.forza_gruppamento_zona = 100
-            st.caption("📍 ZONE — motore V9 attuale: ordine macro-ZONA crescente, clienti ottimizzati dentro ogni ZONA.")
-        elif st.session_state.modalita_ottimizzazione == "⚖️ ZONE + ROUTE":
-            st.session_state.forza_gruppamento_zona = 50
-            st.caption("⚖️ ZONE + ROUTE — motore V9 attuale al 50%: compromesso strada + ZONA.")
-        else:
-            st.session_state.forza_gruppamento_zona = 0
-            st.caption(f"🕐 ORARI — TEST — strada + orari di apertura minima. 01:00 = orario sconosciuto, quindi nessun vincolo. Partenza usata: {_formatta_ora_partenza_reale()}.")
-
-        if st.button("🧠 OTTIMIZZA GIRO", use_container_width=True, key="btn_ottimizza"):
+    col_backup1, col_backup2 = st.columns(2)
+    with col_backup1:
+        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
+        if st.button("💾 SALVA POSIZIONE GIRO", use_container_width=True, key="btn_salva_posizione"):
             if st.session_state.giro_corrente.empty:
-                st.warning("⚠️ Il giro è vuoto.")
-            elif len(st.session_state.giro_corrente) < 2:
-                st.info("ℹ️ Servono almeno 2 fermate per ottimizzare il giro.")
+                st.warning("⚠️ Il giro è vuoto: non c'è nulla da memorizzare.")
+            elif salva_posizione_giro():
+                st.success("💾 Ordine attuale del giro memorizzato. Potrai ripristinarlo in qualsiasi momento.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col_backup2:
+        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
+        if st.button("↩️ RIPRISTINA GIRO SALVATO", use_container_width=True, key="btn_ripristina_posizione"):
+            if ripristina_posizione_giro():
+                st.success("↩️ Giro riportato all'ordine memorizzato.")
+                st.rerun()
             else:
-                try:
-                    with st.spinner("🧠 Analizzo indirizzi, percorso stradale e vincoli..."):
-                        if st.session_state.modalita_ottimizzazione == "🕐 ORARI — TEST":
-                            ora_partenza_orari = _ora_partenza_reale_minuti()
-                            df_opt, metriche_opt = ottimizza_giro_orari_test(
-                                st.session_state.giro_corrente,
-                                st.session_state.db_clienti,
-                                ora_partenza_minuti=ora_partenza_orari,
-                            )
-                        else:
-                            df_opt, metriche_opt = ottimizza_giro_free(
-                                st.session_state.giro_corrente,
-                                st.session_state.db_clienti,
-                                forza_gruppamento_zona=st.session_state.forza_gruppamento_zona
-                            )
-                    coordinate_da_salvare = metriche_opt.pop("coordinate_da_salvare", {})
-                    if coordinate_da_salvare:
-                        st.session_state.db_clienti = _aggiorna_coordinate_db(
-                            st.session_state.db_clienti,
+                st.warning("⚠️ Nessun backup del giro disponibile per questo utente.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
+    st.session_state.modalita_ottimizzazione = st.selectbox(
+        "🧠 Modalità ottimizzazione",
+        options=[
+            "🛣️ ROUTE",
+            "📍 ZONE",
+            "⚖️ ZONE + ROUTE",
+            "🕐 ORARI — TEST",
+        ],
+        index=[
+            "🛣️ ROUTE",
+            "📍 ZONE",
+            "⚖️ ZONE + ROUTE",
+            "🕐 ORARI — TEST",
+        ].index(st.session_state.modalita_ottimizzazione)
+        if st.session_state.modalita_ottimizzazione in [
+            "🛣️ ROUTE",
+            "📍 ZONE",
+            "⚖️ ZONE + ROUTE",
+            "🕐 ORARI — TEST",
+        ] else 2,
+        key="select_modalita_ottimizzazione",
+    )
+
+    if st.session_state.modalita_ottimizzazione == "🛣️ ROUTE":
+        st.session_state.forza_gruppamento_zona = 0
+        st.caption("🛣️ ROUTE — motore V9 attuale: ottimizzazione stradale pura, ZONA ignorata.")
+    elif st.session_state.modalita_ottimizzazione == "📍 ZONE":
+        st.session_state.forza_gruppamento_zona = 100
+        st.caption("📍 ZONE — motore V9 attuale: ordine macro-ZONA crescente, clienti ottimizzati dentro ogni ZONA.")
+    elif st.session_state.modalita_ottimizzazione == "⚖️ ZONE + ROUTE":
+        st.session_state.forza_gruppamento_zona = 50
+        st.caption("⚖️ ZONE + ROUTE — motore V9 attuale al 50%: compromesso strada + ZONA.")
+    else:
+        st.session_state.forza_gruppamento_zona = 0
+        st.caption("🕐 ORARI — TEST — strada + orari di apertura minima. 01:00 = orario sconosciuto, quindi nessun vincolo.")
+
+    if st.button("🧠 OTTIMIZZA GIRO", use_container_width=True, key="btn_ottimizza"):
+        if st.session_state.giro_corrente.empty:
+            st.warning("⚠️ Il giro è vuoto.")
+        elif len(st.session_state.giro_corrente) < 2:
+            st.info("ℹ️ Servono almeno 2 fermate per ottimizzare il giro.")
+        else:
+            try:
+                with st.spinner("🧠 Analizzo indirizzi, percorso stradale e vincoli..."):
+                    if st.session_state.modalita_ottimizzazione == "🕐 ORARI — TEST":
+                        df_opt, metriche_opt = ottimizza_giro_orari_test(
                             st.session_state.giro_corrente,
-                            coordinate_da_salvare
+                            st.session_state.db_clienti,
+                            ora_partenza_minuti=300,
                         )
-                        salva_coordinate_su_google_sheets(st.session_state.db_clienti)
-                    st.session_state.giro_ottimizzato_proposto = df_opt
-                    st.session_state.metriche_ottimizzazione = metriche_opt
-                    st.success("Giro ottimizzato pronto: controllalo e poi scegli se applicarlo.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Ottimizzazione non riuscita: {e}")
+                    else:
+                        df_opt, metriche_opt = ottimizza_giro_free(
+                            st.session_state.giro_corrente,
+                            st.session_state.db_clienti,
+                            forza_gruppamento_zona=st.session_state.forza_gruppamento_zona
+                        )
+                coordinate_da_salvare = metriche_opt.pop("coordinate_da_salvare", {})
+                if coordinate_da_salvare:
+                    st.session_state.db_clienti = _aggiorna_coordinate_db(
+                        st.session_state.db_clienti,
+                        st.session_state.giro_corrente,
+                        coordinate_da_salvare
+                    )
+                    salva_coordinate_su_google_sheets(st.session_state.db_clienti)
+                st.session_state.giro_ottimizzato_proposto = df_opt
+                st.session_state.metriche_ottimizzazione = metriche_opt
+                st.success("Giro ottimizzato pronto: controllalo e poi scegli se applicarlo.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Ottimizzazione non riuscita: {e}")
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
@@ -2893,9 +2871,8 @@ else:
         # Il RIEPILOGO resta disponibile tramite il relativo pulsante e mostra tutti
         # i clienti, con quelli gestiti in fondo e leggermente offuscati.
 
-        # V10.3.2: in CAMPO le tre tab PREPARAZIONE/RIEPILOGO/CAMPO
-        # non vengono mostrate: il ritorno al RIEPILOGO avviene dal comando dedicato.
-        if not st.session_state.giro_corrente.empty and st.session_state.vista_giro != "CAMPO":
+        # V10.2.10: tre viste separate.
+        if not st.session_state.giro_corrente.empty:
             v1, v2, v3 = st.columns(3)
             with v1:
                 if st.button("🛠️ PREPARAZIONE", use_container_width=True, type="primary" if st.session_state.vista_giro == "PREPARAZIONE" else "secondary", key="vista_preparazione"):
@@ -2911,7 +2888,7 @@ else:
                     st.rerun()
             st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
         # Resoconto scaricabile: un solo tasto, sempre aggiornato con lo stato corrente.
-        if st.session_state.pagina_attiva == "giro" and not st.session_state.giro_corrente.empty and st.session_state.vista_giro != "CAMPO":
+        if st.session_state.pagina_attiva == "giro" and not st.session_state.giro_corrente.empty:
                 # Esporta il resoconto del giro in Excel.
                 # Il file viene rigenerato ad ogni aggiornamento della pagina, quindi
                 # contiene sempre lo stato consegna piu' recente senza usare un secondo tasto.
@@ -3051,22 +3028,24 @@ else:
                 except Exception:
                     pass
 
-        if st.session_state.vista_giro != "CAMPO":
-            col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
-            col_m1.metric("Fermate Totali", f"{tot_clienti}")
-            col_m2.metric("Pezzi Totali", f"{tot_qta}")
-            col_m3.metric("Comuni", f"{tot_comuni}")
+        col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
+        col_m1.metric("Fermate Totali", f"{tot_clienti}")
+        col_m2.metric("Pezzi Totali", f"{tot_qta}")
+        col_m3.metric("Comuni", f"{tot_comuni}")
+        if st.session_state.vista_giro == "CAMPO":
+            col_m4.metric("KM Rimanenti", f"{km_visualizzati:.1f}" if km_visualizzati is not None else "—")
+        else:
             col_m4.metric("KM Totali", f"{km_visualizzati:.1f}" if km_visualizzati is not None else "—")
-            if minuti_visualizzati is not None:
-                ore = int(minuti_visualizzati // 60)
-                minuti = int(round(minuti_visualizzati - ore * 60))
-                if minuti == 60:
-                    ore += 1
-                    minuti = 0
-                tempo_display = f"{ore}h {minuti:02d}m" if ore > 0 else f"{minuti} min"
-            else:
-                tempo_display = "—"
-            col_m5.metric("Tempo Giro", tempo_display)
+        if minuti_visualizzati is not None:
+            ore = int(minuti_visualizzati // 60)
+            minuti = int(round(minuti_visualizzati - ore * 60))
+            if minuti == 60:
+                ore += 1
+                minuti = 0
+            tempo_display = f"{ore}h {minuti:02d}m" if ore > 0 else f"{minuti} min"
+        else:
+            tempo_display = "—"
+        col_m5.metric("Tempo rimanente" if st.session_state.vista_giro == "CAMPO" else "Tempo Giro", tempo_display)
 
         # Dettaglio tempi del giro: SEMPRE visibile quando esiste un giro,
         # indipendentemente dal tipo di ottimizzazione o dal fatto che sia stato
@@ -3105,14 +3084,13 @@ else:
         viaggio_corrente = float(minuti_visualizzati or 0)
         tempo_reale_corrente = viaggio_corrente + attesa_corrente + servizio_corrente
 
-        if st.session_state.vista_giro != "CAMPO":
-            st.markdown("**Dettaglio tempi reali del giro**")
-            d1, d2, d3 = st.columns(3)
-            d1.metric("⏳ Attesa totale", f"{int(round(attesa_corrente))} min")
-            d2.metric("🅿️ Servizio totale", f"{int(round(servizio_corrente))} min")
-            d3.metric("🕐 Tempo totale reale giro", _formatta_durata_metriche(tempo_reale_corrente))
+        st.markdown("**Dettaglio tempi reali del giro**")
+        d1, d2, d3 = st.columns(3)
+        d1.metric("⏳ Attesa totale", f"{int(round(attesa_corrente))} min")
+        d2.metric("🅿️ Servizio totale", f"{int(round(servizio_corrente))} min")
+        d3.metric("🕐 Tempo totale reale giro", _formatta_durata_metriche(tempo_reale_corrente))
 
-            st.markdown("---")
+        st.markdown("---")
 
         def _timestamp_oggi_alle_0520():
             """Timestamp locale Europe/Rome di oggi alle 05:20, usato come partenza implicita."""
@@ -3294,279 +3272,25 @@ else:
                 </div>
                 ''' , unsafe_allow_html=True)
             elif st.session_state.vista_giro == "CAMPO":
-                # V10.3.3: dashboard CAMPO pulita e ottimizzata per l'uso durante la guida.
-                # Palette e icone restano coerenti con l'interfaccia VanGo.
-                st.markdown("""
-                <style>
-                    /* CAMPO mobile: tutto resta responsive. Solo la riga cliente
-                       mantiene cliente a sinistra + comando stato a destra. */
-                    @media (max-width: 640px) {
-                        [class*="st-key-campo_riga_"] {
-                            width: 100% !important;
-                            max-width: 100% !important;
-                            min-width: 0 !important;
-                            box-sizing: border-box !important;
-                            overflow: hidden !important;
-                        }
-                        [class*="st-key-campo_riga_"] [data-testid="stHorizontalBlock"] {
-                            width: 100% !important;
-                            max-width: 100% !important;
-                            min-width: 0 !important;
-                            flex-wrap: nowrap !important;
-                            box-sizing: border-box !important;
-                            align-items: center !important;
-                        }
-                        [class*="st-key-campo_riga_"] [data-testid="column"] {
-                            min-width: 0 !important;
-                            box-sizing: border-box !important;
-                        }
-                        [class*="st-key-campo_riga_"] [data-testid="column"]:first-child {
-                            flex: 1 1 auto !important;
-                            width: auto !important;
-                            min-width: 0 !important;
-                            overflow: hidden !important;
-                        }
-                        [class*="st-key-campo_riga_"] [data-testid="column"]:last-child {
-                            flex: 0 0 46px !important;
-                            width: 46px !important;
-                            max-width: 46px !important;
-                            min-width: 46px !important;
-                            padding: 0 !important;
-                            margin: 0 !important;
-                        }
-                    }
-
-                    /* La card cliente non deve mai superare la larghezza disponibile. */
-                    [class*="st-key-campo_riga_"] {
-                        width: 100% !important;
-                        max-width: 100% !important;
-                        min-width: 0 !important;
-                        box-sizing: border-box !important;
-                        overflow: hidden !important;
-                        padding-top: 0 !important;
-                        padding-bottom: 0 !important;
-                    }
-
-                    /* Il trigger del popover e' SOLO la freccia: nessun riquadro bianco.
-                       La larghezza della freccia non modifica la larghezza della card. */
-                    [class*="st-key-campo_stato_menu_"] {
-                        width: 46px !important;
-                        max-width: 46px !important;
-                        min-width: 46px !important;
-                        padding: 0 !important;
-                        margin: 0 0 0 auto !important;
-                        box-sizing: border-box !important;
-                    }
-                    /* Fallback robusto: nelle versioni di Streamlit in cui la key del
-                       popover non avvolge il pulsante trigger, prendiamo direttamente
-                       il contenitore stPopover. */
-                    [data-testid="stPopover"] {
-                        width: 46px !important;
-                        max-width: 46px !important;
-                        min-width: 46px !important;
-                        padding: 0 !important;
-                        margin: 0 0 0 auto !important;
-                        box-sizing: border-box !important;
-                    }
-                    [data-testid="stPopover"] > button,
-                    [data-testid="stPopover"] button {
-                        width: 46px !important;
-                        max-width: 46px !important;
-                        min-width: 46px !important;
-                        height: 42px !important;
-                        min-height: 42px !important;
-                        padding: 0 !important;
-                        margin: 0 !important;
-                        border: 0 !important;
-                        border-radius: 8px !important;
-                        background: transparent !important;
-                        box-shadow: none !important;
-                        color: {colore_freccia} !important;
-                        font-size: 27px !important;
-                        font-weight: 900 !important;
-                        line-height: 42px !important;
-                        text-align: center !important;
-                    }
-                    /* V10.3.19: selettore robusto del trigger popover. */
-                    button[aria-haspopup="dialog"] {{
-                        width: 100% !important;
-                        max-width: 100% !important;
-                        min-width: 0 !important;
-                        box-sizing: border-box !important;
-                        justify-content: flex-start !important;
-                        text-align: left !important;
-                        margin-left: 0 !important;
-                        margin-right: 0 !important;
-                    }}
-                    button[aria-haspopup="dialog"] > div,
-                    button[aria-haspopup="dialog"] > div > div,
-                    button[aria-haspopup="dialog"] [data-testid="stMarkdownContainer"],
-                    button[aria-haspopup="dialog"] [data-testid="stMarkdownContainer"] > div,
-                    button[aria-haspopup="dialog"] p,
-                    button[aria-haspopup="dialog"] span {{
-                        width: 100% !important;
-                        max-width: 100% !important;
-                        min-width: 0 !important;
-                        box-sizing: border-box !important;
-                        margin-left: 0 !important;
-                        margin-right: 0 !important;
-                        padding-left: 0 !important;
-                        padding-right: 0 !important;
-                        text-align: left !important;
-                        justify-content: flex-start !important;
-                        align-items: flex-start !important;
-                        align-self: flex-start !important;
-                    }}
-                    button[aria-haspopup="dialog"] svg {{
-                        display: none !important;
-                        width: 0 !important;
-                        max-width: 0 !important;
-                        flex: 0 0 0 !important;
-                    }}
-                    [data-testid="stPopover"] > button:hover,
-                    [data-testid="stPopover"] > button:focus,
-                    [data-testid="stPopover"] > button:active {
-                        background: transparent !important;
-                        box-shadow: none !important;
-                    }
-
-                    [class*="st-key-campo_stato_menu_"] button {
-                        width: 46px !important;
-                        max-width: 46px !important;
-                        min-width: 46px !important;
-                        height: 42px !important;
-                        min-height: 42px !important;
-                        padding: 0 !important;
-                        margin: 0 !important;
-                        border: 0 !important;
-                        border-radius: 8px !important;
-                        background: transparent !important;
-                        box-shadow: none !important;
-                        color: {colore_freccia} !important;
-                        font-size: 27px !important;
-                        font-weight: 900 !important;
-                        line-height: 42px !important;
-                        text-align: center !important;
-                    }
-                    [class*="st-key-campo_stato_menu_"] button:hover,
-                    [class*="st-key-campo_stato_menu_"] button:focus,
-                    [class*="st-key-campo_stato_menu_"] button:active {
-                        background: transparent !important;
-                        box-shadow: none !important;
-                    }
-                    @media (max-width: 640px) {
-                        [class*="st-key-campo_stato_menu_"] {
-                            width: 46px !important;
-                            max-width: 46px !important;
-                            min-width: 46px !important;
-                        }
-                        [class*="st-key-campo_stato_menu_"] button {
-                            width: 46px !important;
-                            max-width: 46px !important;
-                            min-width: 46px !important;
-                            font-size: 25px !important;
-                        }
-                    }
-                    .campo-metric-card {
-                        background: linear-gradient(135deg, #142033 0%, #0F1724 100%);
-                        border: 1px solid #26384F;
-                        border-radius: 14px;
-                        padding: 14px 15px;
-                        min-height: 82px;
-                        box-sizing: border-box;
-                    }
-                    .campo-metric-label { color:#A9C4EA; font-size:11px; font-weight:700; margin-bottom:5px; }
-                    .campo-metric-value { color:#FFFFFF; font-size:22px; font-weight:800; line-height:1.05; }
-                    .campo-metric-sub { color:#7894BC; font-size:11px; margin-top:4px; }
-                    .campo-next-card {
-                        background: linear-gradient(135deg, #142033 0%, #101A29 100%);
-                        border:1px solid #26384F; border-radius:14px; padding:14px 16px; margin:4px 0 8px 0;
-                    }
-                    .campo-next-title { color:#FFFFFF; font-size:16px; font-weight:800; }
-                    .campo-next-sub { color:#A9C4EA; font-size:13px; margin-top:3px; }
-                    .campo-next-badge { color:#FFFFFF; background:#1E293B; border:1px solid #334A68; border-radius:10px; padding:7px 10px; font-size:11px; font-weight:700; }
-                    .campo-return-space { min-height: 1px; }
-                    /* Colori dei soli comandi operativi presenti nella vista CAMPO. */
-                    button[data-testid="stBaseButton-primary"] { background:#10B981 !important; border-color:#10B981 !important; color:#FFFFFF !important; border-radius:14px !important; font-weight:800 !important; }
-                    button[data-testid="stBaseButton-secondary"] { background:#111C2B !important; border-color:#334A68 !important; color:#FFFFFF !important; border-radius:14px !important; font-weight:800 !important; }
-                </style>
+                st.markdown("<div style='text-align:center; color:#94A3B8; font-size:14px; margin-bottom:12px;'>🚚 MODALITÀ CAMPO</div>", unsafe_allow_html=True)
+                st.markdown('<div id="avvia-percorso-top"></div>', unsafe_allow_html=True)
+                st.markdown(f"""
+                    <a href="{maps_url}" target="_blank" style="text-decoration:none;">
+                        <button style="width:100%; background-color:#2563EB; color:white; border:none; border-radius:25px; height:52px; font-weight:bold; font-size:16px; box-shadow:0 4px 10px rgba(37,99,235,0.4);">
+                            🗺️ AVVIA PERCORSO
+                        </button>
+                    </a>
                 """, unsafe_allow_html=True)
-
-                # Azioni principali: verde = inizio, blu = navigazione, scuro = fine.
-                a1, a2, a3 = st.columns(3, gap="small")
-                with a1:
-                    if not st.session_state.get("giro_terminato", False) and st.session_state.get("inizio_giro_reale") is None:
-                        if st.button("▶️  INIZIA GIRO", use_container_width=True, type="primary", key="btn_inizia_giro"):
-                            st.session_state.inizio_giro_reale = time.time()
-                            st.session_state.fine_giro_reale = None
-                            st.session_state.giro_terminato = False
-                            salva_stato_giro_persistente(st.session_state.utente_corrente)
-                            st.rerun()
-                    else:
-                        st.button("▶️  GIRO INIZIATO", use_container_width=True, disabled=True, key="btn_giro_iniziato")
-                with a2:
-                    st.markdown(f"""
-                        <a href="{maps_url}" target="_blank" style="text-decoration:none;">
-                            <button style="width:100%; background:#2563EB; color:white; border:1px solid #3B82F6; border-radius:14px; height:46px; font-weight:800; font-size:14px; box-shadow:0 4px 12px rgba(37,99,235,.28);">🗺️  AVVIA PERCORSO</button>
-                        </a>
-                    """, unsafe_allow_html=True)
-                with a3:
-                    if tutte_gestite and not st.session_state.get("giro_terminato", False):
-                        if st.button("🏁  TERMINA GIRO", use_container_width=True, type="secondary", key="btn_termina_giro_dashboard"):
-                            if st.session_state.get("inizio_giro_reale") is None:
-                                st.session_state.inizio_giro_reale = _timestamp_oggi_alle_0520()
-                            st.session_state.fine_giro_reale = time.time()
-                            st.session_state.giro_terminato = True
-                            salva_stato_giro_persistente(st.session_state.utente_corrente)
-                            st.rerun()
-                    else:
-                        st.button("🏁  TERMINA GIRO", use_container_width=True, disabled=True, key="btn_termina_giro_dashboard_disabled")
-
                 if not st.session_state.get("giro_terminato", False) and st.session_state.get("inizio_giro_reale") is None:
-                    st.caption("🕐 Se non premi INIZIA GIRO, per il calcolo effettivo verranno usate le 05:20.")
+                    if st.button("▶️ INIZIA GIRO", use_container_width=True, type="primary", key="btn_inizia_giro"):
+                        st.session_state.inizio_giro_reale = time.time()
+                        st.session_state.fine_giro_reale = None
+                        st.session_state.giro_terminato = False
+                        salva_stato_giro_persistente(st.session_state.utente_corrente)
+                        st.rerun()
                 elif st.session_state.get("inizio_giro_reale") is not None and not st.session_state.get("giro_terminato", False):
-                    st.caption(f"🕐 Giro iniziato alle {_formatta_ora_partenza_reale()}: il tempo effettivo viene calcolato fino a TERMINA GIRO.")
-
-                # Ultima posizione conosciuta = ultima consegna gestita; altrimenti deposito.
-                df_pos = st.session_state.giro_corrente.copy()
-                if "STATO" not in df_pos.columns:
-                    df_pos["STATO"] = STATO_DA_FARE
-                stati_pos = df_pos["STATO"].fillna("").astype(str).str.upper()
-                mask_gestiti_pos = stati_pos.str.contains("FATTO|PARZIALE|RESPINTO", regex=True)
-                gestiti_pos = df_pos[mask_gestiti_pos]
-                if not gestiti_pos.empty:
-                    ultima = gestiti_pos.iloc[-1]
-                    posizione_label = str(ultima.get("VIA", "")).strip() or "Ultima consegna"
-                    posizione_comune = str(ultima.get("COMUNE", "")).strip()
-                else:
-                    posizione_label = DEPOSITO_VANGO
-                    posizione_comune = "Punto di partenza"
-
-                df_metriche_campo = df_pos[~df_pos["STATO"].fillna("").astype(str).isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO])].copy()
-                residui_campo = len(df_metriche_campo)
-                gestiti_campo = max(0, len(df_pos) - residui_campo)
-                km_campo_display = km_visualizzati if km_visualizzati is not None else 0.0
-                minuti_campo_display = minuti_visualizzati if minuti_visualizzati is not None else 0.0
-                ore_campo = int(float(minuti_campo_display) // 60)
-                min_campo = int(round(float(minuti_campo_display) - ore_campo * 60))
-                if min_campo == 60:
-                    ore_campo += 1
-                    min_campo = 0
-                tempo_campo_display = f"{ore_campo} h {min_campo:02d} min" if ore_campo else f"{min_campo} min"
-
-                m1, m2, m3, m4 = st.columns(4, gap="small")
-                with m1:
-                    st.markdown(f'<div class="campo-metric-card"><div class="campo-metric-label">📦 CONSEGNE RIMANENTI</div><div class="campo-metric-value">{residui_campo} / {len(df_pos)}</div><div class="campo-metric-sub">{gestiti_campo} gestite</div></div>', unsafe_allow_html=True)
-                with m2:
-                    st.markdown(f'<div class="campo-metric-card"><div class="campo-metric-label">🛣️ KM RESIDUI</div><div class="campo-metric-value">{float(km_campo_display):.1f} km</div><div class="campo-metric-sub">incluso rientro in sede</div></div>', unsafe_allow_html=True)
-                with m3:
-                    st.markdown(f'<div class="campo-metric-card"><div class="campo-metric-label">🕐 TEMPO RESIDUO</div><div class="campo-metric-value">{tempo_campo_display}</div><div class="campo-metric-sub">incluso rientro in sede</div></div>', unsafe_allow_html=True)
-                with m4:
-                    st.markdown(f'<div class="campo-metric-card"><div class="campo-metric-label">📍 POSIZIONE ATTUALE</div><div class="campo-metric-value" style="font-size:15px;">{posizione_label}</div><div class="campo-metric-sub">{posizione_comune}</div></div>', unsafe_allow_html=True)
-
-                st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-                st.markdown("<div style='font-size:16px; font-weight:800; color:#FFFFFF; margin:0 0 8px 4px;'>📍 PROSSIMA CONSEGNA</div>", unsafe_allow_html=True)
-
+                    st.caption("🕐 Giro iniziato: il tempo effettivo viene calcolato fino a TERMINA GIRO.")
+                st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
                 # CAMPO: mostra SOLO le consegne ancora da gestire.
                 # Il filtro viene applicato direttamente al giro reale, prima della
                 # preparazione grafica, cosi' i clienti gestiti non possono rientrare
@@ -3611,117 +3335,20 @@ else:
                     if stato_attuale not in STATI_CONSEGNA:
                         stato_attuale = STATO_DA_FARE
 
-                    # V10.3.20: CAMPO smartphone - niente popover.
-                    # Il nome cliente e' un normale pulsante Streamlit, quindi il testo
-                    # viene allineato realmente a sinistra. Al click si apre subito sotto
-                    # un piccolo menu con i quattro stati. Niente freccia e niente CSS
-                    # dipendente dalla struttura interna di st.popover.
-                    if "campo_menu_aperto" not in st.session_state:
-                        st.session_state.campo_menu_aperto = None
-
-                    with st.container(key=f"campo_riga_{idx_reale}"):
-                        stato_nuovo = stato_attuale
-
-                        st.markdown(f"""
-                        <style>
-                        [class*="st-key-campo_riga_{idx_reale}"] {{
-                            width: 100% !important;
-                            max-width: 100% !important;
-                            min-width: 0 !important;
-                            box-sizing: border-box !important;
-                            overflow: hidden !important;
-                            padding: 0 !important;
-                            margin: 0 !important;
-                        }}
-                        [class*="st-key-campo_riga_{idx_reale}"] [data-testid="stVerticalBlock"] {{
-                            gap: 0 !important;
-                            padding: 0 !important;
-                            margin: 0 !important;
-                        }}
-                        [class*="st-key-campo_cliente_btn_{idx_reale}"] {{
-                            width: 100% !important;
-                            max-width: 100% !important;
-                            margin: 0 !important;
-                            padding: 0 !important;
-                        }}
-                        [class*="st-key-campo_cliente_btn_{idx_reale}"] button {{
-                            width: 100% !important;
-                            max-width: 100% !important;
-                            min-width: 0 !important;
-                            min-height: 30px !important;
-                            height: 30px !important;
-                            padding: 0 6px !important;
-                            margin: 0 !important;
-                            border: 1px solid #39475A !important;
-                            border-radius: 8px !important;
-                            background: #1E293B !important;
-                            box-shadow: none !important;
-                            color: #FFFFFF !important;
-                            font-size: 16px !important;
-                            font-weight: 800 !important;
-                            line-height: 30px !important;
-                            text-align: left !important;
-                            justify-content: flex-start !important;
-                            align-items: center !important;
-                            white-space: nowrap !important;
-                            overflow: hidden !important;
-                            text-overflow: ellipsis !important;
-                        }}
-                        [class*="st-key-campo_cliente_btn_{idx_reale}"] button > div,
-                        [class*="st-key-campo_cliente_btn_{idx_reale}"] button > div > div,
-                        [class*="st-key-campo_cliente_btn_{idx_reale}"] button p,
-                        [class*="st-key-campo_cliente_btn_{idx_reale}"] button span {{
-                            width: auto !important;
-                            max-width: 100% !important;
-                            margin: 0 !important;
-                            padding: 0 !important;
-                            text-align: left !important;
-                            justify-content: flex-start !important;
-                        }}
-                        [class*="st-key-campo_menu_stati_{idx_reale}"] {{
-                            width: 100% !important;
-                            max-width: 100% !important;
-                            margin: 0 !important;
-                            padding: 0 !important;
-                        }}
-                        [class*="st-key-campo_menu_stati_{idx_reale}"] button {{
-                            min-height: 34px !important;
-                            margin: 2px 0 !important;
-                            font-size: 14px !important;
-                        }}
-                        </style>
-                        """, unsafe_allow_html=True)
-
-                        if st.button(
-                            str(row['CLIENTE']),
-                            key=f"campo_cliente_btn_{idx_reale}",
-                            use_container_width=True,
-                        ):
-                            if st.session_state.campo_menu_aperto == idx_reale:
-                                st.session_state.campo_menu_aperto = None
-                            else:
-                                st.session_state.campo_menu_aperto = idx_reale
-                            st.rerun()
-
-                        if st.session_state.campo_menu_aperto == idx_reale:
-                            with st.container(key=f"campo_menu_stati_{idx_reale}"):
-                                st.caption("Stato consegna")
-                                # Menu stati verticale: una voce sotto l'altra.
-                                for opzione_stato in STATI_CONSEGNA:
-                                    if st.button(
-                                        opzione_stato,
-                                        key=f"campo_stato_opzione_{idx_reale}_{opzione_stato}",
-                                        use_container_width=True,
-                                    ):
-                                        stato_nuovo = opzione_stato
-                                        st.session_state.campo_menu_aperto = None
-                                        st.session_state[f"campo_stato_scelto_{idx_reale}"] = opzione_stato
-                                        st.rerun()
-
-                        stato_scelto = st.session_state.pop(f"campo_stato_scelto_{idx_reale}", None)
-                        if stato_scelto in STATI_CONSEGNA:
-                            stato_nuovo = stato_scelto
-
+                    st.markdown(f"""
+                    <div class="clean-card" style="opacity:1.0; margin-bottom:6px;">
+                        <div class="clean-badge">{idx + 1}</div>
+                        <div class="clean-content">
+                            <div class="clean-title">{row['CLIENTE']}</div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    stato_nuovo = st.selectbox(
+                        "Stato",
+                        options=STATI_CONSEGNA,
+                        index=STATI_CONSEGNA.index(stato_attuale),
+                        key=f"stato_consegna_campo_{idx_reale}_{row['CLIENTE']}"
+                    )
                     if stato_nuovo != stato_attuale:
                         # Aggiornamento immediato del dataframe reale: il cliente
                         # deve sparire dalla CAMPO al rerun successivo.
@@ -3843,6 +3470,48 @@ else:
                 ''' , unsafe_allow_html=True)
         else:
             st.info("Nessuna fermata nel tuo giro corrente. Clicca in alto su '📁 CLIENTI' per aggiungerne.")
+
+    # ==========================================
+    # SCHERMATA TEST: IMPORTAZIONE GIRO DA JPEG
+    # ==========================================
+    elif st.session_state.pagina_attiva == "test_file":
+        st.markdown("# 📸 Test importazione giro")
+        st.caption("Versione di prova: carichiamo il JPEG e verifichiamo cosa riesce a leggere l'OCR. In questa fase NON viene modificato il giro e NON viene scritto nulla su Google Sheets.")
+
+        st.info("📋 Formato previsto del foglio: **CLIENTE · COMUNE · VIA · COLLI**. Le altre colonne potranno essere ignorate durante l'importazione.")
+
+        file_jpeg = st.file_uploader(
+            "Carica la foto del foglio",
+            type=["jpg", "jpeg"],
+            key="test_file_jpeg",
+            help="Se possibile usa una foto nitida, dritta e con tutto il foglio visibile."
+        )
+
+        if file_jpeg is not None:
+            try:
+                img_test = Image.open(file_jpeg)
+                st.success(f"✅ JPEG caricato: {file_jpeg.name} — {img_test.width} × {img_test.height} px")
+                st.image(img_test, caption="Foto ricevuta", use_container_width=True)
+
+                if st.button("🔎 AVVIA OCR DI TEST", use_container_width=True, type="primary", key="btn_ocr_test"):
+                    with st.spinner("🔎 Leggo il testo della foto..."):
+                        testo_ocr = _ocr_jpeg(img_test)
+                    st.session_state.test_ocr_risultato = testo_ocr
+                    st.rerun()
+
+                if st.session_state.get("test_ocr_risultato") is not None:
+                    st.markdown("### 📝 Testo riconosciuto")
+                    testo = st.session_state.test_ocr_risultato
+                    if testo:
+                        st.text_area("OCR", value=testo, height=320, key="test_ocr_textarea")
+                        st.success("✅ OCR completato. Il prossimo passo sarà trasformare questo testo nelle colonne CLIENTE / COMUNE / VIA / COLLI e confrontarlo con Foglio1.")
+                    else:
+                        st.warning("⚠️ OCR completato ma non è stato riconosciuto testo. Proveremo un preprocessing migliore o un altro metodo.")
+            except Exception as e:
+                st.error(f"❌ Impossibile leggere il JPEG: {e}")
+
+        st.markdown("---")
+        st.caption("🧪 QUESTA È SOLO LA PAGINA DI TEST. Il giro reale verrà toccato solo quando avremo verificato che il riconoscimento del tuo foglio funziona bene.")
 
     # ==========================================
     # SCHERMATA 2: INSERISCI CLIENTE
