@@ -156,7 +156,7 @@ OSRM_TABLE_URL = "https://router.project-osrm.org/table/v1/driving"
 # In questo modo il deposito non dipende dalla geocodifica pubblica.
 COORDINATE_DEPOSITO_VANGO = (45.59085, 9.384842)
 # Tempo medio fisso di parcheggio + scarico per ogni fermata.
-MINUTI_SERVIZIO_PER_FERMATA = 6
+MINUTI_SERVIZIO_PER_FERMATA = 12
 
 def _geocodifica_free(indirizzo):
     """Geocodifica gratuita con piu' fornitori e protezione dai limiti.
@@ -1121,7 +1121,7 @@ def _formatta_ora_minuti(minuti):
     return f"{ore:02d}:{mins:02d}"
 
 
-def _simula_tempo_percorso_orari(ordine, durate, orari_apertura, ora_partenza_minuti=300, minuti_servizio=6):
+def _simula_tempo_percorso_orari(ordine, durate, orari_apertura, ora_partenza_minuti=300, minuti_servizio=MINUTI_SERVIZIO_PER_FERMATA):
     """Simula l'orario reale fermata per fermata.
 
     Regola: si viaggia, si arriva, si attende solo se necessario per l'apertura,
@@ -1337,7 +1337,7 @@ def ottimizza_giro_orari_test(df_giro, df_db=None, ora_partenza_minuti=300):
     simulazione = _simula_tempo_percorso_orari(
         ordine_ottimizzato, durate, orari_apertura,
         ora_partenza_minuti=ora_partenza_minuti,
-        minuti_servizio=6,
+        minuti_servizio=MINUTI_SERVIZIO_PER_FERMATA,
     )
     if simulazione is None:
         raise ValueError("Impossibile simulare il tempo del percorso ORARI.")
@@ -1356,8 +1356,8 @@ def ottimizza_giro_orari_test(df_giro, df_db=None, ora_partenza_minuti=300):
 
     metriche = {
         "metodo": "ORARI — TEST + 6 MIN/FERMATA",
-        "minuti_servizio_per_fermata": 6,
-        "minuti_servizio_totali": len(df_originale) * 6,
+        "minuti_servizio_per_fermata": MINUTI_SERVIZIO_PER_FERMATA,
+        "minuti_servizio_totali": len(df_originale) * MINUTI_SERVIZIO_PER_FERMATA,
         "fermate": len(df_originale),
         "km_originali": km_originali / 1000.0,
         "min_originali": minuti_originali / 60.0,
@@ -1370,7 +1370,7 @@ def ottimizza_giro_orari_test(df_giro, df_db=None, ora_partenza_minuti=300):
         "orari_sconosciuti": orari_sconosciuti,
         "ora_partenza": _formatta_ora_minuti(ora_partenza_minuti),
         "attesa_totale_min": round(sum(attese), 1),
-        "servizio_totale_min": len(df_originale) * 6,
+        "servizio_totale_min": len(df_originale) * MINUTI_SERVIZIO_PER_FERMATA,
         "tempo_totale_reale_min": round(simulazione["fine"] - ora_partenza_minuti, 1),
         "coordinate_da_salvare": coordinate_da_salvare,
     }
@@ -2046,6 +2046,12 @@ if 'clienti_selezionati_m' not in st.session_state:
 
 if 'vista_pulita' not in st.session_state:
     st.session_state.vista_pulita = False
+if 'vista_giro' not in st.session_state:
+    st.session_state.vista_giro = 'PREPARAZIONE'
+if 'previsione_giro' not in st.session_state:
+    st.session_state.previsione_giro = None
+if 'inizio_giro_reale' not in st.session_state:
+    st.session_state.inizio_giro_reale = None
 
 if 'forza_gruppamento_zona' not in st.session_state:
     st.session_state.forza_gruppamento_zona = 50
@@ -2166,7 +2172,7 @@ st.markdown("""
     .clean-title { font-size: 16px; font-weight: bold; color: #FFFFFF; margin-bottom: 2px; }
     .clean-subtitle { font-size: 13px; color: #94A3B8; }
 
-    /* Cestino VISTA RIEPILOGO: solo icona, in alto a destra dentro la card. */
+    /* Layout card riepilogo: nessun cestino. */
     div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stHorizontalBlock"] > div:nth-child(3) {
         display: flex;
         align-items: flex-start;
@@ -2553,7 +2559,7 @@ else:
 
             t_viaggio = m.get("min_ottimizzati", 0)
             t_attesa = m.get("attesa_totale_min", 0)
-            t_servizio = m.get("servizio_totale_min", len(df_proposto) * 6)
+            t_servizio = m.get("servizio_totale_min", len(df_proposto) * MINUTI_SERVIZIO_PER_FERMATA)
             t_reale = m.get("tempo_totale_reale_min", t_viaggio + t_attesa + t_servizio)
 
             st.markdown("**Dettaglio tempi del giro ORARI**")
@@ -2580,12 +2586,23 @@ else:
                     df_da_applicare = df_da_applicare.drop(columns=['ARRIVO STIMATO'])
                 st.session_state.giro_corrente = df_da_applicare
                 st.session_state.metriche_giro_corrente = None
+                # V10.2.9: conserva la previsione del tempo totale per il confronto finale.
+                if str(m.get("metodo", "")).startswith("ORARI"):
+                    tempo_previsto = float(m.get("tempo_totale_reale_min", 0) or 0)
+                else:
+                    tempo_previsto = float(m.get("min_ottimizzati", 0) or 0) + len(df_da_applicare) * MINUTI_SERVIZIO_PER_FERMATA
+                st.session_state.previsione_giro = {
+                    "minuti": tempo_previsto,
+                    "metodo": str(m.get("metodo", "")),
+                    "firma": _firma_ordine_giro(df_da_applicare),
+                }
+                st.session_state.inizio_giro_reale = None
                 # Conserva i dati temporali ORARI del giro appena applicato.
                 if str(m.get("metodo", "")).startswith("ORARI"):
                     st.session_state.metriche_tempo_orari_corrente = {
                         "firma": _firma_ordine_giro(df_da_applicare),
                         "attesa_totale_min": float(m.get("attesa_totale_min", 0) or 0),
-                        "servizio_totale_min": float(m.get("servizio_totale_min", len(df_da_applicare) * 6) or 0),
+                        "servizio_totale_min": float(m.get("servizio_totale_min", len(df_da_applicare) * MINUTI_SERVIZIO_PER_FERMATA) or 0),
                         "tempo_totale_reale_min": float(m.get("tempo_totale_reale_min", 0) or 0),
                     }
                 else:
@@ -2628,12 +2645,21 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
-        # Vista riepilogo: posizionata subito dopo la barra di avanzamento della giornata.
+        # V10.2.9: tre viste separate.
         if not st.session_state.giro_corrente.empty:
-            label_btn_vista = "👁️ TORNA ALLA VISTA OPERATIVA" if st.session_state.vista_pulita else "📋 VISTA RIEPILOGO PULITA"
-            if st.button(label_btn_vista, use_container_width=True):
-                st.session_state.vista_pulita = not st.session_state.vista_pulita
-                st.rerun()
+            v1, v2, v3 = st.columns(3)
+            with v1:
+                if st.button("🛠️ PREPARAZIONE", use_container_width=True, type="primary" if st.session_state.vista_giro == "PREPARAZIONE" else "secondary", key="vista_preparazione"):
+                    st.session_state.vista_giro = "PREPARAZIONE"
+                    st.rerun()
+            with v2:
+                if st.button("📋 RIEPILOGO", use_container_width=True, type="primary" if st.session_state.vista_giro == "RIEPILOGO" else "secondary", key="vista_riepilogo"):
+                    st.session_state.vista_giro = "RIEPILOGO"
+                    st.rerun()
+            with v3:
+                if st.button("🚚 CAMPO", use_container_width=True, type="primary" if st.session_state.vista_giro == "CAMPO" else "secondary", key="vista_campo"):
+                    st.session_state.vista_giro = "CAMPO"
+                    st.rerun()
             st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
         # Resoconto scaricabile: un solo tasto, sempre aggiornato con lo stato corrente.
         if st.session_state.pagina_attiva == "giro" and not st.session_state.giro_corrente.empty:
@@ -2784,7 +2810,45 @@ else:
 
         st.markdown("---")
 
-        if not st.session_state.giro_corrente.empty:
+        # V10.2.9: schermata finale sintetica quando tutte le consegne sono gestite.
+        stati_fine = st.session_state.giro_corrente.get("STATO", pd.Series([STATO_DA_FARE] * tot_clienti)).fillna("").astype(str) if tot_clienti else pd.Series(dtype=str)
+        tutte_gestite = bool(tot_clienti) and int(stati_fine.isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]).sum()) == tot_clienti
+        if tutte_gestite:
+            st.markdown("""
+            <div style='text-align:center; padding:22px 12px 12px 12px; margin:10px 0 14px 0; border:1px solid rgba(34,197,94,0.35); border-radius:16px; background:rgba(34,197,94,0.08);'>
+                <div style='font-size:32px; font-weight:800;'>🏁 GIRO COMPLETATO</div>
+                <div style='font-size:14px; color:#94A3B8; margin-top:5px;'>Tutte le consegne sono state gestite.</div>
+            </div>
+            """, unsafe_allow_html=True)
+            def _fmt_fine(minuti):
+                minuti = max(0, int(round(float(minuti or 0))))
+                h, m = divmod(minuti, 60)
+                return f"{h} h {m:02d} min" if h else f"{m} min"
+            previsione = st.session_state.get("previsione_giro") or {}
+            previsto = previsione.get("minuti")
+            inizio = st.session_state.get("inizio_giro_reale")
+            effettivo = ((time.time() - float(inizio)) / 60.0) if inizio else None
+            if previsto is not None and effettivo is not None:
+                differenza = float(effettivo) - float(previsto)
+                if differenza <= 0:
+                    esito = f"🟢 {_fmt_fine(abs(differenza))} risparmiati rispetto al previsto"
+                else:
+                    esito = f"🔴 {_fmt_fine(differenza)} in più rispetto al previsto"
+                a, b = st.columns(2)
+                a.metric("⏱️ Tempo previsto", _fmt_fine(previsto))
+                b.metric("🚚 Tempo effettivo", _fmt_fine(effettivo))
+                st.markdown(f"<div style='text-align:center; font-size:20px; font-weight:800; margin:8px 0 14px 0;'>{esito}</div>", unsafe_allow_html=True)
+            elif previsto is not None:
+                st.metric("⏱️ Tempo previsto", _fmt_fine(previsto))
+                st.info("Il tempo effettivo non è disponibile perché il cronometro non è stato avviato.")
+            else:
+                st.info("Nessuna previsione dell'ottimizzatore disponibile per questo giro.")
+            f1, f2, f3 = st.columns(3)
+            f1.metric("📍 Consegne", str(tot_clienti))
+            f2.metric("📦 Colli", str(tot_qta))
+            f3.metric("🛣️ KM", f"{km_giro:.1f}" if km_giro is not None else "—")
+            st.markdown("---")
+        if not st.session_state.giro_corrente.empty and not tutte_gestite:
             st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
             df_vista_giro = prepara_vista_giro(st.session_state.giro_corrente)
             
@@ -2793,6 +2857,8 @@ else:
             addresses = indirizzi_per_percorso_giro(st.session_state.giro_corrente)
             partenza = indirizzo_partenza_giro(st.session_state.giro_corrente)
             if addresses:
+                if st.session_state.get("previsione_giro") and st.session_state.get("inizio_giro_reale") is None:
+                    st.session_state.inizio_giro_reale = time.time()
                 origin = urllib.parse.quote(partenza)
                 if len(addresses) == 1:
                     maps_url = f"https://www.google.com/maps/dir/{origin}/{urllib.parse.quote(addresses[0])}"
@@ -2806,7 +2872,7 @@ else:
             else:
                 maps_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(DEPOSITO_VANGO)}"
 
-            if st.session_state.vista_pulita:
+            if st.session_state.vista_giro == "RIEPILOGO":
                 st.markdown(f"<p style='color: #94A3B8; font-size: 14px; margin-bottom: 15px;'>{tot_clienti} indirizzi trovati nel giro.</p>", unsafe_allow_html=True)
 
                 st.markdown('<div id="avvia-percorso-top"></div>', unsafe_allow_html=True)
@@ -2827,7 +2893,7 @@ else:
                     # Usiamo un container con bordo per evitare che il pulsante finisca sotto la card.
                     card_opacita = 0.52 if str(row.get("STATO", "")).strip() in [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO] else 1.0
                     with st.container(border=True):
-                        col_badge, col_info, col_cestino = st.columns([0.08, 0.84, 0.08], gap="small", vertical_alignment="top")
+                        col_badge, col_info = st.columns([0.10, 0.90], gap="small", vertical_alignment="top")
 
                         with col_badge:
                             st.markdown(f'<div class="clean-badge">{idx + 1}</div>', unsafe_allow_html=True)
@@ -2851,22 +2917,42 @@ else:
                             if stato_nuovo != stato_attuale:
                                 salva_stato_consegna(idx_reale, stato_nuovo)
 
-                        with col_cestino:
-                            if st.button("🗑️", help="Elimina cliente dal giro", key=f"elimina_pulita_{idx}_{row['CLIENTE']}"):
-                                st.session_state.conferma_eliminazione_idx = idx_reale
-                                st.rerun()
-
-                    if st.session_state.conferma_eliminazione_idx == idx_reale:
-                        st.warning(f"Eliminare {row['CLIENTE']} dal giro?")
-                        c_ok, c_no = st.columns(2)
-                        with c_ok:
-                            if st.button("✅ CONFERMA", use_container_width=True, key=f"conferma_elimina_pulita_{idx_reale}"):
-                                elimina_cliente_dal_giro(idx)
-                        with c_no:
-                            if st.button("❌ ANNULLA", use_container_width=True, key=f"annulla_elimina_pulita_{idx_reale}"):
-                                st.session_state.conferma_eliminazione_idx = None
-                                st.rerun()
-
+                st.markdown("---")
+                st.markdown('''
+                <div style="text-align:center; margin:4px 0 8px 0;">
+                    <a href="#avvia-percorso-top" style="text-decoration:none; font-size:28px;">⬆️</a>
+                </div>
+                ''' , unsafe_allow_html=True)
+            elif st.session_state.vista_giro == "CAMPO":
+                st.markdown("<div style='text-align:center; color:#94A3B8; font-size:14px; margin-bottom:12px;'>🚚 MODALITÀ CAMPO</div>", unsafe_allow_html=True)
+                st.markdown('<div id="avvia-percorso-top"></div>', unsafe_allow_html=True)
+                st.markdown(f"""
+                    <a href="{maps_url}" target="_blank" style="text-decoration:none;">
+                        <button style="width:100%; background-color:#2563EB; color:white; border:none; border-radius:25px; height:52px; font-weight:bold; font-size:16px; box-shadow:0 4px 10px rgba(37,99,235,0.4);">
+                            🗺️ AVVIA PERCORSO
+                        </button>
+                    </a>
+                """, unsafe_allow_html=True)
+                st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
+                for idx in range(tot_clienti):
+                    row = df_vista_giro.iloc[idx]
+                    idx_reale = int(row["__IDX_ORIGINALE"])
+                    stato_attuale = str(row.get("STATO", "")).strip() or STATO_DA_FARE
+                    if stato_attuale not in STATI_CONSEGNA:
+                        stato_attuale = STATO_DA_FARE
+                    gestito = stato_attuale in [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
+                    opacita = 0.48 if gestito else 1.0
+                    st.markdown(f"""
+                    <div class="clean-card" style="opacity:{opacita}; margin-bottom:6px;">
+                        <div class="clean-badge">{idx + 1}</div>
+                        <div class="clean-content">
+                            <div class="clean-title">{row['CLIENTE']}</div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    stato_nuovo = st.selectbox("Stato", options=STATI_CONSEGNA, index=STATI_CONSEGNA.index(stato_attuale), key=f"stato_consegna_campo_{idx_reale}_{row['CLIENTE']}")
+                    if stato_nuovo != stato_attuale:
+                        salva_stato_consegna(idx_reale, stato_nuovo)
                 st.markdown("---")
                 st.markdown('''
                 <div style="text-align:center; margin:4px 0 8px 0;">
@@ -2896,18 +2982,6 @@ else:
                         <div class="stop-meta">🕒 Ora: {row['ORA']} | 📦 Q.tà: {row['Q.ta']} pz</div>
                     </div>
                     """, unsafe_allow_html=True)
-
-                    stato_attuale = str(row.get('STATO', '')).strip() or STATO_DA_FARE
-                    if stato_attuale not in STATI_CONSEGNA:
-                        stato_attuale = STATO_DA_FARE
-                    stato_nuovo = st.selectbox(
-                        "Stato consegna",
-                        options=STATI_CONSEGNA,
-                        index=STATI_CONSEGNA.index(stato_attuale),
-                        key=f"stato_consegna_operativa_{idx_reale}_{row['CLIENTE']}"
-                    )
-                    if stato_nuovo != stato_attuale:
-                        salva_stato_consegna(idx_reale, stato_nuovo)
 
                     col_c1, col_c2, col_c3, col_c4 = st.columns([1, 1, 1, 1])
                     
