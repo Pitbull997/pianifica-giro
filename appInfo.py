@@ -2970,21 +2970,23 @@ else:
                     )
 
                 # CAMPO = SOLO CLIENTI DA FARE.
-                # Qui non usiamo la vista grafica RIEPILOGO e non lasciamo che un
-                # cliente gestito possa essere ridisegnato. Il filtro viene fatto
-                # direttamente sui dati reali del giro, prima del rendering.
+                # Nascondiamo inoltre in modo esplicito e persistente nella sessione
+                # il cliente appena lavorato: cosi' deve sparire dalla CAMPO anche se
+                # Google Sheets impiega qualche istante ad aggiornarsi.
+                if "campo_clienti_nascosti" not in st.session_state:
+                    st.session_state.campo_clienti_nascosti = set()
+
                 df_campo_base = st.session_state.giro_corrente.copy().reset_index(drop=True)
                 if "STATO" not in df_campo_base.columns:
                     df_campo_base["STATO"] = STATO_DA_FARE
                 df_campo_base["STATO"] = df_campo_base["STATO"].fillna("").astype(str)
                 df_campo_base["__IDX_ORIGINALE"] = list(range(len(df_campo_base)))
 
-                # Lista esplicita dei soli indici ancora da consegnare.
-                # Un cliente con FATTO/PARZIALE/RESPINTO non entra proprio nel
-                # dataframe che viene disegnato dalla CAMPO.
                 indici_pendenti_campo = []
-                for i, valore_stato in enumerate(df_campo_base["STATO"].tolist()):
-                    if not _stato_gestito_campo(valore_stato):
+                for i, row_campo in df_campo_base.iterrows():
+                    cliente_key = f"{i}|{str(row_campo.get('CLIENTE', '')).strip()}|{str(row_campo.get('COMUNE', '')).strip()}|{str(row_campo.get('VIA', '')).strip()}"
+                    valore_stato = row_campo.get("STATO", "")
+                    if not _stato_gestito_campo(valore_stato) and cliente_key not in st.session_state.campo_clienti_nascosti:
                         indici_pendenti_campo.append(i)
                 df_campo_pendenti = df_campo_base.iloc[indici_pendenti_campo].copy().reset_index(drop=True)
 
@@ -3017,6 +3019,12 @@ else:
                                 df_reale["STATO"] = STATO_DA_FARE
                             df_reale.at[idx_reale, "STATO"] = stato_nuovo
                             st.session_state.giro_corrente = df_reale
+                            # Nascondi IMMEDIATAMENTE il cliente dalla CAMPO.
+                            # La chiave include indice + cliente + comune + via per
+                            # evitare che il widget possa farlo ricomparire al rerun.
+                            r = df_reale.iloc[idx_reale]
+                            cliente_key = f"{idx_reale}|{str(r.get('CLIENTE', '')).strip()}|{str(r.get('COMUNE', '')).strip()}|{str(r.get('VIA', '')).strip()}"
+                            st.session_state.campo_clienti_nascosti.add(cliente_key)
                             salva_giro_utente_su_sheets(st.session_state.utente_corrente, df_reale)
                         st.rerun()
                 st.markdown("---")
