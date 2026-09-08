@@ -1741,6 +1741,64 @@ def indirizzi_per_percorso_giro(df):
     pending = df[~df["STATO"].fillna("").astype(str).isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO])].copy()
     return [f"{r['VIA']}, {r['COMUNE']}" for _, r in pending.iterrows()]
 
+def sposta_cliente_pendente_nella_posizione(idx_reale, nuova_posizione):
+    """Sposta un cliente ancora da consegnare nella posizione indicata tra i soli pendenti.
+
+    I clienti gia' gestiti (FATTO/PARZIALE/RESPINTO) restano in fondo e mantengono
+    il loro ordine. La posizione scelta dall'utente si riferisce quindi SOLO ai
+    clienti ancora da consegnare.
+    """
+    df = st.session_state.giro_corrente.copy().reset_index(drop=True)
+    if df.empty or idx_reale < 0 or idx_reale >= len(df):
+        return False
+
+    if "STATO" not in df.columns:
+        df["STATO"] = STATO_DA_FARE
+
+    stato = str(df.iloc[idx_reale].get("STATO", "")).strip()
+    stati_gestiti = [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
+    if stato in stati_gestiti:
+        return False
+
+    pending_idx = [
+        i for i in range(len(df))
+        if str(df.iloc[i].get("STATO", "")).strip() not in stati_gestiti
+    ]
+    if idx_reale not in pending_idx:
+        return False
+
+    try:
+        nuova_posizione = int(nuova_posizione)
+    except Exception:
+        return False
+    nuova_posizione = max(1, min(nuova_posizione, len(pending_idx)))
+
+    posizione_attuale = pending_idx.index(idx_reale) + 1
+    if posizione_attuale == nuova_posizione:
+        return False
+
+    pending_ordinati = list(pending_idx)
+    pending_ordinati.remove(idx_reale)
+    pending_ordinati.insert(nuova_posizione - 1, idx_reale)
+
+    gestiti_idx = [
+        i for i in range(len(df))
+        if str(df.iloc[i].get("STATO", "")).strip() in stati_gestiti
+    ]
+
+    nuovo_ordine_indici = pending_ordinati + gestiti_idx
+    df_nuovo = df.iloc[nuovo_ordine_indici].reset_index(drop=True)
+    df_nuovo["POSIZIONE"] = [str(i) for i in range(1, len(df_nuovo) + 1)]
+
+    st.session_state.giro_corrente = df_nuovo
+    st.session_state.metriche_giro_corrente = None
+    st.session_state.metriche_tempo_orari_corrente = None
+    st.session_state.giro_ottimizzato_proposto = None
+    st.session_state.metriche_ottimizzazione = None
+    salva_giro_utente_su_sheets(st.session_state.utente_corrente, df_nuovo)
+    return True
+
+
 def elimina_cliente_dal_giro(idx):
     """Elimina una sola fermata dal giro corrente e aggiorna GiroAttivo.
 
@@ -2871,27 +2929,34 @@ else:
                             st.rerun()
 
                     with col_c3:
-                        nuova_pos = st.selectbox(
-                            "Sposta a pos:",
-                            options=[i for i in range(1, tot_clienti + 1)],
-                            index=idx,
-                            key=f"select_pos_{row['CLIENTE']}_{idx}"
-                        )
-                        
-                        if nuova_pos - 1 != idx:
-                            df_temp = st.session_state.giro_corrente.copy()
-                            riga = df_temp.iloc[idx]
-                            df_temp = df_temp.drop(df_temp.index[idx])
-                            top = df_temp.iloc[:nuova_pos - 1]
-                            bottom = df_temp.iloc[nuova_pos - 1:]
-                            
-                            df_nuovo = pd.concat([top, pd.DataFrame([riga]), bottom], ignore_index=True)
-                            df_nuovo['POSIZIONE'] = [str(i) for i in range(1, len(df_nuovo) + 1)]
-                            
-                            st.session_state.giro_corrente = df_nuovo
-                            st.session_state.metriche_giro_corrente = None
-                            salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
-                            st.rerun()
+                        stato_riga = str(row.get("STATO", "")).strip()
+                        stati_gestiti = [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
+                        cliente_gestito = stato_riga in stati_gestiti
+
+                        if not cliente_gestito:
+                            # La posizione e' riferita SOLO ai clienti ancora da consegnare.
+                            # Quelli gia' gestiti restano in fondo e non possono essere spostati.
+                            clienti_pendenti = df_vista_giro.iloc[:sum(
+                                1 for _, rr in df_vista_giro.iterrows()
+                                if str(rr.get("STATO", "")).strip() not in stati_gestiti
+                            )]
+                            numero_pendenti = len(clienti_pendenti)
+                            posizione_pendente = next(
+                                (i + 1 for i, rr in clienti_pendenti.iterrows()
+                                 if int(rr["__IDX_ORIGINALE"]) == idx_reale),
+                                1
+                            )
+                            nuova_pos = st.selectbox(
+                                "Sposta a pos:",
+                                options=list(range(1, numero_pendenti + 1)),
+                                index=posizione_pendente - 1,
+                                key=f"select_pos_{row['CLIENTE']}_{idx_reale}"
+                            )
+                            if nuova_pos != posizione_pendente:
+                                if sposta_cliente_pendente_nella_posizione(idx_reale, nuova_pos):
+                                    st.rerun()
+                        else:
+                            st.caption("🔒 Consegnato")
 
                     with col_c4:
                         if st.button("🗑️", help="Elimina cliente dal giro", key=f"elimina_operativa_{idx_reale}_{row['CLIENTE']}"):
