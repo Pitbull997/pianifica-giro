@@ -1218,7 +1218,7 @@ def _simula_tempo_percorso_orari(ordine, durate, orari_apertura, ora_partenza_mi
     """Simula l'orario reale fermata per fermata.
 
     Regola: si viaggia, si arriva, si attende solo se necessario per l'apertura,
-    poi si effettuano 6 minuti di parcheggio+scarico prima di ripartire.
+    poi si effettuano 12 minuti di parcheggio+scarico prima di ripartire.
     Il servizio viene applicato a ogni cliente, ma non al deposito finale.
     """
     tempo = float(ora_partenza_minuti)
@@ -1270,7 +1270,7 @@ def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=
     costo_callback = routing.RegisterTransitCallback(costo_arco)
     routing.SetArcCostEvaluatorOfAllVehicles(costo_callback)
 
-    # Ogni cliente richiede in media 6 minuti per parcheggio + scarico.
+    # Ogni cliente richiede in media 12 minuti per parcheggio + scarico.
     # Il tempo di servizio viene aggiunto dopo l'arrivo al cliente e quindi
     # influisce sull'orario di arrivo di tutte le fermate successive.
     def tempo_arco(from_index, to_index):
@@ -1425,7 +1425,7 @@ def ottimizza_giro_orari_test(df_giro, df_db=None, ora_partenza_minuti=300):
     df_ottimizzato = df_originale.iloc[indici_clienti].reset_index(drop=True).copy()
     df_ottimizzato["POSIZIONE"] = [str(i) for i in range(1, len(df_ottimizzato) + 1)]
 
-    # Simulazione finale con secondi OSRM: viaggio -> attesa -> 6 min servizio.
+    # Simulazione finale con secondi OSRM: viaggio -> attesa -> 12 min servizio.
     orari_apertura = dati_tempo.get("orari_apertura", []) if isinstance(dati_tempo, dict) else []
     simulazione = _simula_tempo_percorso_orari(
         ordine_ottimizzato, durate, orari_apertura,
@@ -2545,171 +2545,178 @@ else:
     with col_info_u:
         st.markdown(f"<p style='color: #94A3B8; font-size: 13px; margin: 0;'>👤 Utente: <b style='color: #60A5FA;'>{st.session_state.get('utente_corrente', '')}</b></p>", unsafe_allow_html=True)
     with col_logout_u:
-        if st.button("🚪 LOGOUT", use_container_width=True, key="btn_logout_principale"):
-            elimina_sessione_persistente()
-            st.session_state.autenticato = False
-            st.session_state.utente_corrente = ""
-            st.session_state.is_admin = False
-            st.session_state.pagina_attiva = "login"
-            st.rerun()
+        # In CAMPO sostituiamo il LOGOUT con il solo ritorno al RIEPILOGO.
+        if st.session_state.vista_giro == "CAMPO":
+            if st.button("↩️ TORNA A VISTA RIEPILOGO", use_container_width=True, key="btn_torna_riepilogo_campo"):
+                st.session_state.vista_giro = "RIEPILOGO"
+                st.rerun()
+        else:
+            if st.button("🚪 LOGOUT", use_container_width=True, key="btn_logout_principale"):
+                elimina_sessione_persistente()
+                st.session_state.autenticato = False
+                st.session_state.utente_corrente = ""
+                st.session_state.is_admin = False
+                st.session_state.pagina_attiva = "login"
+                st.rerun()
 
     st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
 
-    if st.session_state.is_admin:
-        col_sw1, col_sw2, col_sw3 = st.columns(3)
-    else:
-        col_sw1, col_sw2 = st.columns(2)
+    if st.session_state.vista_giro != "CAMPO":
+        if st.session_state.is_admin:
+            col_sw1, col_sw2, col_sw3 = st.columns(3)
+        else:
+            col_sw1, col_sw2 = st.columns(2)
 
-    with col_sw1:
-        css_class = "btn-active" if st.session_state.pagina_attiva == "db" else "btn-inactive"
-        st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
-        if st.button("📁 CLIENTI", use_container_width=True, key="btn_db"):
-            st.session_state.pagina_attiva = "db"
-            st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with col_sw2:
-        css_class = "btn-active" if st.session_state.pagina_attiva == "giro" else "btn-inactive"
-        st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
-        if st.button("📍 GIRO", use_container_width=True, key="btn_giro"):
-            st.session_state.pagina_attiva = "giro"
-            st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    if st.session_state.is_admin:
-        with col_sw3:
-            css_class = "btn-active" if st.session_state.pagina_attiva == "utenti" else "btn-inactive"
+        with col_sw1:
+            css_class = "btn-active" if st.session_state.pagina_attiva == "db" else "btn-inactive"
             st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
-            if st.button("🔑 UTENTI", use_container_width=True, key="btn_utenti"):
-                st.session_state.pagina_attiva = "utenti"
+            if st.button("📁 CLIENTI", use_container_width=True, key="btn_db"):
+                st.session_state.pagina_attiva = "db"
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
-
-
-    col_act1, col_act2 = st.columns(2)
-
-    with col_act1:
-        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-        if st.button("🔄 INVERTI SEQUENZA", use_container_width=True, key="btn_inverti"):
-            if not st.session_state.giro_corrente.empty:
-                st.session_state.giro_corrente = st.session_state.giro_corrente.iloc[::-1].reset_index(drop=True)
-                st.session_state.metriche_giro_corrente = None
-                st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
-                salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
-                st.session_state.giro_ottimizzato_proposto = None
-                st.session_state.metriche_ottimizzazione = None
+        with col_sw2:
+            css_class = "btn-active" if st.session_state.pagina_attiva == "giro" else "btn-inactive"
+            st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
+            if st.button("📍 GIRO", use_container_width=True, key="btn_giro"):
+                st.session_state.pagina_attiva = "giro"
                 st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
 
-    with col_act2:
-        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-        if st.button("🗑️ SVUOTA GIRO", use_container_width=True, key="btn_svuota"):
-            if not st.session_state.giro_corrente.empty:
-                st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO'])
-                st.session_state.giro_terminato = False
-                st.session_state.inizio_giro_reale = None
-                st.session_state.fine_giro_reale = None
-                st.session_state.metriche_giro_corrente = None
-                salva_stato_giro_persistente(st.session_state.utente_corrente)
-                salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
-                st.session_state.giro_ottimizzato_proposto = None
-                st.session_state.metriche_ottimizzazione = None
-                st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    col_backup1, col_backup2 = st.columns(2)
-    with col_backup1:
-        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-        if st.button("💾 SALVA POSIZIONE GIRO", use_container_width=True, key="btn_salva_posizione"):
-            if st.session_state.giro_corrente.empty:
-                st.warning("⚠️ Il giro è vuoto: non c'è nulla da memorizzare.")
-            elif salva_posizione_giro():
-                st.success("💾 Ordine attuale del giro memorizzato. Potrai ripristinarlo in qualsiasi momento.")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with col_backup2:
-        st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
-        if st.button("↩️ RIPRISTINA GIRO SALVATO", use_container_width=True, key="btn_ripristina_posizione"):
-            if ripristina_posizione_giro():
-                st.success("↩️ Giro riportato all'ordine memorizzato.")
-                st.rerun()
-            else:
-                st.warning("⚠️ Nessun backup del giro disponibile per questo utente.")
-        st.markdown('</div>', unsafe_allow_html=True)
+        if st.session_state.is_admin:
+            with col_sw3:
+                css_class = "btn-active" if st.session_state.pagina_attiva == "utenti" else "btn-inactive"
+                st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
+                if st.button("🔑 UTENTI", use_container_width=True, key="btn_utenti"):
+                    st.session_state.pagina_attiva = "utenti"
+                    st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
 
 
-    st.session_state.modalita_ottimizzazione = st.selectbox(
-        "🧠 Modalità ottimizzazione",
-        options=[
-            "🛣️ ROUTE",
-            "📍 ZONE",
-            "⚖️ ZONE + ROUTE",
-            "🕐 ORARI — TEST",
-        ],
-        index=[
-            "🛣️ ROUTE",
-            "📍 ZONE",
-            "⚖️ ZONE + ROUTE",
-            "🕐 ORARI — TEST",
-        ].index(st.session_state.modalita_ottimizzazione)
-        if st.session_state.modalita_ottimizzazione in [
-            "🛣️ ROUTE",
-            "📍 ZONE",
-            "⚖️ ZONE + ROUTE",
-            "🕐 ORARI — TEST",
-        ] else 2,
-        key="select_modalita_ottimizzazione",
-    )
 
-    if st.session_state.modalita_ottimizzazione == "🛣️ ROUTE":
-        st.session_state.forza_gruppamento_zona = 0
-        st.caption("🛣️ ROUTE — motore V9 attuale: ottimizzazione stradale pura, ZONA ignorata.")
-    elif st.session_state.modalita_ottimizzazione == "📍 ZONE":
-        st.session_state.forza_gruppamento_zona = 100
-        st.caption("📍 ZONE — motore V9 attuale: ordine macro-ZONA crescente, clienti ottimizzati dentro ogni ZONA.")
-    elif st.session_state.modalita_ottimizzazione == "⚖️ ZONE + ROUTE":
-        st.session_state.forza_gruppamento_zona = 50
-        st.caption("⚖️ ZONE + ROUTE — motore V9 attuale al 50%: compromesso strada + ZONA.")
-    else:
-        st.session_state.forza_gruppamento_zona = 0
-        st.caption(f"🕐 ORARI — TEST — strada + orari di apertura minima. 01:00 = orario sconosciuto, quindi nessun vincolo. Partenza usata: {_formatta_ora_partenza_reale()}.")
+        col_act1, col_act2 = st.columns(2)
 
-    if st.button("🧠 OTTIMIZZA GIRO", use_container_width=True, key="btn_ottimizza"):
-        if st.session_state.giro_corrente.empty:
-            st.warning("⚠️ Il giro è vuoto.")
-        elif len(st.session_state.giro_corrente) < 2:
-            st.info("ℹ️ Servono almeno 2 fermate per ottimizzare il giro.")
+        with col_act1:
+            st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
+            if st.button("🔄 INVERTI SEQUENZA", use_container_width=True, key="btn_inverti"):
+                if not st.session_state.giro_corrente.empty:
+                    st.session_state.giro_corrente = st.session_state.giro_corrente.iloc[::-1].reset_index(drop=True)
+                    st.session_state.metriche_giro_corrente = None
+                    st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
+                    salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
+                    st.session_state.giro_ottimizzato_proposto = None
+                    st.session_state.metriche_ottimizzazione = None
+                    st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with col_act2:
+            st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
+            if st.button("🗑️ SVUOTA GIRO", use_container_width=True, key="btn_svuota"):
+                if not st.session_state.giro_corrente.empty:
+                    st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO'])
+                    st.session_state.giro_terminato = False
+                    st.session_state.inizio_giro_reale = None
+                    st.session_state.fine_giro_reale = None
+                    st.session_state.metriche_giro_corrente = None
+                    salva_stato_giro_persistente(st.session_state.utente_corrente)
+                    salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
+                    st.session_state.giro_ottimizzato_proposto = None
+                    st.session_state.metriche_ottimizzazione = None
+                    st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        col_backup1, col_backup2 = st.columns(2)
+        with col_backup1:
+            st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
+            if st.button("💾 SALVA POSIZIONE GIRO", use_container_width=True, key="btn_salva_posizione"):
+                if st.session_state.giro_corrente.empty:
+                    st.warning("⚠️ Il giro è vuoto: non c'è nulla da memorizzare.")
+                elif salva_posizione_giro():
+                    st.success("💾 Ordine attuale del giro memorizzato. Potrai ripristinarlo in qualsiasi momento.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with col_backup2:
+            st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
+            if st.button("↩️ RIPRISTINA GIRO SALVATO", use_container_width=True, key="btn_ripristina_posizione"):
+                if ripristina_posizione_giro():
+                    st.success("↩️ Giro riportato all'ordine memorizzato.")
+                    st.rerun()
+                else:
+                    st.warning("⚠️ Nessun backup del giro disponibile per questo utente.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+
+        st.session_state.modalita_ottimizzazione = st.selectbox(
+            "🧠 Modalità ottimizzazione",
+            options=[
+                "🛣️ ROUTE",
+                "📍 ZONE",
+                "⚖️ ZONE + ROUTE",
+                "🕐 ORARI — TEST",
+            ],
+            index=[
+                "🛣️ ROUTE",
+                "📍 ZONE",
+                "⚖️ ZONE + ROUTE",
+                "🕐 ORARI — TEST",
+            ].index(st.session_state.modalita_ottimizzazione)
+            if st.session_state.modalita_ottimizzazione in [
+                "🛣️ ROUTE",
+                "📍 ZONE",
+                "⚖️ ZONE + ROUTE",
+                "🕐 ORARI — TEST",
+            ] else 2,
+            key="select_modalita_ottimizzazione",
+        )
+
+        if st.session_state.modalita_ottimizzazione == "🛣️ ROUTE":
+            st.session_state.forza_gruppamento_zona = 0
+            st.caption("🛣️ ROUTE — motore V9 attuale: ottimizzazione stradale pura, ZONA ignorata.")
+        elif st.session_state.modalita_ottimizzazione == "📍 ZONE":
+            st.session_state.forza_gruppamento_zona = 100
+            st.caption("📍 ZONE — motore V9 attuale: ordine macro-ZONA crescente, clienti ottimizzati dentro ogni ZONA.")
+        elif st.session_state.modalita_ottimizzazione == "⚖️ ZONE + ROUTE":
+            st.session_state.forza_gruppamento_zona = 50
+            st.caption("⚖️ ZONE + ROUTE — motore V9 attuale al 50%: compromesso strada + ZONA.")
         else:
-            try:
-                with st.spinner("🧠 Analizzo indirizzi, percorso stradale e vincoli..."):
-                    if st.session_state.modalita_ottimizzazione == "🕐 ORARI — TEST":
-                        ora_partenza_orari = _ora_partenza_reale_minuti()
-                        df_opt, metriche_opt = ottimizza_giro_orari_test(
-                            st.session_state.giro_corrente,
+            st.session_state.forza_gruppamento_zona = 0
+            st.caption(f"🕐 ORARI — TEST — strada + orari di apertura minima. 01:00 = orario sconosciuto, quindi nessun vincolo. Partenza usata: {_formatta_ora_partenza_reale()}.")
+
+        if st.button("🧠 OTTIMIZZA GIRO", use_container_width=True, key="btn_ottimizza"):
+            if st.session_state.giro_corrente.empty:
+                st.warning("⚠️ Il giro è vuoto.")
+            elif len(st.session_state.giro_corrente) < 2:
+                st.info("ℹ️ Servono almeno 2 fermate per ottimizzare il giro.")
+            else:
+                try:
+                    with st.spinner("🧠 Analizzo indirizzi, percorso stradale e vincoli..."):
+                        if st.session_state.modalita_ottimizzazione == "🕐 ORARI — TEST":
+                            ora_partenza_orari = _ora_partenza_reale_minuti()
+                            df_opt, metriche_opt = ottimizza_giro_orari_test(
+                                st.session_state.giro_corrente,
+                                st.session_state.db_clienti,
+                                ora_partenza_minuti=ora_partenza_orari,
+                            )
+                        else:
+                            df_opt, metriche_opt = ottimizza_giro_free(
+                                st.session_state.giro_corrente,
+                                st.session_state.db_clienti,
+                                forza_gruppamento_zona=st.session_state.forza_gruppamento_zona
+                            )
+                    coordinate_da_salvare = metriche_opt.pop("coordinate_da_salvare", {})
+                    if coordinate_da_salvare:
+                        st.session_state.db_clienti = _aggiorna_coordinate_db(
                             st.session_state.db_clienti,
-                            ora_partenza_minuti=ora_partenza_orari,
-                        )
-                    else:
-                        df_opt, metriche_opt = ottimizza_giro_free(
                             st.session_state.giro_corrente,
-                            st.session_state.db_clienti,
-                            forza_gruppamento_zona=st.session_state.forza_gruppamento_zona
+                            coordinate_da_salvare
                         )
-                coordinate_da_salvare = metriche_opt.pop("coordinate_da_salvare", {})
-                if coordinate_da_salvare:
-                    st.session_state.db_clienti = _aggiorna_coordinate_db(
-                        st.session_state.db_clienti,
-                        st.session_state.giro_corrente,
-                        coordinate_da_salvare
-                    )
-                    salva_coordinate_su_google_sheets(st.session_state.db_clienti)
-                st.session_state.giro_ottimizzato_proposto = df_opt
-                st.session_state.metriche_ottimizzazione = metriche_opt
-                st.success("Giro ottimizzato pronto: controllalo e poi scegli se applicarlo.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"❌ Ottimizzazione non riuscita: {e}")
+                        salva_coordinate_su_google_sheets(st.session_state.db_clienti)
+                    st.session_state.giro_ottimizzato_proposto = df_opt
+                    st.session_state.metriche_ottimizzazione = metriche_opt
+                    st.success("Giro ottimizzato pronto: controllalo e poi scegli se applicarlo.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Ottimizzazione non riuscita: {e}")
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
