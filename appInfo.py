@@ -2969,14 +2969,24 @@ else:
                         or "RESPINTO" in testo
                     )
 
+                # CAMPO = SOLO CLIENTI DA FARE.
+                # Qui non usiamo la vista grafica RIEPILOGO e non lasciamo che un
+                # cliente gestito possa essere ridisegnato. Il filtro viene fatto
+                # direttamente sui dati reali del giro, prima del rendering.
                 df_campo_base = st.session_state.giro_corrente.copy().reset_index(drop=True)
                 if "STATO" not in df_campo_base.columns:
                     df_campo_base["STATO"] = STATO_DA_FARE
                 df_campo_base["STATO"] = df_campo_base["STATO"].fillna("").astype(str)
                 df_campo_base["__IDX_ORIGINALE"] = list(range(len(df_campo_base)))
-                df_campo_pendenti = df_campo_base[
-                    ~df_campo_base["STATO"].map(_stato_gestito_campo)
-                ].copy().reset_index(drop=True)
+
+                # Lista esplicita dei soli indici ancora da consegnare.
+                # Un cliente con FATTO/PARZIALE/RESPINTO non entra proprio nel
+                # dataframe che viene disegnato dalla CAMPO.
+                indici_pendenti_campo = []
+                for i, valore_stato in enumerate(df_campo_base["STATO"].tolist()):
+                    if not _stato_gestito_campo(valore_stato):
+                        indici_pendenti_campo.append(i)
+                df_campo_pendenti = df_campo_base.iloc[indici_pendenti_campo].copy().reset_index(drop=True)
 
                 for idx, (_, row) in enumerate(df_campo_pendenti.iterrows()):
                     idx_reale = int(row["__IDX_ORIGINALE"])
@@ -2999,7 +3009,16 @@ else:
                         key=f"stato_consegna_campo_{idx_reale}_{row['CLIENTE']}"
                     )
                     if stato_nuovo != stato_attuale:
-                        salva_stato_consegna(idx_reale, stato_nuovo)
+                        # Aggiornamento immediato del dataframe reale: il cliente
+                        # deve sparire dalla CAMPO al rerun successivo.
+                        df_reale = st.session_state.giro_corrente.copy().reset_index(drop=True)
+                        if 0 <= idx_reale < len(df_reale):
+                            if "STATO" not in df_reale.columns:
+                                df_reale["STATO"] = STATO_DA_FARE
+                            df_reale.at[idx_reale, "STATO"] = stato_nuovo
+                            st.session_state.giro_corrente = df_reale
+                            salva_giro_utente_su_sheets(st.session_state.utente_corrente, df_reale)
+                        st.rerun()
                 st.markdown("---")
                 st.markdown('''
                 <div style="text-align:center; margin:4px 0 8px 0;">
