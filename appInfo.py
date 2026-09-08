@@ -2952,12 +2952,30 @@ else:
                     </a>
                 """, unsafe_allow_html=True)
                 st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
-                # In CAMPO si mostrano esclusivamente le consegne ancora da gestire.
-                # Appena una consegna diventa FATTO/PARZIALE/RESPINTO, salva_stato_consegna()
-                # forza il rerun e la riga non viene piu' inclusa in questa lista.
-                stati_gestiti_campo = [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
-                df_campo_pendenti = df_vista_giro[
-                    ~df_vista_giro["STATO"].fillna("").astype(str).str.strip().isin(stati_gestiti_campo)
+                # CAMPO: mostra SOLO le consegne ancora da gestire.
+                # Il filtro viene applicato direttamente al giro reale, prima della
+                # preparazione grafica, cosi' i clienti gestiti non possono rientrare
+                # nella lista per effetto del riordinamento della vista.
+                # Usiamo anche una normalizzazione robusta del testo dello stato,
+                # cosi' eventuali spazi/variazioni non fanno ricomparire una consegna.
+                def _stato_gestito_campo(valore):
+                    testo = str(valore if valore is not None else "").strip().upper()
+                    return (
+                        testo == str(STATO_FATTO).strip().upper()
+                        or testo == str(STATO_PARZIALE).strip().upper()
+                        or testo == str(STATO_RESPINTO).strip().upper()
+                        or "FATTO" in testo
+                        or "PARZIALE" in testo
+                        or "RESPINTO" in testo
+                    )
+
+                df_campo_base = st.session_state.giro_corrente.copy().reset_index(drop=True)
+                if "STATO" not in df_campo_base.columns:
+                    df_campo_base["STATO"] = STATO_DA_FARE
+                df_campo_base["STATO"] = df_campo_base["STATO"].fillna("").astype(str)
+                df_campo_base["__IDX_ORIGINALE"] = list(range(len(df_campo_base)))
+                df_campo_pendenti = df_campo_base[
+                    ~df_campo_base["STATO"].map(_stato_gestito_campo)
                 ].copy().reset_index(drop=True)
 
                 for idx, (_, row) in enumerate(df_campo_pendenti.iterrows()):
