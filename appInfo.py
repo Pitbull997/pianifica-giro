@@ -2632,8 +2632,10 @@ else:
         st.caption("Questo test serve solo a verificare la lettura della foto. L'importazione automatica nel giro verrà aggiunta dopo che l'OCR sarà affidabile.")
 
     if st.session_state.pagina_attiva == "test_file":
-
         st.stop()
+
+    # Pulsanti azione della pagina GIRO.
+    col_act1, col_act2 = st.columns(2)
 
     with col_act1:
         st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
