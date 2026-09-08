@@ -3300,36 +3300,68 @@ else:
                 <style>
                     /* CAMPO mobile: SOLO la riga del cliente resta affiancata.
                        Tutto il resto dell'interfaccia mantiene il responsive normale. */
+                    /* V10.3.6 - Responsive reale della singola riga cliente.
+                       NON forziamo il responsive dell'intera CAMPO: interveniamo
+                       esclusivamente sul contenitore della riga e impediamo che
+                       Streamlit/BaseWeb allarghino il selectbox oltre lo schermo. */
                     @media (max-width: 640px) {
+                        [class*="st-key-campo_riga_"] {
+                            width: 100% !important;
+                            max-width: 100% !important;
+                            min-width: 0 !important;
+                            overflow: hidden !important;
+                            box-sizing: border-box !important;
+                        }
                         [class*="st-key-campo_riga_"] [data-testid="stHorizontalBlock"] {
+                            display: flex !important;
+                            flex-direction: row !important;
                             flex-wrap: nowrap !important;
                             align-items: center !important;
                             width: 100% !important;
+                            max-width: 100% !important;
                             min-width: 0 !important;
+                            gap: 8px !important;
+                            overflow: hidden !important;
+                            box-sizing: border-box !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="column"] {
                             min-width: 0 !important;
-                            width: 0 !important;
-                            flex: 1 1 0% !important;
+                            width: auto !important;
+                            box-sizing: border-box !important;
+                            overflow: hidden !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="column"]:first-child {
-                            flex: 1 1 55% !important;
-                            max-width: 55% !important;
+                            flex: 1 1 0 !important;
+                            max-width: calc(100% - 170px) !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="column"]:last-child {
-                            flex: 1 1 45% !important;
-                            max-width: 45% !important;
+                            flex: 0 1 162px !important;
+                            width: 162px !important;
+                            max-width: 162px !important;
+                            min-width: 0 !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="stSelectbox"],
                         [class*="st-key-campo_riga_"] [data-baseweb="select"],
-                        [class*="st-key-campo_riga_"] [data-baseweb="select"] > div {
+                        [class*="st-key-campo_riga_"] [data-baseweb="select"] > div,
+                        [class*="st-key-campo_riga_"] [data-baseweb="select"] > div > div {
+                            display: block !important;
                             width: 100% !important;
                             min-width: 0 !important;
                             max-width: 100% !important;
                             box-sizing: border-box !important;
                         }
-                        [class*="st-key-campo_riga_"] [data-testid="stMarkdownContainer"] {
+                        [class*="st-key-campo_riga_"] [data-baseweb="select"] {
+                            overflow: hidden !important;
+                        }
+                        [class*="st-key-campo_riga_"] [data-baseweb="select"] * {
                             min-width: 0 !important;
+                            box-sizing: border-box !important;
+                        }
+                        [class*="st-key-campo_riga_"] [data-testid="stMarkdownContainer"] {
+                            width: 100% !important;
+                            min-width: 0 !important;
+                            max-width: 100% !important;
+                            overflow: hidden !important;
                         }
                     }
 
