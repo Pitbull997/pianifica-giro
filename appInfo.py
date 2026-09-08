@@ -2952,23 +2952,34 @@ else:
                     </a>
                 """, unsafe_allow_html=True)
                 st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
-                for idx in range(tot_clienti):
-                    row = df_vista_giro.iloc[idx]
+                # In CAMPO si mostrano esclusivamente le consegne ancora da gestire.
+                # Appena una consegna diventa FATTO/PARZIALE/RESPINTO, salva_stato_consegna()
+                # forza il rerun e la riga non viene piu' inclusa in questa lista.
+                stati_gestiti_campo = [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
+                df_campo_pendenti = df_vista_giro[
+                    ~df_vista_giro["STATO"].fillna("").astype(str).str.strip().isin(stati_gestiti_campo)
+                ].copy().reset_index(drop=True)
+
+                for idx, (_, row) in enumerate(df_campo_pendenti.iterrows()):
                     idx_reale = int(row["__IDX_ORIGINALE"])
                     stato_attuale = str(row.get("STATO", "")).strip() or STATO_DA_FARE
                     if stato_attuale not in STATI_CONSEGNA:
                         stato_attuale = STATO_DA_FARE
-                    gestito = stato_attuale in [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
-                    opacita = 0.48 if gestito else 1.0
+
                     st.markdown(f"""
-                    <div class="clean-card" style="opacity:{opacita}; margin-bottom:6px;">
+                    <div class="clean-card" style="opacity:1.0; margin-bottom:6px;">
                         <div class="clean-badge">{idx + 1}</div>
                         <div class="clean-content">
                             <div class="clean-title">{row['CLIENTE']}</div>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
-                    stato_nuovo = st.selectbox("Stato", options=STATI_CONSEGNA, index=STATI_CONSEGNA.index(stato_attuale), key=f"stato_consegna_campo_{idx_reale}_{row['CLIENTE']}")
+                    stato_nuovo = st.selectbox(
+                        "Stato",
+                        options=STATI_CONSEGNA,
+                        index=STATI_CONSEGNA.index(stato_attuale),
+                        key=f"stato_consegna_campo_{idx_reale}_{row['CLIENTE']}"
+                    )
                     if stato_nuovo != stato_attuale:
                         salva_stato_consegna(idx_reale, stato_nuovo)
                 st.markdown("---")
