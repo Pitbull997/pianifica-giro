@@ -3298,175 +3298,92 @@ else:
                 # Palette e icone restano coerenti con l'interfaccia VanGo.
                 st.markdown("""
                 <style>
-                    /* CAMPO mobile: tutto resta responsive. Solo la riga cliente
-                       mantiene cliente a sinistra + comando stato a destra. */
+                    /* CAMPO mobile: SOLO la riga del cliente resta affiancata.
+                       Tutto il resto dell'interfaccia mantiene il responsive normale. */
+                    /* V10.3.6 - Responsive reale della singola riga cliente.
+                       NON forziamo il responsive dell'intera CAMPO: interveniamo
+                       esclusivamente sul contenitore della riga e impediamo che
+                       Streamlit/BaseWeb allarghino il selectbox oltre lo schermo. */
                     @media (max-width: 640px) {
+                        /* V10.3.8: la riga cliente resta UNA SOLA RIGA e il menu
+                           viene ancorato fisicamente al bordo DESTRO del riquadro.
+                           In questo modo BaseWeb/Streamlit non puo' spingerlo fuori
+                           dallo schermo su smartphone. */
                         [class*="st-key-campo_riga_"] {
+                            position: relative !important;
                             width: 100% !important;
                             max-width: 100% !important;
                             min-width: 0 !important;
-                            box-sizing: border-box !important;
                             overflow: hidden !important;
+                            box-sizing: border-box !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="stHorizontalBlock"] {
+                            display: block !important;
                             width: 100% !important;
                             max-width: 100% !important;
                             min-width: 0 !important;
-                            flex-wrap: nowrap !important;
+                            overflow: hidden !important;
                             box-sizing: border-box !important;
-                            align-items: center !important;
+                            position: relative !important;
+                            min-height: 48px !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="column"] {
                             min-width: 0 !important;
                             box-sizing: border-box !important;
-                        }
-                        [class*="st-key-campo_riga_"] [data-testid="column"]:first-child {
-                            flex: 1 1 auto !important;
-                            width: auto !important;
-                            min-width: 0 !important;
                             overflow: hidden !important;
                         }
+                        [class*="st-key-campo_riga_"] [data-testid="column"]:first-child {
+                            width: 100% !important;
+                            max-width: 100% !important;
+                            padding-right: 48px !important;
+                        }
                         [class*="st-key-campo_riga_"] [data-testid="column"]:last-child {
-                            flex: 0 0 46px !important;
-                            width: 46px !important;
-                            max-width: 46px !important;
-                            min-width: 46px !important;
+                            position: absolute !important;
+                            right: 4px !important;
+                            top: 50% !important;
+                            transform: translateY(-50%) !important;
+                            width: 40px !important;
+                            max-width: 40px !important;
+                            min-width: 40px !important;
+                            margin: 0 !important;
+                            padding: 0 !important;
+                            overflow: visible !important;
+                            z-index: 5 !important;
+                        }
+                        [class*="st-key-campo_riga_"] [data-testid="stPopover"] {
+                            width: 40px !important;
+                            max-width: 40px !important;
+                            min-width: 40px !important;
+                        }
+                        [class*="st-key-campo_riga_"] [data-testid="stPopover"] > button {
+                            width: 40px !important;
+                            max-width: 40px !important;
+                            min-width: 40px !important;
+                            height: 40px !important;
                             padding: 0 !important;
                             margin: 0 !important;
-                        }
-                    }
-
-                    /* La card cliente non deve mai superare la larghezza disponibile. */
-                    [class*="st-key-campo_riga_"] {
-                        width: 100% !important;
-                        max-width: 100% !important;
-                        min-width: 0 !important;
-                        box-sizing: border-box !important;
-                        overflow: hidden !important;
-                        padding-top: 0 !important;
-                        padding-bottom: 0 !important;
-                    }
-
-                    /* Il trigger del popover e' SOLO la freccia: nessun riquadro bianco.
-                       La larghezza della freccia non modifica la larghezza della card. */
-                    [class*="st-key-campo_stato_menu_"] {
-                        width: 46px !important;
-                        max-width: 46px !important;
-                        min-width: 46px !important;
-                        padding: 0 !important;
-                        margin: 0 0 0 auto !important;
-                        box-sizing: border-box !important;
-                    }
-                    /* Fallback robusto: nelle versioni di Streamlit in cui la key del
-                       popover non avvolge il pulsante trigger, prendiamo direttamente
-                       il contenitore stPopover. */
-                    [data-testid="stPopover"] {
-                        width: 46px !important;
-                        max-width: 46px !important;
-                        min-width: 46px !important;
-                        padding: 0 !important;
-                        margin: 0 0 0 auto !important;
-                        box-sizing: border-box !important;
-                    }
-                    [data-testid="stPopover"] > button,
-                    [data-testid="stPopover"] button {
-                        width: 46px !important;
-                        max-width: 46px !important;
-                        min-width: 46px !important;
-                        height: 42px !important;
-                        min-height: 42px !important;
-                        padding: 0 !important;
-                        margin: 0 !important;
-                        border: 0 !important;
-                        border-radius: 8px !important;
-                        background: transparent !important;
-                        box-shadow: none !important;
-                        color: {colore_freccia} !important;
-                        font-size: 27px !important;
-                        font-weight: 900 !important;
-                        line-height: 42px !important;
-                        text-align: center !important;
-                    }
-                    /* V10.3.19: selettore robusto del trigger popover. */
-                    button[aria-haspopup="dialog"] {{
-                        width: 100% !important;
-                        max-width: 100% !important;
-                        min-width: 0 !important;
-                        box-sizing: border-box !important;
-                        justify-content: flex-start !important;
-                        text-align: left !important;
-                        margin-left: 0 !important;
-                        margin-right: 0 !important;
-                    }}
-                    button[aria-haspopup="dialog"] > div,
-                    button[aria-haspopup="dialog"] > div > div,
-                    button[aria-haspopup="dialog"] [data-testid="stMarkdownContainer"],
-                    button[aria-haspopup="dialog"] [data-testid="stMarkdownContainer"] > div,
-                    button[aria-haspopup="dialog"] p,
-                    button[aria-haspopup="dialog"] span {{
-                        width: 100% !important;
-                        max-width: 100% !important;
-                        min-width: 0 !important;
-                        box-sizing: border-box !important;
-                        margin-left: 0 !important;
-                        margin-right: 0 !important;
-                        padding-left: 0 !important;
-                        padding-right: 0 !important;
-                        text-align: left !important;
-                        justify-content: flex-start !important;
-                        align-items: flex-start !important;
-                        align-self: flex-start !important;
-                    }}
-                    button[aria-haspopup="dialog"] svg {{
-                        display: none !important;
-                        width: 0 !important;
-                        max-width: 0 !important;
-                        flex: 0 0 0 !important;
-                    }}
-                    [data-testid="stPopover"] > button:hover,
-                    [data-testid="stPopover"] > button:focus,
-                    [data-testid="stPopover"] > button:active {
-                        background: transparent !important;
-                        box-shadow: none !important;
-                    }
-
-                    [class*="st-key-campo_stato_menu_"] button {
-                        width: 46px !important;
-                        max-width: 46px !important;
-                        min-width: 46px !important;
-                        height: 42px !important;
-                        min-height: 42px !important;
-                        padding: 0 !important;
-                        margin: 0 !important;
-                        border: 0 !important;
-                        border-radius: 8px !important;
-                        background: transparent !important;
-                        box-shadow: none !important;
-                        color: {colore_freccia} !important;
-                        font-size: 27px !important;
-                        font-weight: 900 !important;
-                        line-height: 42px !important;
-                        text-align: center !important;
-                    }
-                    [class*="st-key-campo_stato_menu_"] button:hover,
-                    [class*="st-key-campo_stato_menu_"] button:focus,
-                    [class*="st-key-campo_stato_menu_"] button:active {
-                        background: transparent !important;
-                        box-shadow: none !important;
-                    }
-                    @media (max-width: 640px) {
-                        [class*="st-key-campo_stato_menu_"] {
-                            width: 46px !important;
-                            max-width: 46px !important;
-                            min-width: 46px !important;
-                        }
-                        [class*="st-key-campo_stato_menu_"] button {
-                            width: 46px !important;
-                            max-width: 46px !important;
-                            min-width: 46px !important;
+                            border: 0 !important;
+                            background: transparent !important;
+                            box-shadow: none !important;
                             font-size: 25px !important;
+                            line-height: 1 !important;
+                        }
+                        [class*="st-key-campo_riga_"] [data-testid="stPopover"] > button p {
+                            margin: 0 !important;
+                            padding: 0 !important;
+                            line-height: 1 !important;
+                        }
+                        [class*="st-key-campo_riga_"] [data-testid="stPopover"] + * {
+                            min-width: 0 !important;
+                        }
+                        [class*="st-key-campo_riga_"] [data-testid="stMarkdownContainer"] {
+                            width: 100% !important;
+                            min-width: 0 !important;
+                            max-width: 100% !important;
+                            overflow: hidden !important;
                         }
                     }
+
                     .campo-metric-card {
                         background: linear-gradient(135deg, #142033 0%, #0F1724 100%);
                         border: 1px solid #26384F;
@@ -3611,163 +3528,64 @@ else:
                     if stato_attuale not in STATI_CONSEGNA:
                         stato_attuale = STATO_DA_FARE
 
-                    # V10.3.13: CAMPO smartphone - metodo semplice e robusto.
-                    # Niente freccia separata e niente selectbox largo: il nome del cliente
-                    # e' direttamente il pulsante che apre il menu a tendina.
-                    # In questo modo il controllo occupa esattamente la larghezza della card
-                    # e non puo' uscire dai bordi dello smartphone.
-                    chiave_menu_stato = f"campo_stato_menu_{idx_reale}_{str(row['CLIENTE']).replace(' ', '_')}"
-                    st.markdown(f"""
-                    <style>
-                    /* La card cliente occupa sempre tutta la larghezza disponibile. */
-                    [class*="st-key-campo_riga_"] {{
-                        width: 100% !important;
-                        max-width: 100% !important;
-                        min-width: 0 !important;
-                        box-sizing: border-box !important;
-                        overflow: hidden !important;
-                    }}
-
-                    /* Il trigger del popover e' la riga cliente stessa.
-                       Nessuna colonna e nessun elemento laterale: cosi' resta
-                       sempre perfettamente dentro la card. */
-                    [data-testid="stPopover"] {{
-                        width: 100% !important;
-                        max-width: 100% !important;
-                        min-width: 0 !important;
-                        box-sizing: border-box !important;
-                    }}
-                    [data-testid="stPopover"] > button,
-                    [data-testid="stPopover"] button {{
-                        width: 100% !important;
-                        max-width: 100% !important;
-                        min-width: 0 !important;
-                        box-sizing: border-box !important;
-                        min-height: 30px !important;
-                        height: 30px !important;
-                        padding: 0 6px !important;
-                        margin: 0 !important;
-                        border: 0 !important;
-                        border-radius: 10px !important;
-                        background: transparent !important;
-                        box-shadow: none !important;
-                        color: #FFFFFF !important;
-                        font-size: 16px !important;
-                        font-weight: 800 !important;
-                        line-height: 30px !important;
-                        text-align: left !important;
-                        display: flex !important;
-                        flex-direction: row !important;
-                        justify-content: flex-start !important;
-                        align-items: center !important;
-                        align-content: flex-start !important;
-                        align-self: flex-start !important;
-                        margin-left: 0 !important;
-                        margin-right: 0 !important;
-                        text-indent: 0 !important;
-                        white-space: nowrap !important;
-                        overflow: hidden !important;
-                        text-overflow: ellipsis !important;
-                    }}
-                    /* Streamlit puo' inserire uno o piu' wrapper interni nel trigger.
-                       Alcuni temi applicano margin-left:auto / justify-content:flex-end
-                       al contenuto: e' questo che spinge il nome tutto a destra.
-                       Forziamo OGNI livello interno a partire da sinistra. */
-                    [data-testid="stPopover"] button > *,
-                    [data-testid="stPopover"] button > * > *,
-                    [data-testid="stPopover"] button > * > * > *,
-                    [data-testid="stPopover"] button [data-testid="stMarkdownContainer"],
-                    [data-testid="stPopover"] button p,
-                    [data-testid="stPopover"] button span {{
-                        width: 100% !important;
-                        max-width: 100% !important;
-                        min-width: 0 !important;
-                        box-sizing: border-box !important;
-                        margin-left: 0 !important;
-                        margin-right: 0 !important;
-                        padding-left: 0 !important;
-                        padding-right: 0 !important;
-                        text-align: left !important;
-                        justify-content: flex-start !important;
-                        align-items: flex-start !important;
-                        align-self: flex-start !important;
-                        flex: 1 1 auto !important;
-                    }}
-                    [data-testid="stPopover"] button > div,
-                    [data-testid="stPopover"] button > div > div,
-                    [data-testid="stPopover"] button > div > div > div {{
-                        display: flex !important;
-                        flex-direction: row !important;
-                        justify-content: flex-start !important;
-                        align-items: center !important;
-                        margin-left: 0 !important;
-                        margin-right: 0 !important;
-                        text-align: left !important;
-                    }}
-                    [data-testid="stPopover"] button [data-testid="stMarkdownContainer"] > div,
-                    [data-testid="stPopover"] button [data-testid="stMarkdownContainer"] p,
-                    [data-testid="stPopover"] button [data-testid="stMarkdownContainer"] span {{
-                        display: block !important;
-                        width: 100% !important;
-                        margin: 0 !important;
-                        padding: 0 !important;
-                        text-align: left !important;
-                        white-space: nowrap !important;
-                        overflow: hidden !important;
-                        text-overflow: ellipsis !important;
-                    }}
-                    [data-testid="stPopover"] button svg,
-                    [data-testid="stPopover"] button [data-testid="stIcon"] {{
-                        display: none !important;
-                        width: 0 !important;
-                        max-width: 0 !important;
-                        flex: 0 0 0 !important;
-                    }}
-                    [data-testid="stPopover"] > button svg,
-                    [data-testid="stPopover"] > button [data-testid="stIcon"] {{
-                        display: none !important;
-                    }}
-                    [data-testid="stPopover"] > button:hover,
-                    [data-testid="stPopover"] > button:focus,
-                    [data-testid="stPopover"] > button:active {{
-                        background: rgba(255,255,255,0.04) !important;
-                        box-shadow: none !important;
-                    }}
-                    @media (max-width: 640px) {{
-                        [class*="st-key-campo_riga_"] {{
-                            width: 100% !important;
-                            max-width: 100% !important;
-                            min-width: 0 !important;
-                            overflow: hidden !important;
-                        }}
-                        [data-testid="stPopover"],
-                        [data-testid="stPopover"] > button,
-                        [data-testid="stPopover"] button {{
-                            width: 100% !important;
-                            max-width: 100% !important;
-                            min-width: 0 !important;
-                        }}
-                    }}
-                    </style>
-                    """, unsafe_allow_html=True)
-
+                    # V10.3.5: su smartphone ogni cliente occupa UNA SOLA RIGA, mantenendo il responsive del resto della CAMPO.
+                    # Mostriamo esclusivamente nome cliente + menu stato, senza badge,
+                    # indirizzo o altri dettagli: durante la guida la priorita' e' la
+                    # gestione rapida della consegna.
                     with st.container(border=True, key=f"campo_riga_{idx_reale}"):
-                        stato_nuovo = stato_attuale
-                        with st.popover(str(row['CLIENTE']), key=chiave_menu_stato, use_container_width=True):
-                            st.caption("Stato consegna")
-                            for opzione_stato in STATI_CONSEGNA:
-                                if st.button(
-                                    opzione_stato,
-                                    key=f"campo_stato_opzione_{idx_reale}_{opzione_stato}",
-                                    use_container_width=True,
-                                ):
-                                    stato_nuovo = opzione_stato
-                                    st.session_state[f"campo_stato_scelto_{idx_reale}"] = opzione_stato
-                                    st.rerun()
+                        col_cliente, col_stato = st.columns([0.68, 0.32], gap="small", vertical_alignment="center")
+                        with col_cliente:
+                            st.markdown(
+                                f"<div style='font-size:15px; font-weight:800; color:#FFFFFF; line-height:1.15; padding:5px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;'>{row['CLIENTE']}</div>",
+                                unsafe_allow_html=True
+                            )
+                        with col_stato:
+                            # V10.3.9: sullo smartphone mostriamo SOLO una piccola freccia
+                            # colorata. Il click apre il menu con le quattro opzioni; una volta
+                            # scelta l'opzione, il popover si chiude automaticamente al rerun.
+                            colori_stato = {
+                                STATO_DA_FARE: "#D9D9D9",
+                                STATO_FATTO: "#22C55E",
+                                STATO_PARZIALE: "#F59E0B",
+                                STATO_RESPINTO: "#EF4444",
+                            }
+                            colore_freccia = colori_stato.get(stato_attuale, "#D9D9D9")
+                            stato_nuovo = stato_attuale
+                            with st.popover("⌄", use_container_width=True):
+                                st.markdown(
+                                    "<div style='font-size:12px;font-weight:800;margin-bottom:6px;'>STATO CONSEGNA</div>",
+                                    unsafe_allow_html=True
+                                )
+                                for opzione_stato in STATI_CONSEGNA:
+                                    etichetta_opzione = opzione_stato
+                                    if st.button(
+                                        etichetta_opzione,
+                                        key=f"stato_opzione_campo_{idx_reale}_{row['CLIENTE']}_{opzione_stato}",
+                                        use_container_width=True,
+                                        type="secondary"
+                                    ):
+                                        stato_nuovo = opzione_stato
+                                        st.session_state[f"stato_selezionato_campo_{idx_reale}"] = opzione_stato
+                                        st.rerun()
 
-                        stato_scelto = st.session_state.pop(f"campo_stato_scelto_{idx_reale}", None)
-                        if stato_scelto in STATI_CONSEGNA:
-                            stato_nuovo = stato_scelto
+                            # Colore della freccia in base allo stato corrente.
+                            # Il CSS viene applicato alla piccola area del pulsante popover.
+                            st.markdown(
+                                f"""<style>
+                                [class*='st-key-campo_riga_{idx_reale}'] [data-testid='stPopover'] > button {{
+                                    color: {colore_freccia} !important;
+                                    font-size: 25px !important;
+                                    font-weight: 900 !important;
+                                    line-height: 1 !important;
+                                    padding: 0 !important;
+                                    min-height: 38px !important;
+                                }}
+                                </style>""",
+                                unsafe_allow_html=True
+                            )
+                            stato_selezionato = st.session_state.pop(f"stato_selezionato_campo_{idx_reale}", None)
+                            if stato_selezionato in STATI_CONSEGNA:
+                                stato_nuovo = stato_selezionato
                     if stato_nuovo != stato_attuale:
                         # Aggiornamento immediato del dataframe reale: il cliente
                         # deve sparire dalla CAMPO al rerun successivo.
