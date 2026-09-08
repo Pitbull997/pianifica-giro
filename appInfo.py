@@ -3294,7 +3294,7 @@ else:
                 </div>
                 ''' , unsafe_allow_html=True)
             elif st.session_state.vista_giro == "CAMPO":
-                # V10.3.2: dashboard CAMPO pulita e ottimizzata per l'uso durante la guida.
+                # V10.3.3: dashboard CAMPO pulita e ottimizzata per l'uso durante la guida.
                 # Palette e icone restano coerenti con l'interfaccia VanGo.
                 st.markdown("""
                 <style>
@@ -3442,20 +3442,25 @@ else:
                     if stato_attuale not in STATI_CONSEGNA:
                         stato_attuale = STATO_DA_FARE
 
-                    st.markdown(f"""
-                    <div class="clean-card" style="opacity:1.0; margin-bottom:6px;">
-                        <div class="clean-badge">{idx + 1}</div>
-                        <div class="clean-content">
-                            <div class="clean-title">{row['CLIENTE']}</div>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    stato_nuovo = st.selectbox(
-                        "Stato",
-                        options=STATI_CONSEGNA,
-                        index=STATI_CONSEGNA.index(stato_attuale),
-                        key=f"stato_consegna_campo_{idx_reale}_{row['CLIENTE']}"
-                    )
+                    # V10.3.3: su smartphone ogni cliente occupa UNA SOLA RIGA.
+                    # Mostriamo esclusivamente nome cliente + menu stato, senza badge,
+                    # indirizzo o altri dettagli: durante la guida la priorita' e' la
+                    # gestione rapida della consegna.
+                    with st.container(border=True):
+                        col_cliente, col_stato = st.columns([0.58, 0.42], gap="small", vertical_alignment="center")
+                        with col_cliente:
+                            st.markdown(
+                                f"<div style='font-size:16px; font-weight:800; color:#FFFFFF; line-height:1.2; padding:8px 0;'>{row['CLIENTE']}</div>",
+                                unsafe_allow_html=True
+                            )
+                        with col_stato:
+                            stato_nuovo = st.selectbox(
+                                "Stato",
+                                options=STATI_CONSEGNA,
+                                index=STATI_CONSEGNA.index(stato_attuale),
+                                key=f"stato_consegna_campo_{idx_reale}_{row['CLIENTE']}",
+                                label_visibility="collapsed"
+                            )
                     if stato_nuovo != stato_attuale:
                         # Aggiornamento immediato del dataframe reale: il cliente
                         # deve sparire dalla CAMPO al rerun successivo.
