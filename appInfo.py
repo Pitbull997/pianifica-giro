@@ -1208,7 +1208,7 @@ def _simula_tempo_percorso_orari(ordine, durate, orari_apertura, ora_partenza_mi
 
 
 def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=300):
-    """V10.2 TEST: un solo furgone + aperture + 6 min medi per fermata.
+    """V10.2 TEST: un solo furgone + aperture + 12 min medi per fermata.
 
     OSRM fornisce i tempi stradali; OR-Tools decide l'ordine.
     Non esistono orari di chiusura nel DB, quindi ogni ORA valida e' trattata
@@ -1236,7 +1236,7 @@ def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=
     costo_callback = routing.RegisterTransitCallback(costo_arco)
     routing.SetArcCostEvaluatorOfAllVehicles(costo_callback)
 
-    # Ogni cliente richiede in media 6 minuti per parcheggio + scarico.
+    # Ogni cliente richiede in media 12 minuti per parcheggio + scarico.
     # Il tempo di servizio viene aggiunto dopo l'arrivo al cliente e quindi
     # influisce sull'orario di arrivo di tutte le fermate successive.
     def tempo_arco(from_index, to_index):
@@ -1297,7 +1297,7 @@ def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=
     try:
         dimensione_tempo.SetSlackCostCoefficientForAllVehicles(COEFFICIENTE_ATTESA_MINUTO)
         # Minimizza anche il tempo complessivo del giro, includendo viaggio,
-        # attese e i 6 minuti medi di servizio per ogni cliente.
+        # attese e i 12 minuti medi di servizio per ogni cliente.
         dimensione_tempo.SetSpanCostCoefficientForAllVehicles(COEFFICIENTE_ATTESA_MINUTO)
     except Exception:
         pass
@@ -1391,7 +1391,7 @@ def ottimizza_giro_orari_test(df_giro, df_db=None, ora_partenza_minuti=300):
     df_ottimizzato = df_originale.iloc[indici_clienti].reset_index(drop=True).copy()
     df_ottimizzato["POSIZIONE"] = [str(i) for i in range(1, len(df_ottimizzato) + 1)]
 
-    # Simulazione finale con secondi OSRM: viaggio -> attesa -> 6 min servizio.
+    # Simulazione finale con secondi OSRM: viaggio -> attesa -> 12 min servizio.
     orari_apertura = dati_tempo.get("orari_apertura", []) if isinstance(dati_tempo, dict) else []
     simulazione = _simula_tempo_percorso_orari(
         ordine_ottimizzato, durate, orari_apertura,
@@ -1764,7 +1764,7 @@ def _meta_utente_giro(nome_utente):
 
 def carica_stato_giro_persistente(nome_utente):
     """Legge lo stato tecnico del giro da GiroAttivo, senza modificare Foglio1/Utenti."""
-    risultato = {"giro_terminato": False, "inizio_giro_reale": None, "fine_giro_reale": None, "previsione_giro": None}
+    risultato = {"giro_terminato": False, "inizio_giro_reale": None, "fine_giro_reale": None, "previsione_giro": None, "ora_partenza_reale_minuti": None}
     try:
         df = carica_tutti_i_giri_da_sheets()
         if df.empty:
@@ -1786,6 +1786,7 @@ def carica_stato_giro_persistente(nome_utente):
         risultato["inizio_giro_reale"] = dati.get("inizio_giro_reale")
         risultato["fine_giro_reale"] = dati.get("fine_giro_reale")
         risultato["previsione_giro"] = dati.get("previsione_giro")
+        risultato["ora_partenza_reale_minuti"] = dati.get("ora_partenza_reale_minuti")
     except Exception:
         pass
     return risultato
@@ -1799,6 +1800,7 @@ def salva_stato_giro_persistente(nome_utente):
         "inizio_giro_reale": st.session_state.get("inizio_giro_reale"),
         "fine_giro_reale": st.session_state.get("fine_giro_reale"),
         "previsione_giro": st.session_state.get("previsione_giro"),
+        "ora_partenza_reale_minuti": st.session_state.get("ora_partenza_reale_minuti"),
     }
     payload = _json.dumps(meta, ensure_ascii=False)
     cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'TIPO_RIGA', 'BACKUP_JSON']
@@ -2179,6 +2181,7 @@ if 'giro_corrente' not in st.session_state or st.session_state.get('ultimo_utent
         st.session_state.inizio_giro_reale = stato_persistente.get("inizio_giro_reale")
         st.session_state.fine_giro_reale = stato_persistente.get("fine_giro_reale")
         st.session_state.previsione_giro = stato_persistente.get("previsione_giro")
+        st.session_state.ora_partenza_reale_minuti = stato_persistente.get("ora_partenza_reale_minuti")
         st.session_state.metriche_giro_corrente = None
         st.session_state.ultimo_utente_caricato = st.session_state.utente_corrente
     else:
@@ -2196,6 +2199,8 @@ if 'previsione_giro' not in st.session_state:
     st.session_state.previsione_giro = None
 if 'inizio_giro_reale' not in st.session_state:
     st.session_state.inizio_giro_reale = None
+if 'ora_partenza_reale_minuti' not in st.session_state:
+    st.session_state.ora_partenza_reale_minuti = None
 if 'fine_giro_reale' not in st.session_state:
     st.session_state.fine_giro_reale = None
 if 'giro_terminato' not in st.session_state:
@@ -2575,6 +2580,7 @@ else:
                 st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO'])
                 st.session_state.giro_terminato = False
                 st.session_state.inizio_giro_reale = None
+                st.session_state.ora_partenza_reale_minuti = None
                 st.session_state.fine_giro_reale = None
                 st.session_state.metriche_giro_corrente = None
                 salva_stato_giro_persistente(st.session_state.utente_corrente)
@@ -2653,7 +2659,11 @@ else:
                         df_opt, metriche_opt = ottimizza_giro_orari_test(
                             st.session_state.giro_corrente,
                             st.session_state.db_clienti,
-                            ora_partenza_minuti=300,
+                            ora_partenza_minuti=(
+                                int(st.session_state.get("ora_partenza_reale_minuti"))
+                                if st.session_state.get("ora_partenza_reale_minuti") is not None
+                                else 5 * 60 + 20
+                            ),
                         )
                     else:
                         df_opt, metriche_opt = ottimizza_giro_free(
@@ -3046,6 +3056,16 @@ else:
 
         st.markdown("---")
 
+        def _minuti_da_timestamp_locale(timestamp):
+            """Converte un timestamp in minuti dall'inizio della giornata locale Europe/Rome."""
+            try:
+                tz = ZoneInfo("Europe/Rome") if ZoneInfo is not None else None
+                dt = datetime.fromtimestamp(float(timestamp), tz) if tz else datetime.fromtimestamp(float(timestamp))
+                return dt.hour * 60 + dt.minute
+            except Exception:
+                dt = datetime.fromtimestamp(float(timestamp))
+                return dt.hour * 60 + dt.minute
+
         def _timestamp_oggi_alle_0520():
             """Timestamp locale Europe/Rome di oggi alle 05:20, usato come partenza implicita."""
             try:
@@ -3056,6 +3076,11 @@ else:
             except Exception:
                 adesso = datetime.now()
                 return adesso.replace(hour=5, minute=20, second=0, microsecond=0).timestamp()
+
+        # Se esiste un vecchio stato con il timestamp ma senza i minuti di partenza,
+        # ricaviamo l'orario reale in modo retrocompatibile.
+        if st.session_state.get("ora_partenza_reale_minuti") is None and st.session_state.get("inizio_giro_reale") is not None:
+            st.session_state.ora_partenza_reale_minuti = _minuti_da_timestamp_locale(st.session_state.inizio_giro_reale)
 
         # V10.2.17: le consegne possono essere tutte gestite, ma il giro non e'
         # realmente terminato finche' il mezzo non rientra in sede e l'utente
@@ -3116,6 +3141,7 @@ else:
                 if inizio is None:
                     inizio = _timestamp_oggi_alle_0520()
                     st.session_state.inizio_giro_reale = inizio
+                    st.session_state.ora_partenza_reale_minuti = 5 * 60 + 20
                     salva_stato_giro_persistente(st.session_state.utente_corrente)
                 if fine is not None:
                     effettivo = max(0.0, (float(fine) - float(inizio)) / 60.0)
@@ -3144,6 +3170,7 @@ else:
                     if st.button("🏁 TERMINA GIRO", use_container_width=True, type="primary", key="btn_termina_giro"):
                         if st.session_state.get("inizio_giro_reale") is None:
                             st.session_state.inizio_giro_reale = _timestamp_oggi_alle_0520()
+                            st.session_state.ora_partenza_reale_minuti = 5 * 60 + 20
                         st.session_state.fine_giro_reale = time.time()
                         st.session_state.giro_terminato = True
                         salva_stato_giro_persistente(st.session_state.utente_corrente)
@@ -3238,12 +3265,46 @@ else:
                 if not st.session_state.get("giro_terminato", False) and st.session_state.get("inizio_giro_reale") is None:
                     if st.button("▶️ INIZIA GIRO", use_container_width=True, type="primary", key="btn_inizia_giro"):
                         st.session_state.inizio_giro_reale = time.time()
+                        st.session_state.ora_partenza_reale_minuti = _minuti_da_timestamp_locale(st.session_state.inizio_giro_reale)
                         st.session_state.fine_giro_reale = None
                         st.session_state.giro_terminato = False
                         salva_stato_giro_persistente(st.session_state.utente_corrente)
                         st.rerun()
                 elif st.session_state.get("inizio_giro_reale") is not None and not st.session_state.get("giro_terminato", False):
-                    st.caption("🕐 Giro iniziato: il tempo effettivo viene calcolato fino a TERMINA GIRO.")
+                    ora_partenza = st.session_state.get("ora_partenza_reale_minuti")
+                    if ora_partenza is not None:
+                        st.caption(f"🕐 Partenza reale registrata alle {_formatta_ora_minuti(int(ora_partenza))}. Il tempo effettivo viene calcolato fino a TERMINA GIRO.")
+                    else:
+                        st.caption("🕐 Giro iniziato: il tempo effettivo viene calcolato fino a TERMINA GIRO.")
+                elif st.session_state.get("giro_terminato", False):
+                    st.caption("🏁 Giro terminato: partenza e fine del giro sono memorizzate.")
+
+                # V10.2.23: stima dinamica dell'arrivo alla prima consegna.
+                # Non modifica l'ordine del giro e non riottimizza nulla.
+                # Se INIZIA GIRO è stato premuto usa l'orario reale; altrimenti 05:20.
+                if not st.session_state.get("giro_terminato", False) and not st.session_state.giro_corrente.empty:
+                    try:
+                        df_prima = st.session_state.giro_corrente.copy().reset_index(drop=True)
+                        stati_gestiti_tmp = [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
+                        df_prima = df_prima[~df_prima.get("STATO", pd.Series([STATO_DA_FARE] * len(df_prima))).fillna("").astype(str).isin(stati_gestiti_tmp)]
+                        if not df_prima.empty:
+                            prima = df_prima.iloc[0]
+                            coord_prima = _trova_coordinate_nel_db(prima, st.session_state.db_clienti)
+                            if coord_prima is not None:
+                                dist_prima, dur_prima = _richiedi_matrice_osrm([COORDINATE_DEPOSITO_VANGO, coord_prima])
+                                sec_prima = dur_prima[0][1]
+                                if sec_prima is not None:
+                                    partenza_min = st.session_state.get("ora_partenza_reale_minuti")
+                                    if partenza_min is None:
+                                        partenza_min = 5 * 60 + 20
+                                    arrivo_prima = float(partenza_min) + float(sec_prima) / 60.0
+                                    apertura_prima = _parse_orario_apertura(prima.get("ORA", ""))
+                                    if apertura_prima is not None:
+                                        arrivo_prima = max(arrivo_prima, float(apertura_prima))
+                                    st.info(f"🕐 Prima consegna: **{_formatta_ora_minuti(round(arrivo_prima))}** — {prima.get('CLIENTE', 'Cliente')}")
+                    except Exception:
+                        pass
+
                 st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
                 # CAMPO: mostra SOLO le consegne ancora da gestire.
                 # Il filtro viene applicato direttamente al giro reale, prima della
@@ -3507,6 +3568,7 @@ else:
                     # Nuovo/nuovamente preparato giro: lo stato TERMINA GIRO precedente non vale piu'.
                     st.session_state.giro_terminato = False
                     st.session_state.inizio_giro_reale = None
+                    st.session_state.ora_partenza_reale_minuti = None
                     st.session_state.fine_giro_reale = None
                     st.session_state.previsione_giro = None
                     st.session_state.metriche_giro_corrente = None
