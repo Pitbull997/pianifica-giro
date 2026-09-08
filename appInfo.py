@@ -1752,6 +1752,79 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
 
 
 BACKUP_UTENTE_PREFIX = "__VANGO_BACKUP__::"
+GIRO_META_PREFIX = "__VANGO_META__::"
+
+def _meta_utente_giro(nome_utente):
+    return f"{GIRO_META_PREFIX}{str(nome_utente).strip()}"
+
+def carica_stato_giro_persistente(nome_utente):
+    """Legge lo stato tecnico del giro da GiroAttivo, senza modificare Foglio1/Utenti."""
+    risultato = {"giro_terminato": False, "inizio_giro_reale": None, "fine_giro_reale": None}
+    try:
+        df = carica_tutti_i_giri_da_sheets()
+        if df.empty:
+            return risultato
+        df.columns = df.columns.str.strip().str.upper()
+        if "UTENTE" not in df.columns:
+            return risultato
+        target = _meta_utente_giro(nome_utente).strip().lower()
+        righe = df[df["UTENTE"].astype(str).str.strip().str.lower() == target]
+        if righe.empty:
+            return risultato
+        row = righe.iloc[-1]
+        raw = str(row.get("BACKUP_JSON", "") or "").strip()
+        if not raw:
+            return risultato
+        import json as _json
+        dati = _json.loads(raw)
+        risultato["giro_terminato"] = bool(dati.get("giro_terminato", False))
+        risultato["inizio_giro_reale"] = dati.get("inizio_giro_reale")
+        risultato["fine_giro_reale"] = dati.get("fine_giro_reale")
+    except Exception:
+        pass
+    return risultato
+
+def salva_stato_giro_persistente(nome_utente):
+    """Memorizza lo stato di TERMINA GIRO dentro GiroAttivo."""
+    import json as _json
+    meta = {
+        "tipo": "STATO_GIRO",
+        "giro_terminato": bool(st.session_state.get("giro_terminato", False)),
+        "inizio_giro_reale": st.session_state.get("inizio_giro_reale"),
+        "fine_giro_reale": st.session_state.get("fine_giro_reale"),
+    }
+    payload = _json.dumps(meta, ensure_ascii=False)
+    cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'TIPO_RIGA', 'BACKUP_JSON']
+    for tentativo in range(5):
+        try:
+            if sheet_giro:
+                time.sleep(1.5 * (tentativo + 1))
+                data_totale = sheet_giro.get_all_records()
+                df_tutti = pd.DataFrame(data_totale) if data_totale else pd.DataFrame(columns=cols_ordine)
+                if not df_tutti.empty:
+                    df_tutti.columns = df_tutti.columns.str.strip().str.upper()
+                    if 'Q.TA' in df_tutti.columns:
+                        df_tutti = df_tutti.rename(columns={'Q.TA': 'Q.ta'})
+                    for c in cols_ordine:
+                        if c not in df_tutti.columns:
+                            df_tutti[c] = ""
+                    df_tutti = df_tutti[cols_ordine]
+                    meta_user = _meta_utente_giro(nome_utente).strip().lower()
+                    mask_meta = df_tutti['UTENTE'].astype(str).str.strip().str.lower() == meta_user
+                    df_tutti = df_tutti.loc[~mask_meta].copy()
+                riga = {c: "" for c in cols_ordine}
+                riga['UTENTE'] = _meta_utente_giro(nome_utente)
+                riga['TIPO_RIGA'] = 'STATO_GIRO'
+                riga['BACKUP_JSON'] = payload
+                df_tutti = pd.concat([df_tutti, pd.DataFrame([riga])], ignore_index=True)
+                sheet_giro.clear()
+                sheet_giro.update([cols_ordine] + df_tutti.astype(str).values.tolist())
+                st.cache_data.clear()
+                return True
+        except Exception:
+            if tentativo == 4:
+                return False
+    return False
 
 def salva_stato_consegna(idx, stato):
     """Aggiorna solo lo stato della consegna e lo salva su GiroAttivo."""
@@ -1764,6 +1837,7 @@ def salva_stato_consegna(idx, stato):
     st.session_state.giro_corrente = df
     st.session_state.fine_giro_reale = None
     st.session_state.giro_terminato = False
+    salva_stato_giro_persistente(st.session_state.utente_corrente)
     salva_giro_utente_su_sheets(st.session_state.utente_corrente, df)
     st.rerun()
 
@@ -2093,6 +2167,10 @@ if not st.session_state.autenticato:
 if 'giro_corrente' not in st.session_state or st.session_state.get('ultimo_utente_caricato') != st.session_state.utente_corrente:
     if st.session_state.utente_corrente:
         st.session_state.giro_corrente = carica_giro_utente_da_sheets(st.session_state.utente_corrente)
+        stato_persistente = carica_stato_giro_persistente(st.session_state.utente_corrente)
+        st.session_state.giro_terminato = bool(stato_persistente.get("giro_terminato", False))
+        st.session_state.inizio_giro_reale = stato_persistente.get("inizio_giro_reale")
+        st.session_state.fine_giro_reale = stato_persistente.get("fine_giro_reale")
         st.session_state.metriche_giro_corrente = None
         st.session_state.ultimo_utente_caricato = st.session_state.utente_corrente
     else:
@@ -2391,6 +2469,10 @@ elif not st.session_state.autenticato and st.session_state.pagina_attiva == "log
                         st.session_state.ricordami_attivo = False
                     
                     st.session_state.giro_corrente = carica_giro_utente_da_sheets(username_input)
+                    stato_persistente = carica_stato_giro_persistente(username_input)
+                    st.session_state.giro_terminato = bool(stato_persistente.get("giro_terminato", False))
+                    st.session_state.inizio_giro_reale = stato_persistente.get("inizio_giro_reale")
+                    st.session_state.fine_giro_reale = stato_persistente.get("fine_giro_reale")
                     st.session_state.ultimo_utente_caricato = username_input
                     
                     st.rerun()
@@ -2483,7 +2565,11 @@ else:
         if st.button("🗑️ SVUOTA GIRO", use_container_width=True, key="btn_svuota"):
             if not st.session_state.giro_corrente.empty:
                 st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO'])
+                st.session_state.giro_terminato = False
+                st.session_state.inizio_giro_reale = None
+                st.session_state.fine_giro_reale = None
                 st.session_state.metriche_giro_corrente = None
+                salva_stato_giro_persistente(st.session_state.utente_corrente)
                 salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
                 st.session_state.giro_ottimizzato_proposto = None
                 st.session_state.metriche_ottimizzazione = None
@@ -2665,6 +2751,7 @@ else:
                 st.session_state.inizio_giro_reale = None
                 st.session_state.fine_giro_reale = None
                 st.session_state.giro_terminato = False
+                salva_stato_giro_persistente(st.session_state.utente_corrente)
                 # Conserva i dati temporali ORARI del giro appena applicato.
                 if str(m.get("metodo", "")).startswith("ORARI"):
                     st.session_state.metriche_tempo_orari_corrente = {
@@ -2992,6 +3079,7 @@ else:
                     if st.button("🏁 TERMINA GIRO", use_container_width=True, type="primary", key="btn_termina_giro"):
                         st.session_state.fine_giro_reale = time.time()
                         st.session_state.giro_terminato = True
+                        salva_stato_giro_persistente(st.session_state.utente_corrente)
                         st.rerun()
                 else:
                     st.success("🏁 Giro terminato: rientro in sede registrato.")
@@ -3155,6 +3243,8 @@ else:
                             st.session_state.giro_corrente = df_reale
                             st.session_state.fine_giro_reale = None
                             st.session_state.giro_terminato = False
+                            # Un nuovo cambio stato riapre il giro: aggiorna anche lo stato persistente.
+                            salva_stato_giro_persistente(st.session_state.utente_corrente)
                             # Nascondi IMMEDIATAMENTE il cliente dalla CAMPO.
                             # La chiave include indice + cliente + comune + via per
                             # evitare che il widget possa farlo ricomparire al rerun.
@@ -3343,7 +3433,12 @@ else:
                     nuovi_clienti['STATO'] = STATO_DA_FARE
                     
                     st.session_state.giro_corrente = pd.concat([st.session_state.giro_corrente, nuovi_clienti], ignore_index=True)
+                    # Nuovo/nuovamente preparato giro: lo stato TERMINA GIRO precedente non vale piu'.
+                    st.session_state.giro_terminato = False
+                    st.session_state.inizio_giro_reale = None
+                    st.session_state.fine_giro_reale = None
                     st.session_state.metriche_giro_corrente = None
+                    salva_stato_giro_persistente(st.session_state.utente_corrente)
                     st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
                     
                     salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
