@@ -3624,25 +3624,69 @@ else:
                         flex-direction: row !important;
                         justify-content: flex-start !important;
                         align-items: center !important;
-                        text-align: left !important;
+                        align-content: flex-start !important;
+                        align-self: flex-start !important;
+                        margin-left: 0 !important;
+                        margin-right: 0 !important;
+                        text-indent: 0 !important;
                         white-space: nowrap !important;
                         overflow: hidden !important;
                         text-overflow: ellipsis !important;
                     }}
-                    [data-testid="stPopover"] > button > div,
-                    [data-testid="stPopover"] > button > div > div,
-                    [data-testid="stPopover"] > button > div > p,
-                    [data-testid="stPopover"] > button p {{
+                    /* Streamlit puo' inserire uno o piu' wrapper interni nel trigger.
+                       Alcuni temi applicano margin-left:auto / justify-content:flex-end
+                       al contenuto: e' questo che spinge il nome tutto a destra.
+                       Forziamo OGNI livello interno a partire da sinistra. */
+                    [data-testid="stPopover"] button > *,
+                    [data-testid="stPopover"] button > * > *,
+                    [data-testid="stPopover"] button > * > * > *,
+                    [data-testid="stPopover"] button [data-testid="stMarkdownContainer"],
+                    [data-testid="stPopover"] button p,
+                    [data-testid="stPopover"] button span {
                         width: 100% !important;
                         max-width: 100% !important;
-                        display: block !important;
-                        flex: 1 1 auto !important;
+                        min-width: 0 !important;
+                        box-sizing: border-box !important;
+                        margin-left: 0 !important;
+                        margin-right: 0 !important;
+                        padding-left: 0 !important;
+                        padding-right: 0 !important;
                         text-align: left !important;
                         justify-content: flex-start !important;
                         align-items: flex-start !important;
+                        align-self: flex-start !important;
+                        flex: 1 1 auto !important;
+                    }
+                    [data-testid="stPopover"] button > div,
+                    [data-testid="stPopover"] button > div > div,
+                    [data-testid="stPopover"] button > div > div > div {
+                        display: flex !important;
+                        flex-direction: row !important;
+                        justify-content: flex-start !important;
+                        align-items: center !important;
+                        margin-left: 0 !important;
+                        margin-right: 0 !important;
+                        text-align: left !important;
+                    }
+                    [data-testid="stPopover"] button [data-testid="stMarkdownContainer"] > div,
+                    [data-testid="stPopover"] button [data-testid="stMarkdownContainer"] p,
+                    [data-testid="stPopover"] button [data-testid="stMarkdownContainer"] span {
+                        display: block !important;
+                        width: 100% !important;
                         margin: 0 !important;
                         padding: 0 !important;
-                    }}
+                        text-align: left !important;
+                        white-space: nowrap !important;
+                        overflow: hidden !important;
+                        text-overflow: ellipsis !important;
+                    }
+                    [data-testid="stPopover"] button svg,
+                    [data-testid="stPopover"] button [data-testid="stIcon"] {
+                        display: none !important;
+                        width: 0 !important;
+                        max-width: 0 !important;
+                        flex: 0 0 0 !important;
+                    }
                     [data-testid="stPopover"] > button svg,
                     [data-testid="stPopover"] > button [data-testid="stIcon"] {{
                         display: none !important;
