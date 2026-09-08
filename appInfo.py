@@ -380,6 +380,49 @@ def _percorso_da_indici(indici, distanze, durate):
         totale_s += float(t)
     return totale_m, totale_s
 
+def calcola_metriche_giro_campo(df_giro, df_db):
+    """Calcola KM e tempo della parte di giro ancora da fare in CAMPO.
+
+    L'origine e' l'ultima consegna gia' gestita; se non ce n'e' una, parte dal
+    deposito. Include tutte le fermate ancora da consegnare nell'ordine corrente
+    e il rientro al deposito. Non modifica il giro e non riottimizza nulla.
+    """
+    if df_giro is None or df_giro.empty:
+        return {"km": 0.0, "minuti": 0.0}
+
+    df = df_giro.copy().reset_index(drop=True)
+    if "STATO" not in df.columns:
+        df["STATO"] = STATO_DA_FARE
+    df["STATO"] = df["STATO"].fillna("").astype(str)
+
+    stati_gestiti = [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
+    pendenti = df[~df["STATO"].isin(stati_gestiti)].copy().reset_index(drop=True)
+    if pendenti.empty:
+        return {"km": 0.0, "minuti": 0.0}
+
+    gestiti = df[df["STATO"].isin(stati_gestiti)]
+    if not gestiti.empty:
+        ultima_gestita = gestiti.iloc[-1]
+        origine = _trova_coordinate_nel_db(ultima_gestita, df_db)
+        if origine is None:
+            origine = COORDINATE_DEPOSITO_VANGO
+    else:
+        origine = COORDINATE_DEPOSITO_VANGO
+
+    coordinate = [origine]
+    for _, row in pendenti.iterrows():
+        coord = _trova_coordinate_nel_db(row, df_db)
+        if coord is None:
+            return None
+        coordinate.append(coord)
+    coordinate.append(COORDINATE_DEPOSITO_VANGO)
+
+    distanze, durate = _richiedi_matrice_osrm(coordinate)
+    ordine = list(range(len(coordinate)))
+    km, secondi = _percorso_da_indici(ordine, distanze, durate)
+    return {"km": km / 1000.0, "minuti": secondi / 60.0}
+
+
 def calcola_metriche_giro_corrente(df_giro, df_db):
     """Calcola KM e tempo del giro attualmente salvato, senza riottimizzarlo.
 
@@ -1792,6 +1835,8 @@ def sposta_cliente_pendente_nella_posizione(idx_reale, nuova_posizione):
 
     st.session_state.giro_corrente = df_nuovo
     st.session_state.metriche_giro_corrente = None
+    st.session_state.metriche_giro_campo = None
+    st.session_state.firma_metriche_giro_campo = None
     st.session_state.metriche_tempo_orari_corrente = None
     st.session_state.giro_ottimizzato_proposto = None
     st.session_state.metriche_ottimizzazione = None
@@ -2067,6 +2112,10 @@ if 'metriche_ottimizzazione' not in st.session_state:
 
 if 'metriche_giro_corrente' not in st.session_state:
     st.session_state.metriche_giro_corrente = None
+if 'metriche_giro_campo' not in st.session_state:
+    st.session_state.metriche_giro_campo = None
+if 'firma_metriche_giro_campo' not in st.session_state:
+    st.session_state.firma_metriche_giro_campo = None
 if 'metriche_tempo_orari_corrente' not in st.session_state:
     st.session_state.metriche_tempo_orari_corrente = None
 
@@ -2756,22 +2805,44 @@ else:
                 st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
         
 
-        # KM e tempo del GIRO CORRENTE: mostrati subito dopo "Comuni".
-        # Questi valori descrivono l'ordine attualmente salvato e NON avviano
-        # mai una nuova ottimizzazione. Il calcolo viene memorizzato in sessione
-        # e rifatto solo quando cambia l'ordine o il contenuto del giro.
-        if st.session_state.metriche_giro_corrente is None and not st.session_state.giro_corrente.empty:
-            try:
-                st.session_state.metriche_giro_corrente = calcola_metriche_giro_corrente(
-                    st.session_state.giro_corrente,
-                    st.session_state.db_clienti
-                )
-            except Exception:
-                # Nessun errore bloccante nell'interfaccia: se OSRM non risponde
-                # o manca una coordinata, lasciamo semplicemente il valore "—".
-                st.session_state.metriche_giro_corrente = None
-
-        metriche_giro = st.session_state.metriche_giro_corrente or {}
+        # KM e tempo: PREPARAZIONE/RIEPILOGO mostrano sempre il giro completo.
+        # CAMPO mostra invece solo la parte ancora da fare, partendo dall'ultima
+        # consegna gia' gestita (o dal deposito se non ne esiste una) e rientrando
+        # al deposito. Nessuna riottimizzazione automatica.
+        if st.session_state.vista_giro == "CAMPO":
+            df_per_metriche = st.session_state.giro_corrente.copy().reset_index(drop=True)
+            if "STATO" not in df_per_metriche.columns:
+                df_per_metriche["STATO"] = STATO_DA_FARE
+            stati_gestiti_metriche = [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
+            df_per_metriche = df_per_metriche[
+                ~df_per_metriche["STATO"].fillna("").astype(str).isin(stati_gestiti_metriche)
+            ].reset_index(drop=True)
+            firma_campo = _firma_ordine_giro(df_per_metriche)
+            if (
+                st.session_state.get("firma_metriche_giro_campo") != firma_campo
+                or st.session_state.get("metriche_giro_campo") is None
+            ):
+                try:
+                    st.session_state.metriche_giro_campo = calcola_metriche_giro_campo(
+                        st.session_state.giro_corrente,
+                        st.session_state.db_clienti
+                    )
+                except Exception:
+                    st.session_state.metriche_giro_campo = None
+                st.session_state.firma_metriche_giro_campo = firma_campo
+            metriche_giro = st.session_state.metriche_giro_campo or {}
+        else:
+            if st.session_state.metriche_giro_corrente is None and not st.session_state.giro_corrente.empty:
+                try:
+                    st.session_state.metriche_giro_corrente = calcola_metriche_giro_corrente(
+                        st.session_state.giro_corrente,
+                        st.session_state.db_clienti
+                    )
+                except Exception:
+                    # Nessun errore bloccante nell'interfaccia: se OSRM non risponde
+                    # o manca una coordinata, lasciamo semplicemente il valore "—".
+                    st.session_state.metriche_giro_corrente = None
+            metriche_giro = st.session_state.metriche_giro_corrente or {}
         km_giro = metriche_giro.get("km")
         minuti_giro = metriche_giro.get("minuti")
 
@@ -2815,7 +2886,16 @@ else:
             float(metriche_orari_correnti.get("attesa_totale_min", 0) or 0)
             if metriche_orari_valide else 0.0
         )
-        servizio_corrente = float(len(st.session_state.giro_corrente) * MINUTI_SERVIZIO_PER_FERMATA)
+        if st.session_state.vista_giro == "CAMPO":
+            df_servizio = st.session_state.giro_corrente.copy()
+            if "STATO" not in df_servizio.columns:
+                df_servizio["STATO"] = STATO_DA_FARE
+            df_servizio = df_servizio[
+                ~df_servizio["STATO"].fillna("").astype(str).isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO])
+            ]
+            servizio_corrente = float(len(df_servizio) * MINUTI_SERVIZIO_PER_FERMATA)
+        else:
+            servizio_corrente = float(len(st.session_state.giro_corrente) * MINUTI_SERVIZIO_PER_FERMATA)
         viaggio_corrente = float(minuti_giro or 0)
         tempo_reale_corrente = viaggio_corrente + attesa_corrente + servizio_corrente
 
