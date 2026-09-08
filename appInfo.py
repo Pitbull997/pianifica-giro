@@ -3706,19 +3706,17 @@ else:
                         if st.session_state.campo_menu_aperto == idx_reale:
                             with st.container(key=f"campo_menu_stati_{idx_reale}"):
                                 st.caption("Stato consegna")
-                                col_s1, col_s2 = st.columns(2)
-                                for n_opzione, opzione_stato in enumerate(STATI_CONSEGNA):
-                                    col = col_s1 if n_opzione % 2 == 0 else col_s2
-                                    with col:
-                                        if st.button(
-                                            opzione_stato,
-                                            key=f"campo_stato_opzione_{idx_reale}_{opzione_stato}",
-                                            use_container_width=True,
-                                        ):
-                                            stato_nuovo = opzione_stato
-                                            st.session_state.campo_menu_aperto = None
-                                            st.session_state[f"campo_stato_scelto_{idx_reale}"] = opzione_stato
-                                            st.rerun()
+                                # Menu stati verticale: una voce sotto l'altra.
+                                for opzione_stato in STATI_CONSEGNA:
+                                    if st.button(
+                                        opzione_stato,
+                                        key=f"campo_stato_opzione_{idx_reale}_{opzione_stato}",
+                                        use_container_width=True,
+                                    ):
+                                        stato_nuovo = opzione_stato
+                                        st.session_state.campo_menu_aperto = None
+                                        st.session_state[f"campo_stato_scelto_{idx_reale}"] = opzione_stato
+                                        st.rerun()
 
                         stato_scelto = st.session_state.pop(f"campo_stato_scelto_{idx_reale}", None)
                         if stato_scelto in STATI_CONSEGNA:
