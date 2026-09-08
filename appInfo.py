@@ -2690,20 +2690,39 @@ else:
             tempo_display = "—"
         col_m5.metric("Tempo Giro", tempo_display)
 
-        # Dopo aver applicato un giro ORARI, mostra sotto le metriche principali
-        # attesa, servizio e tempo reale complessivo.
+        # Dettaglio tempi del giro: SEMPRE visibile quando esiste un giro,
+        # indipendentemente dal tipo di ottimizzazione o dal fatto che sia stato
+        # ottimizzato. Il tempo di viaggio e' gia' mostrato sopra come "Tempo Giro".
+        #
+        # Attesa: per un giro normale/manuale e per ROUTE/ZONE/ZONE+ROUTE = 0.
+        # Per un giro ORARI appena applicato usiamo l'attesa calcolata dal motore.
+        # Servizio: sempre 6 minuti per fermata.
+        # Tempo reale: viaggio + attesa + servizio.
         metriche_orari_correnti = st.session_state.get("metriche_tempo_orari_corrente") or {}
-        if metriche_orari_correnti and metriche_orari_correnti.get("firma") == _firma_ordine_giro(st.session_state.giro_corrente):
-            def _formatta_durata_metriche(minuti):
-                minuti = max(0, int(round(float(minuti or 0))))
-                ore, minuti_restanti = divmod(minuti, 60)
-                return f"{ore} h {minuti_restanti:02d} min" if ore else f"{minuti_restanti} min"
+        firma_corrente = _firma_ordine_giro(st.session_state.giro_corrente)
+        metriche_orari_valide = (
+            bool(metriche_orari_correnti)
+            and metriche_orari_correnti.get("firma") == firma_corrente
+        )
 
-            st.markdown("**Dettaglio tempi ORARI del giro applicato**")
-            d1, d2, d3 = st.columns(3)
-            d1.metric("⏳ Attesa totale", f"{int(round(metriche_orari_correnti.get('attesa_totale_min', 0)))} min")
-            d2.metric("🅿️ Servizio totale", f"{int(round(metriche_orari_correnti.get('servizio_totale_min', 0)))} min")
-            d3.metric("🕐 Tempo totale reale giro", _formatta_durata_metriche(metriche_orari_correnti.get('tempo_totale_reale_min', 0)))
+        def _formatta_durata_metriche(minuti):
+            minuti = max(0, int(round(float(minuti or 0))))
+            ore, minuti_restanti = divmod(minuti, 60)
+            return f"{ore} h {minuti_restanti:02d} min" if ore else f"{minuti_restanti} min"
+
+        attesa_corrente = (
+            float(metriche_orari_correnti.get("attesa_totale_min", 0) or 0)
+            if metriche_orari_valide else 0.0
+        )
+        servizio_corrente = float(len(st.session_state.giro_corrente) * MINUTI_SERVIZIO_PER_FERMATA)
+        viaggio_corrente = float(minuti_giro or 0)
+        tempo_reale_corrente = viaggio_corrente + attesa_corrente + servizio_corrente
+
+        st.markdown("**Dettaglio tempi reali del giro**")
+        d1, d2, d3 = st.columns(3)
+        d1.metric("⏳ Attesa totale", f"{int(round(attesa_corrente))} min")
+        d2.metric("🅿️ Servizio totale", f"{int(round(servizio_corrente))} min")
+        d3.metric("🕐 Tempo totale reale giro", _formatta_durata_metriche(tempo_reale_corrente))
 
         st.markdown("---")
 
