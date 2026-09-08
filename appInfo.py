@@ -3298,87 +3298,137 @@ else:
                 # Palette e icone restano coerenti con l'interfaccia VanGo.
                 st.markdown("""
                 <style>
-                    /* CAMPO mobile: SOLO la riga del cliente resta affiancata.
-                       Tutto il resto dell'interfaccia mantiene il responsive normale. */
-                    /* V10.3.6 - Responsive reale della singola riga cliente.
-                       NON forziamo il responsive dell'intera CAMPO: interveniamo
-                       esclusivamente sul contenitore della riga e impediamo che
-                       Streamlit/BaseWeb allarghino il selectbox oltre lo schermo. */
+                    /* CAMPO mobile: tutto resta responsive. Solo la riga cliente
+                       mantiene cliente a sinistra + comando stato a destra. */
                     @media (max-width: 640px) {
                         [class*="st-key-campo_riga_"] {
                             width: 100% !important;
                             max-width: 100% !important;
                             min-width: 0 !important;
-                            overflow: hidden !important;
                             box-sizing: border-box !important;
+                            overflow: hidden !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="stHorizontalBlock"] {
-                            display: flex !important;
-                            flex-direction: row !important;
-                            flex-wrap: nowrap !important;
-                            align-items: center !important;
                             width: 100% !important;
                             max-width: 100% !important;
                             min-width: 0 !important;
-                            gap: 8px !important;
-                            overflow: hidden !important;
+                            flex-wrap: nowrap !important;
                             box-sizing: border-box !important;
+                            align-items: center !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="column"] {
                             min-width: 0 !important;
-                            width: auto !important;
                             box-sizing: border-box !important;
-                            overflow: hidden !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="column"]:first-child {
-                            flex: 1 1 0 !important;
-                            max-width: calc(100% - 128px) !important;
+                            flex: 1 1 auto !important;
+                            width: auto !important;
+                            min-width: 0 !important;
+                            overflow: hidden !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="column"]:last-child {
-                            flex: 0 0 120px !important;
-                            width: 120px !important;
-                            max-width: 120px !important;
-                            min-width: 0 !important;
-                        }
-                        [class*="st-key-campo_riga_"] [data-testid="stSelectbox"],
-                        [class*="st-key-campo_riga_"] [data-baseweb="select"],
-                        [class*="st-key-campo_riga_"] [data-baseweb="select"] > div,
-                        [class*="st-key-campo_riga_"] [data-baseweb="select"] > div > div {
-                            display: block !important;
-                            width: 100% !important;
-                            min-width: 0 !important;
-                            max-width: 100% !important;
-                            box-sizing: border-box !important;
-                        }
-                        [class*="st-key-campo_riga_"] [data-baseweb="select"] {
-                            overflow: hidden !important;
-                        }
-                        [class*="st-key-campo_riga_"] [data-baseweb="select"] * {
-                            min-width: 0 !important;
-                            box-sizing: border-box !important;
-                        }
-                        [class*="st-key-campo_riga_"] [data-testid="stSelectbox"] > div {
-                            width: 100% !important;
-                            min-width: 0 !important;
-                            max-width: 100% !important;
-                        }
-                        [class*="st-key-campo_riga_"] [data-baseweb="select"] [role="button"] {
-                            min-width: 0 !important;
-                            max-width: 100% !important;
-                            overflow: hidden !important;
-                        }
-                        [class*="st-key-campo_riga_"] [data-baseweb="select"] [data-baseweb="select-container"] {
-                            min-width: 0 !important;
-                            max-width: 100% !important;
-                        }
-                        [class*="st-key-campo_riga_"] [data-testid="stMarkdownContainer"] {
-                            width: 100% !important;
-                            min-width: 0 !important;
-                            max-width: 100% !important;
-                            overflow: hidden !important;
+                            flex: 0 0 46px !important;
+                            width: 46px !important;
+                            max-width: 46px !important;
+                            min-width: 46px !important;
+                            padding: 0 !important;
+                            margin: 0 !important;
                         }
                     }
 
+                    /* La card cliente non deve mai superare la larghezza disponibile. */
+                    [class*="st-key-campo_riga_"] {
+                        width: 100% !important;
+                        max-width: 100% !important;
+                        min-width: 0 !important;
+                        box-sizing: border-box !important;
+                        overflow: hidden !important;
+                    }
+
+                    /* Il trigger del popover e' SOLO la freccia: nessun riquadro bianco.
+                       La larghezza della freccia non modifica la larghezza della card. */
+                    [class*="st-key-campo_stato_menu_"] {
+                        width: 46px !important;
+                        max-width: 46px !important;
+                        min-width: 46px !important;
+                        padding: 0 !important;
+                        margin: 0 0 0 auto !important;
+                        box-sizing: border-box !important;
+                    }
+                    /* Fallback robusto: nelle versioni di Streamlit in cui la key del
+                       popover non avvolge il pulsante trigger, prendiamo direttamente
+                       il contenitore stPopover. */
+                    [data-testid="stPopover"] {
+                        width: 46px !important;
+                        max-width: 46px !important;
+                        min-width: 46px !important;
+                        padding: 0 !important;
+                        margin: 0 0 0 auto !important;
+                        box-sizing: border-box !important;
+                    }
+                    [data-testid="stPopover"] > button,
+                    [data-testid="stPopover"] button {
+                        width: 46px !important;
+                        max-width: 46px !important;
+                        min-width: 46px !important;
+                        height: 42px !important;
+                        min-height: 42px !important;
+                        padding: 0 !important;
+                        margin: 0 !important;
+                        border: 0 !important;
+                        border-radius: 8px !important;
+                        background: transparent !important;
+                        box-shadow: none !important;
+                        color: {colore_freccia} !important;
+                        font-size: 27px !important;
+                        font-weight: 900 !important;
+                        line-height: 42px !important;
+                        text-align: center !important;
+                    }
+                    [data-testid="stPopover"] > button:hover,
+                    [data-testid="stPopover"] > button:focus,
+                    [data-testid="stPopover"] > button:active {
+                        background: transparent !important;
+                        box-shadow: none !important;
+                    }
+
+                    [class*="st-key-campo_stato_menu_"] button {
+                        width: 46px !important;
+                        max-width: 46px !important;
+                        min-width: 46px !important;
+                        height: 42px !important;
+                        min-height: 42px !important;
+                        padding: 0 !important;
+                        margin: 0 !important;
+                        border: 0 !important;
+                        border-radius: 8px !important;
+                        background: transparent !important;
+                        box-shadow: none !important;
+                        color: {colore_freccia} !important;
+                        font-size: 27px !important;
+                        font-weight: 900 !important;
+                        line-height: 42px !important;
+                        text-align: center !important;
+                    }
+                    [class*="st-key-campo_stato_menu_"] button:hover,
+                    [class*="st-key-campo_stato_menu_"] button:focus,
+                    [class*="st-key-campo_stato_menu_"] button:active {
+                        background: transparent !important;
+                        box-shadow: none !important;
+                    }
+                    @media (max-width: 640px) {
+                        [class*="st-key-campo_stato_menu_"] {
+                            width: 46px !important;
+                            max-width: 46px !important;
+                            min-width: 46px !important;
+                        }
+                        [class*="st-key-campo_stato_menu_"] button {
+                            width: 46px !important;
+                            max-width: 46px !important;
+                            min-width: 46px !important;
+                            font-size: 25px !important;
+                        }
+                    }
                     .campo-metric-card {
                         background: linear-gradient(135deg, #142033 0%, #0F1724 100%);
                         border: 1px solid #26384F;
@@ -3616,7 +3666,7 @@ else:
                     """, unsafe_allow_html=True)
 
                     with st.container(border=True, key=f"campo_riga_{idx_reale}"):
-                        col_cliente, col_stato = st.columns([1, 0.08], gap="small", vertical_alignment="center")
+                        col_cliente, col_stato = st.columns([0.90, 0.10], gap="small", vertical_alignment="center")
                         with col_cliente:
                             st.markdown(
                                 f"<div style='font-size:15px; font-weight:800; color:#FFFFFF; line-height:1.15; padding:5px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; width:100%;'>{row['CLIENTE']}</div>",
