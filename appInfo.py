@@ -3305,12 +3305,7 @@ else:
                        esclusivamente sul contenitore della riga e impediamo che
                        Streamlit/BaseWeb allarghino il selectbox oltre lo schermo. */
                     @media (max-width: 640px) {
-                        /* V10.3.8: la riga cliente resta UNA SOLA RIGA e il menu
-                           viene ancorato fisicamente al bordo DESTRO del riquadro.
-                           In questo modo BaseWeb/Streamlit non puo' spingerlo fuori
-                           dallo schermo su smartphone. */
                         [class*="st-key-campo_riga_"] {
-                            position: relative !important;
                             width: 100% !important;
                             max-width: 100% !important;
                             min-width: 0 !important;
@@ -3318,63 +3313,63 @@ else:
                             box-sizing: border-box !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="stHorizontalBlock"] {
-                            display: block !important;
+                            display: flex !important;
+                            flex-direction: row !important;
+                            flex-wrap: nowrap !important;
+                            align-items: center !important;
                             width: 100% !important;
                             max-width: 100% !important;
                             min-width: 0 !important;
+                            gap: 8px !important;
                             overflow: hidden !important;
                             box-sizing: border-box !important;
-                            position: relative !important;
-                            min-height: 48px !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="column"] {
                             min-width: 0 !important;
+                            width: auto !important;
                             box-sizing: border-box !important;
                             overflow: hidden !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="column"]:first-child {
-                            width: 100% !important;
-                            max-width: 100% !important;
-                            padding-right: 48px !important;
+                            flex: 1 1 0 !important;
+                            max-width: calc(100% - 128px) !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="column"]:last-child {
-                            position: absolute !important;
-                            right: 4px !important;
-                            top: 50% !important;
-                            transform: translateY(-50%) !important;
-                            width: 40px !important;
-                            max-width: 40px !important;
-                            min-width: 40px !important;
-                            margin: 0 !important;
-                            padding: 0 !important;
-                            overflow: visible !important;
-                            z-index: 5 !important;
-                        }
-                        [class*="st-key-campo_riga_"] [data-testid="stPopover"] {
-                            width: 40px !important;
-                            max-width: 40px !important;
-                            min-width: 40px !important;
-                        }
-                        [class*="st-key-campo_riga_"] [data-testid="stPopover"] > button {
-                            width: 40px !important;
-                            max-width: 40px !important;
-                            min-width: 40px !important;
-                            height: 40px !important;
-                            padding: 0 !important;
-                            margin: 0 !important;
-                            border: 0 !important;
-                            background: transparent !important;
-                            box-shadow: none !important;
-                            font-size: 25px !important;
-                            line-height: 1 !important;
-                        }
-                        [class*="st-key-campo_riga_"] [data-testid="stPopover"] > button p {
-                            margin: 0 !important;
-                            padding: 0 !important;
-                            line-height: 1 !important;
-                        }
-                        [class*="st-key-campo_riga_"] [data-testid="stPopover"] + * {
+                            flex: 0 0 120px !important;
+                            width: 120px !important;
+                            max-width: 120px !important;
                             min-width: 0 !important;
+                        }
+                        [class*="st-key-campo_riga_"] [data-testid="stSelectbox"],
+                        [class*="st-key-campo_riga_"] [data-baseweb="select"],
+                        [class*="st-key-campo_riga_"] [data-baseweb="select"] > div,
+                        [class*="st-key-campo_riga_"] [data-baseweb="select"] > div > div {
+                            display: block !important;
+                            width: 100% !important;
+                            min-width: 0 !important;
+                            max-width: 100% !important;
+                            box-sizing: border-box !important;
+                        }
+                        [class*="st-key-campo_riga_"] [data-baseweb="select"] {
+                            overflow: hidden !important;
+                        }
+                        [class*="st-key-campo_riga_"] [data-baseweb="select"] * {
+                            min-width: 0 !important;
+                            box-sizing: border-box !important;
+                        }
+                        [class*="st-key-campo_riga_"] [data-testid="stSelectbox"] > div {
+                            width: 100% !important;
+                            min-width: 0 !important;
+                            max-width: 100% !important;
+                        }
+                        [class*="st-key-campo_riga_"] [data-baseweb="select"] [role="button"] {
+                            min-width: 0 !important;
+                            max-width: 100% !important;
+                            overflow: hidden !important;
+                        }
+                        [class*="st-key-campo_riga_"] [data-baseweb="select"] [data-baseweb="select-container"] {
+                            min-width: 0 !important;
+                            max-width: 100% !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="stMarkdownContainer"] {
                             width: 100% !important;
@@ -3528,64 +3523,66 @@ else:
                     if stato_attuale not in STATI_CONSEGNA:
                         stato_attuale = STATO_DA_FARE
 
-                    # V10.3.5: su smartphone ogni cliente occupa UNA SOLA RIGA, mantenendo il responsive del resto della CAMPO.
-                    # Mostriamo esclusivamente nome cliente + menu stato, senza badge,
-                    # indirizzo o altri dettagli: durante la guida la priorita' e' la
-                    # gestione rapida della consegna.
+                    # V10.3.10: CAMPO smartphone - una sola riga per cliente.
+                    # Il controllo dello stato e' SOLO una piccola freccia a destra,
+                    # sempre dentro il riquadro. Toccandola si apre il menu completo;
+                    # dopo la scelta il menu si richiude e la freccia assume il colore
+                    # dello stato. Non usiamo piu' un selectbox largo che puo' uscire
+                    # dai bordi dello smartphone.
+                    colore_freccia = {
+                        STATO_DA_FARE: "#D1D5DB",
+                        STATO_FATTO: "#22C55E",
+                        STATO_PARZIALE: "#F59E0B",
+                        STATO_RESPINTO: "#EF4444",
+                    }.get(stato_attuale, "#D1D5DB")
+                    chiave_menu_stato = f"campo_stato_menu_{idx_reale}_{str(row['CLIENTE']).replace(' ', '_')}"
+                    st.markdown(f"""
+                    <style>
+                    [class*="st-key-{chiave_menu_stato}"] button {{
+                        color: {colore_freccia} !important;
+                        font-size: 24px !important;
+                        font-weight: 900 !important;
+                        line-height: 1 !important;
+                        min-height: 34px !important;
+                        height: 34px !important;
+                        padding: 0 4px !important;
+                        border: 0 !important;
+                        background: transparent !important;
+                        box-shadow: none !important;
+                    }}
+                    [class*="st-key-{chiave_menu_stato}"] {{
+                        display: flex !important;
+                        justify-content: flex-end !important;
+                        width: 100% !important;
+                        min-width: 0 !important;
+                    }}
+                    </style>
+                    """, unsafe_allow_html=True)
+
                     with st.container(border=True, key=f"campo_riga_{idx_reale}"):
-                        col_cliente, col_stato = st.columns([0.68, 0.32], gap="small", vertical_alignment="center")
+                        col_cliente, col_stato = st.columns([0.82, 0.18], gap="small", vertical_alignment="center")
                         with col_cliente:
                             st.markdown(
-                                f"<div style='font-size:15px; font-weight:800; color:#FFFFFF; line-height:1.15; padding:5px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;'>{row['CLIENTE']}</div>",
+                                f"<div style='font-size:15px; font-weight:800; color:#FFFFFF; line-height:1.15; padding:5px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; width:100%;'>{row['CLIENTE']}</div>",
                                 unsafe_allow_html=True
                             )
                         with col_stato:
-                            # V10.3.9: sullo smartphone mostriamo SOLO una piccola freccia
-                            # colorata. Il click apre il menu con le quattro opzioni; una volta
-                            # scelta l'opzione, il popover si chiude automaticamente al rerun.
-                            colori_stato = {
-                                STATO_DA_FARE: "#D9D9D9",
-                                STATO_FATTO: "#22C55E",
-                                STATO_PARZIALE: "#F59E0B",
-                                STATO_RESPINTO: "#EF4444",
-                            }
-                            colore_freccia = colori_stato.get(stato_attuale, "#D9D9D9")
                             stato_nuovo = stato_attuale
-                            with st.popover("⌄", use_container_width=True):
-                                st.markdown(
-                                    "<div style='font-size:12px;font-weight:800;margin-bottom:6px;'>STATO CONSEGNA</div>",
-                                    unsafe_allow_html=True
-                                )
+                            with st.popover("⌄", key=chiave_menu_stato, use_container_width=False):
+                                st.caption("Stato consegna")
                                 for opzione_stato in STATI_CONSEGNA:
-                                    etichetta_opzione = opzione_stato
                                     if st.button(
-                                        etichetta_opzione,
-                                        key=f"stato_opzione_campo_{idx_reale}_{row['CLIENTE']}_{opzione_stato}",
+                                        opzione_stato,
+                                        key=f"campo_stato_opzione_{idx_reale}_{opzione_stato}",
                                         use_container_width=True,
-                                        type="secondary"
                                     ):
                                         stato_nuovo = opzione_stato
-                                        st.session_state[f"stato_selezionato_campo_{idx_reale}"] = opzione_stato
+                                        st.session_state[f"campo_stato_scelto_{idx_reale}"] = opzione_stato
                                         st.rerun()
 
-                            # Colore della freccia in base allo stato corrente.
-                            # Il CSS viene applicato alla piccola area del pulsante popover.
-                            st.markdown(
-                                f"""<style>
-                                [class*='st-key-campo_riga_{idx_reale}'] [data-testid='stPopover'] > button {{
-                                    color: {colore_freccia} !important;
-                                    font-size: 25px !important;
-                                    font-weight: 900 !important;
-                                    line-height: 1 !important;
-                                    padding: 0 !important;
-                                    min-height: 38px !important;
-                                }}
-                                </style>""",
-                                unsafe_allow_html=True
-                            )
-                            stato_selezionato = st.session_state.pop(f"stato_selezionato_campo_{idx_reale}", None)
-                            if stato_selezionato in STATI_CONSEGNA:
-                                stato_nuovo = stato_selezionato
+                            stato_scelto = st.session_state.pop(f"campo_stato_scelto_{idx_reale}", None)
+                            if stato_scelto in STATI_CONSEGNA:
+                                stato_nuovo = stato_scelto
                     if stato_nuovo != stato_attuale:
                         # Aggiornamento immediato del dataframe reale: il cliente
                         # deve sparire dalla CAMPO al rerun successivo.
