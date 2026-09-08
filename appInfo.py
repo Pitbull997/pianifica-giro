@@ -3538,29 +3538,85 @@ else:
                     chiave_menu_stato = f"campo_stato_menu_{idx_reale}_{str(row['CLIENTE']).replace(' ', '_')}"
                     st.markdown(f"""
                     <style>
+                    /* V10.3.11: il controllo stato occupa SOLO il piccolo spazio
+                       necessario e resta completamente dentro la card cliente. */
+                    [class*="st-key-{chiave_menu_stato}"] {{
+                        width: 42px !important;
+                        min-width: 42px !important;
+                        max-width: 42px !important;
+                        margin-left: auto !important;
+                        margin-right: 0 !important;
+                        padding: 0 !important;
+                        box-sizing: border-box !important;
+                        display: flex !important;
+                        justify-content: flex-end !important;
+                        overflow: visible !important;
+                    }}
                     [class*="st-key-{chiave_menu_stato}"] button {{
+                        width: 42px !important;
+                        min-width: 42px !important;
+                        max-width: 42px !important;
+                        height: 42px !important;
+                        min-height: 42px !important;
+                        padding: 0 !important;
+                        margin: 0 !important;
                         color: {colore_freccia} !important;
-                        font-size: 24px !important;
+                        font-size: 27px !important;
                         font-weight: 900 !important;
-                        line-height: 1 !important;
-                        min-height: 34px !important;
-                        height: 34px !important;
-                        padding: 0 4px !important;
+                        line-height: 42px !important;
+                        text-align: center !important;
                         border: 0 !important;
+                        border-radius: 8px !important;
                         background: transparent !important;
                         box-shadow: none !important;
                     }}
-                    [class*="st-key-{chiave_menu_stato}"] {{
-                        display: flex !important;
-                        justify-content: flex-end !important;
-                        width: 100% !important;
-                        min-width: 0 !important;
+                    [class*="st-key-{chiave_menu_stato}"] button:hover,
+                    [class*="st-key-{chiave_menu_stato}"] button:focus,
+                    [class*="st-key-{chiave_menu_stato}"] button:active {{
+                        background: rgba(255,255,255,0.04) !important;
+                        color: {colore_freccia} !important;
+                        box-shadow: none !important;
+                    }}
+                    @media (max-width: 640px) {{
+                        [class*="st-key-campo_riga_"] {{
+                            width: 100% !important;
+                            max-width: 100% !important;
+                            min-width: 0 !important;
+                            box-sizing: border-box !important;
+                            overflow: hidden !important;
+                        }}
+                        [class*="st-key-campo_riga_"] [data-testid="stHorizontalBlock"] {{
+                            width: 100% !important;
+                            max-width: 100% !important;
+                            min-width: 0 !important;
+                            flex-wrap: nowrap !important;
+                            box-sizing: border-box !important;
+                        }}
+                        [class*="st-key-campo_riga_"] [data-testid="column"] {{
+                            min-width: 0 !important;
+                            box-sizing: border-box !important;
+                        }}
+                        [class*="st-key-campo_riga_"] [data-testid="column"]:first-child {{
+                            flex: 1 1 auto !important;
+                            width: auto !important;
+                            max-width: calc(100% - 50px) !important;
+                            min-width: 0 !important;
+                            overflow: hidden !important;
+                        }}
+                        [class*="st-key-campo_riga_"] [data-testid="column"]:last-child {{
+                            flex: 0 0 42px !important;
+                            width: 42px !important;
+                            max-width: 42px !important;
+                            min-width: 42px !important;
+                            margin-left: auto !important;
+                            padding: 0 !important;
+                        }}
                     }}
                     </style>
                     """, unsafe_allow_html=True)
 
                     with st.container(border=True, key=f"campo_riga_{idx_reale}"):
-                        col_cliente, col_stato = st.columns([0.82, 0.18], gap="small", vertical_alignment="center")
+                        col_cliente, col_stato = st.columns([1, 0.08], gap="small", vertical_alignment="center")
                         with col_cliente:
                             st.markdown(
                                 f"<div style='font-size:15px; font-weight:800; color:#FFFFFF; line-height:1.15; padding:5px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; width:100%;'>{row['CLIENTE']}</div>",
