@@ -2645,7 +2645,13 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
-        # V10.2.9: tre viste separate.
+        # Quando il giro e' completato, la vista CAMPO non deve piu' mostrare clienti.
+        # Portiamo automaticamente l'utente sul RIEPILOGO, dove puo' vedere l'intera
+        # progressione: prima i da fare e in fondo tutti i gestiti/offuscati.
+        if tutte_gestite and st.session_state.vista_giro == "CAMPO":
+            st.session_state.vista_giro = "RIEPILOGO"
+
+        # V10.2.10: tre viste separate.
         if not st.session_state.giro_corrente.empty:
             v1, v2, v3 = st.columns(3)
             with v1:
@@ -2848,8 +2854,11 @@ else:
             f2.metric("📦 Colli", str(tot_qta))
             f3.metric("🛣️ KM", f"{km_giro:.1f}" if km_giro is not None else "—")
             st.markdown("---")
-        if not st.session_state.giro_corrente.empty and not tutte_gestite:
+        if not st.session_state.giro_corrente.empty:
             st.session_state.giro_corrente['POSIZIONE'] = [str(i) for i in range(1, len(st.session_state.giro_corrente) + 1)]
+            # PREPARAZIONE mantiene sempre l'ordine reale del giro salvato.
+            # RIEPILOGO/CAMPO usano invece la vista operativa con i gestiti in fondo.
+            df_giro_preparazione = st.session_state.giro_corrente.copy().reset_index(drop=True)
             df_vista_giro = prepara_vista_giro(st.session_state.giro_corrente)
             
             # Il percorso NON viene riottimizzato automaticamente.
@@ -2896,11 +2905,11 @@ else:
                         col_badge, col_info = st.columns([0.10, 0.90], gap="small", vertical_alignment="top")
 
                         with col_badge:
-                            st.markdown(f'<div class="clean-badge">{idx + 1}</div>', unsafe_allow_html=True)
+                            st.markdown(f'<div class="clean-badge" style="opacity:{card_opacita};">{idx + 1}</div>', unsafe_allow_html=True)
 
                         with col_info:
                             st.markdown(f"""
-                            <div class="clean-content">
+                            <div class="clean-content" style="opacity:{card_opacita};">
                                 <div class="clean-title">{row['CLIENTE']}</div>
                                 <div class="clean-subtitle">📍 {row['VIA']}, {row['COMUNE']} (🕒 {row['ORA']} | 📦 {row['Q.ta']} pz)</div>
                             </div>
@@ -2959,24 +2968,24 @@ else:
                     <a href="#avvia-percorso-top" style="text-decoration:none; font-size:28px;">⬆️</a>
                 </div>
                 ''' , unsafe_allow_html=True)
-            else:
+            elif st.session_state.vista_giro == "PREPARAZIONE":
+                # Vista di preparazione: ordine originale del giro, senza spostare
+                # visivamente in fondo i clienti gia' gestiti. Qui non si gestiscono
+                # gli stati di consegna.
                 st.markdown('<div id="avvia-percorso-top"></div>', unsafe_allow_html=True)
-                st.markdown(f'''
+                st.markdown(f"""
                     <a href="{maps_url}" target="_blank" style="text-decoration:none;">
                         <button style="width:100%; background-color:#2563EB; color:white; border:none; border-radius:25px; height:52px; font-weight:bold; font-size:16px; box-shadow:0 4px 10px rgba(37,99,235,0.4);">
                             🗺️ AVVIA PERCORSO
                         </button>
                     </a>
-                ''', unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
                 st.markdown('<div style="height:10px;"></div>', unsafe_allow_html=True)
 
-                for idx in range(tot_clienti):
-                    row = df_vista_giro.iloc[idx]
-                    idx_reale = int(row["__IDX_ORIGINALE"])
-                    
-                    opacita_card = 0.52 if str(row.get("STATO", "")).strip() in [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO] else 1.0
+                for idx in range(len(df_giro_preparazione)):
+                    row = df_giro_preparazione.iloc[idx]
                     st.markdown(f"""
-                    <div class="stop-card" style="opacity:{opacita_card};">
+                    <div class="stop-card" style="opacity:1.0;">
                         <div class="stop-title">{idx + 1}. {row['CLIENTE']}</div>
                         <div class="stop-address">📍 {row['VIA']}, {row['COMUNE']}</div>
                         <div class="stop-meta">🕒 Ora: {row['ORA']} | 📦 Q.tà: {row['Q.ta']} pz</div>
@@ -2984,7 +2993,7 @@ else:
                     """, unsafe_allow_html=True)
 
                     col_c1, col_c2, col_c3, col_c4 = st.columns([1, 1, 1, 1])
-                    
+
                     with col_c1:
                         dest = urllib.parse.quote(f"{row['VIA']}, {row['COMUNE']}")
                         st.write("")
@@ -2995,7 +3004,7 @@ else:
                             "Q.tà colli",
                             min_value=0,
                             value=int(row['Q.ta']),
-                            key=f"qta_mobile_{row['CLIENTE']}_{idx}"
+                            key=f"qta_preparazione_{row['CLIENTE']}_{idx}"
                         )
                         if nuova_qta != int(row['Q.ta']):
                             st.session_state.giro_corrente.at[idx, 'Q.ta'] = nuova_qta
@@ -3003,53 +3012,48 @@ else:
                             st.rerun()
 
                     with col_c3:
+                        # Spostamento manuale dei soli clienti ancora da consegnare.
                         stato_riga = str(row.get("STATO", "")).strip()
                         stati_gestiti = [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
-                        cliente_gestito = stato_riga in stati_gestiti
-
-                        if not cliente_gestito:
-                            # La posizione e' riferita SOLO ai clienti ancora da consegnare.
-                            # Quelli gia' gestiti restano in fondo e non possono essere spostati.
-                            clienti_pendenti = df_vista_giro.iloc[:sum(
-                                1 for _, rr in df_vista_giro.iterrows()
+                        if stato_riga not in stati_gestiti:
+                            clienti_pendenti = df_giro_preparazione.iloc[:sum(
+                                1 for _, rr in df_giro_preparazione.iterrows()
                                 if str(rr.get("STATO", "")).strip() not in stati_gestiti
                             )]
                             numero_pendenti = len(clienti_pendenti)
                             posizione_pendente = next(
-                                (i + 1 for i, rr in clienti_pendenti.iterrows()
-                                 if int(rr["__IDX_ORIGINALE"]) == idx_reale),
+                                (i + 1 for i, rr in clienti_pendenti.iterrows() if int(rr.name) == idx),
                                 1
                             )
                             nuova_pos = st.selectbox(
                                 "Sposta a pos:",
                                 options=list(range(1, numero_pendenti + 1)),
                                 index=posizione_pendente - 1,
-                                key=f"select_pos_{row['CLIENTE']}_{idx_reale}"
+                                key=f"select_pos_preparazione_{row['CLIENTE']}_{idx}"
                             )
                             if nuova_pos != posizione_pendente:
-                                if sposta_cliente_pendente_nella_posizione(idx_reale, nuova_pos):
+                                if sposta_cliente_pendente_nella_posizione(idx, nuova_pos):
                                     st.rerun()
                         else:
-                            st.caption("🔒 Consegnato")
+                            st.caption("🔒 Gestito")
 
                     with col_c4:
-                        if st.button("🗑️", help="Elimina cliente dal giro", key=f"elimina_operativa_{idx_reale}_{row['CLIENTE']}"):
-                            st.session_state.conferma_eliminazione_idx = idx_reale
+                        if st.button("🗑️", help="Elimina cliente dal giro", key=f"elimina_preparazione_{idx}_{row['CLIENTE']}"):
+                            st.session_state.conferma_eliminazione_idx = idx
                             st.rerun()
 
-                        if st.session_state.conferma_eliminazione_idx == idx_reale:
+                        if st.session_state.conferma_eliminazione_idx == idx:
                             st.warning(f"Eliminare {row['CLIENTE']} dal giro?")
                             c_ok, c_no = st.columns(2)
                             with c_ok:
-                                if st.button("✅ CONFERMA", use_container_width=True, key=f"conferma_elimina_operativa_{idx_reale}"):
+                                if st.button("✅ CONFERMA", use_container_width=True, key=f"conferma_elimina_preparazione_{idx}"):
                                     elimina_cliente_dal_giro(idx)
                             with c_no:
-                                if st.button("❌ ANNULLA", use_container_width=True, key=f"annulla_elimina_operativa_{idx_reale}"):
+                                if st.button("❌ ANNULLA", use_container_width=True, key=f"annulla_elimina_preparazione_{idx}"):
                                     st.session_state.conferma_eliminazione_idx = None
                                     st.rerun()
 
-                    st.markdown("<hr style='margin: 10px 0; border-color: #262626;'>", unsafe_allow_html=True)
-
+                    st.markdown("<hr style=\"margin: 10px 0; border-color: #262626;\">", unsafe_allow_html=True)
                 st.markdown("---")
                 st.markdown('''
                 <div style="text-align:center; margin:4px 0 8px 0;">
