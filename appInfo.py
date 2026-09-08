@@ -3573,58 +3573,59 @@ else:
                     if stato_attuale not in STATI_CONSEGNA:
                         stato_attuale = STATO_DA_FARE
 
-                    # V10.3.10: CAMPO smartphone - una sola riga per cliente.
-                    # Il controllo dello stato e' SOLO una piccola freccia a destra,
-                    # sempre dentro il riquadro. Toccandola si apre il menu completo;
-                    # dopo la scelta il menu si richiude e la freccia assume il colore
-                    # dello stato. Non usiamo piu' un selectbox largo che puo' uscire
-                    # dai bordi dello smartphone.
-                    colore_freccia = {
-                        STATO_DA_FARE: "#D1D5DB",
-                        STATO_FATTO: "#22C55E",
-                        STATO_PARZIALE: "#F59E0B",
-                        STATO_RESPINTO: "#EF4444",
-                    }.get(stato_attuale, "#D1D5DB")
+                    # V10.3.13: CAMPO smartphone - metodo semplice e robusto.
+                    # Niente freccia separata e niente selectbox largo: il nome del cliente
+                    # e' direttamente il pulsante che apre il menu a tendina.
+                    # In questo modo il controllo occupa esattamente la larghezza della card
+                    # e non puo' uscire dai bordi dello smartphone.
                     chiave_menu_stato = f"campo_stato_menu_{idx_reale}_{str(row['CLIENTE']).replace(' ', '_')}"
                     st.markdown(f"""
                     <style>
-                    /* V10.3.11: il controllo stato occupa SOLO il piccolo spazio
-                       necessario e resta completamente dentro la card cliente. */
-                    [class*="st-key-{chiave_menu_stato}"] {{
-                        width: 42px !important;
-                        min-width: 42px !important;
-                        max-width: 42px !important;
-                        margin-left: auto !important;
-                        margin-right: 0 !important;
-                        padding: 0 !important;
+                    /* La card cliente occupa sempre tutta la larghezza disponibile. */
+                    [class*="st-key-campo_riga_"] {{
+                        width: 100% !important;
+                        max-width: 100% !important;
+                        min-width: 0 !important;
                         box-sizing: border-box !important;
-                        display: flex !important;
-                        justify-content: flex-end !important;
-                        overflow: visible !important;
+                        overflow: hidden !important;
                     }}
-                    [class*="st-key-{chiave_menu_stato}"] button {{
-                        width: 42px !important;
-                        min-width: 42px !important;
-                        max-width: 42px !important;
-                        height: 42px !important;
-                        min-height: 42px !important;
-                        padding: 0 !important;
+
+                    /* Il trigger del popover e' la riga cliente stessa.
+                       Nessuna colonna e nessun elemento laterale: cosi' resta
+                       sempre perfettamente dentro la card. */
+                    [data-testid="stPopover"] {{
+                        width: 100% !important;
+                        max-width: 100% !important;
+                        min-width: 0 !important;
+                        box-sizing: border-box !important;
+                    }}
+                    [data-testid="stPopover"] > button,
+                    [data-testid="stPopover"] button {{
+                        width: 100% !important;
+                        max-width: 100% !important;
+                        min-width: 0 !important;
+                        box-sizing: border-box !important;
+                        min-height: 52px !important;
+                        height: 52px !important;
+                        padding: 0 18px !important;
                         margin: 0 !important;
-                        color: {colore_freccia} !important;
-                        font-size: 27px !important;
-                        font-weight: 900 !important;
-                        line-height: 42px !important;
-                        text-align: center !important;
                         border: 0 !important;
-                        border-radius: 8px !important;
+                        border-radius: 10px !important;
                         background: transparent !important;
                         box-shadow: none !important;
+                        color: #FFFFFF !important;
+                        font-size: 18px !important;
+                        font-weight: 800 !important;
+                        line-height: 1.2 !important;
+                        text-align: left !important;
+                        white-space: nowrap !important;
+                        overflow: hidden !important;
+                        text-overflow: ellipsis !important;
                     }}
-                    [class*="st-key-{chiave_menu_stato}"] button:hover,
-                    [class*="st-key-{chiave_menu_stato}"] button:focus,
-                    [class*="st-key-{chiave_menu_stato}"] button:active {{
+                    [data-testid="stPopover"] > button:hover,
+                    [data-testid="stPopover"] > button:focus,
+                    [data-testid="stPopover"] > button:active {{
                         background: rgba(255,255,255,0.04) !important;
-                        color: {colore_freccia} !important;
                         box-shadow: none !important;
                     }}
                     @media (max-width: 640px) {{
@@ -3632,63 +3633,36 @@ else:
                             width: 100% !important;
                             max-width: 100% !important;
                             min-width: 0 !important;
-                            box-sizing: border-box !important;
                             overflow: hidden !important;
                         }}
-                        [class*="st-key-campo_riga_"] [data-testid="stHorizontalBlock"] {{
+                        [data-testid="stPopover"],
+                        [data-testid="stPopover"] > button,
+                        [data-testid="stPopover"] button {{
                             width: 100% !important;
                             max-width: 100% !important;
                             min-width: 0 !important;
-                            flex-wrap: nowrap !important;
-                            box-sizing: border-box !important;
-                        }}
-                        [class*="st-key-campo_riga_"] [data-testid="column"] {{
-                            min-width: 0 !important;
-                            box-sizing: border-box !important;
-                        }}
-                        [class*="st-key-campo_riga_"] [data-testid="column"]:first-child {{
-                            flex: 1 1 auto !important;
-                            width: auto !important;
-                            max-width: calc(100% - 50px) !important;
-                            min-width: 0 !important;
-                            overflow: hidden !important;
-                        }}
-                        [class*="st-key-campo_riga_"] [data-testid="column"]:last-child {{
-                            flex: 0 0 42px !important;
-                            width: 42px !important;
-                            max-width: 42px !important;
-                            min-width: 42px !important;
-                            margin-left: auto !important;
-                            padding: 0 !important;
                         }}
                     }}
                     </style>
                     """, unsafe_allow_html=True)
 
                     with st.container(border=True, key=f"campo_riga_{idx_reale}"):
-                        col_cliente, col_stato = st.columns([0.90, 0.10], gap="small", vertical_alignment="center")
-                        with col_cliente:
-                            st.markdown(
-                                f"<div style='font-size:15px; font-weight:800; color:#FFFFFF; line-height:1.15; padding:5px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; width:100%;'>{row['CLIENTE']}</div>",
-                                unsafe_allow_html=True
-                            )
-                        with col_stato:
-                            stato_nuovo = stato_attuale
-                            with st.popover("⌄", key=chiave_menu_stato, use_container_width=False):
-                                st.caption("Stato consegna")
-                                for opzione_stato in STATI_CONSEGNA:
-                                    if st.button(
-                                        opzione_stato,
-                                        key=f"campo_stato_opzione_{idx_reale}_{opzione_stato}",
-                                        use_container_width=True,
-                                    ):
-                                        stato_nuovo = opzione_stato
-                                        st.session_state[f"campo_stato_scelto_{idx_reale}"] = opzione_stato
-                                        st.rerun()
+                        stato_nuovo = stato_attuale
+                        with st.popover(str(row['CLIENTE']), key=chiave_menu_stato, use_container_width=True):
+                            st.caption("Stato consegna")
+                            for opzione_stato in STATI_CONSEGNA:
+                                if st.button(
+                                    opzione_stato,
+                                    key=f"campo_stato_opzione_{idx_reale}_{opzione_stato}",
+                                    use_container_width=True,
+                                ):
+                                    stato_nuovo = opzione_stato
+                                    st.session_state[f"campo_stato_scelto_{idx_reale}"] = opzione_stato
+                                    st.rerun()
 
-                            stato_scelto = st.session_state.pop(f"campo_stato_scelto_{idx_reale}", None)
-                            if stato_scelto in STATI_CONSEGNA:
-                                stato_nuovo = stato_scelto
+                        stato_scelto = st.session_state.pop(f"campo_stato_scelto_{idx_reale}", None)
+                        if stato_scelto in STATI_CONSEGNA:
+                            stato_nuovo = stato_scelto
                     if stato_nuovo != stato_attuale:
                         # Aggiornamento immediato del dataframe reale: il cliente
                         # deve sparire dalla CAMPO al rerun successivo.
