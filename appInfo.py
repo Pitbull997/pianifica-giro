@@ -3332,12 +3332,12 @@ else:
                         }
                         [class*="st-key-campo_riga_"] [data-testid="column"]:first-child {
                             flex: 1 1 0 !important;
-                            max-width: calc(100% - 170px) !important;
+                            max-width: calc(100% - 128px) !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="column"]:last-child {
-                            flex: 0 1 162px !important;
-                            width: 162px !important;
-                            max-width: 162px !important;
+                            flex: 0 0 120px !important;
+                            width: 120px !important;
+                            max-width: 120px !important;
                             min-width: 0 !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="stSelectbox"],
@@ -3356,6 +3356,20 @@ else:
                         [class*="st-key-campo_riga_"] [data-baseweb="select"] * {
                             min-width: 0 !important;
                             box-sizing: border-box !important;
+                        }
+                        [class*="st-key-campo_riga_"] [data-testid="stSelectbox"] > div {
+                            width: 100% !important;
+                            min-width: 0 !important;
+                            max-width: 100% !important;
+                        }
+                        [class*="st-key-campo_riga_"] [data-baseweb="select"] [role="button"] {
+                            min-width: 0 !important;
+                            max-width: 100% !important;
+                            overflow: hidden !important;
+                        }
+                        [class*="st-key-campo_riga_"] [data-baseweb="select"] [data-baseweb="select-container"] {
+                            min-width: 0 !important;
+                            max-width: 100% !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="stMarkdownContainer"] {
                             width: 100% !important;
@@ -3514,7 +3528,7 @@ else:
                     # indirizzo o altri dettagli: durante la guida la priorita' e' la
                     # gestione rapida della consegna.
                     with st.container(border=True, key=f"campo_riga_{idx_reale}"):
-                        col_cliente, col_stato = st.columns([0.55, 0.45], gap="small", vertical_alignment="center")
+                        col_cliente, col_stato = st.columns([0.68, 0.32], gap="small", vertical_alignment="center")
                         with col_cliente:
                             st.markdown(
                                 f"<div style='font-size:15px; font-weight:800; color:#FFFFFF; line-height:1.15; padding:5px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;'>{row['CLIENTE']}</div>",
