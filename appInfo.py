@@ -3607,9 +3607,9 @@ else:
                         max-width: 100% !important;
                         min-width: 0 !important;
                         box-sizing: border-box !important;
-                        min-height: 34px !important;
-                        height: 34px !important;
-                        padding: 0 10px !important;
+                        min-height: 30px !important;
+                        height: 30px !important;
+                        padding: 0 6px !important;
                         margin: 0 !important;
                         border: 0 !important;
                         border-radius: 10px !important;
@@ -3618,21 +3618,34 @@ else:
                         color: #FFFFFF !important;
                         font-size: 16px !important;
                         font-weight: 800 !important;
-                        line-height: 34px !important;
+                        line-height: 30px !important;
                         text-align: left !important;
+                        display: flex !important;
+                        flex-direction: row !important;
                         justify-content: flex-start !important;
                         align-items: center !important;
+                        text-align: left !important;
                         white-space: nowrap !important;
                         overflow: hidden !important;
                         text-overflow: ellipsis !important;
                     }}
                     [data-testid="stPopover"] > button > div,
+                    [data-testid="stPopover"] > button > div > div,
                     [data-testid="stPopover"] > button > div > p,
                     [data-testid="stPopover"] > button p {{
                         width: 100% !important;
+                        max-width: 100% !important;
+                        display: block !important;
+                        flex: 1 1 auto !important;
                         text-align: left !important;
                         justify-content: flex-start !important;
+                        align-items: flex-start !important;
                         margin: 0 !important;
+                        padding: 0 !important;
+                    }}
+                    [data-testid="stPopover"] > button svg,
+                    [data-testid="stPopover"] > button [data-testid="stIcon"] {{
+                        display: none !important;
                     }}
                     [data-testid="stPopover"] > button:hover,
                     [data-testid="stPopover"] > button:focus,
