@@ -155,6 +155,8 @@ OSRM_TABLE_URL = "https://router.project-osrm.org/table/v1/driving"
 # Coordinate verificate per il deposito fisso di VanGo.
 # In questo modo il deposito non dipende dalla geocodifica pubblica.
 COORDINATE_DEPOSITO_VANGO = (45.59085, 9.384842)
+# Tempo medio fisso di parcheggio + scarico per ogni fermata.
+MINUTI_SERVIZIO_PER_FERMATA = 6
 
 def _geocodifica_free(indirizzo):
     """Geocodifica gratuita con piu' fornitori e protezione dai limiti.
@@ -1178,8 +1180,6 @@ def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=
     # Ogni cliente richiede in media 6 minuti per parcheggio + scarico.
     # Il tempo di servizio viene aggiunto dopo l'arrivo al cliente e quindi
     # influisce sull'orario di arrivo di tutte le fermate successive.
-    MINUTI_SERVIZIO_PER_FERMATA = 6
-
     def tempo_arco(from_index, to_index):
         a = manager.IndexToNode(from_index)
         b = manager.IndexToNode(to_index)
