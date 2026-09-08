@@ -3305,7 +3305,12 @@ else:
                        esclusivamente sul contenitore della riga e impediamo che
                        Streamlit/BaseWeb allarghino il selectbox oltre lo schermo. */
                     @media (max-width: 640px) {
+                        /* V10.3.8: la riga cliente resta UNA SOLA RIGA e il menu
+                           viene ancorato fisicamente al bordo DESTRO del riquadro.
+                           In questo modo BaseWeb/Streamlit non puo' spingerlo fuori
+                           dallo schermo su smartphone. */
                         [class*="st-key-campo_riga_"] {
+                            position: relative !important;
                             width: 100% !important;
                             max-width: 100% !important;
                             min-width: 0 !important;
@@ -3313,32 +3318,35 @@ else:
                             box-sizing: border-box !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="stHorizontalBlock"] {
-                            display: flex !important;
-                            flex-direction: row !important;
-                            flex-wrap: nowrap !important;
-                            align-items: center !important;
+                            display: block !important;
                             width: 100% !important;
                             max-width: 100% !important;
                             min-width: 0 !important;
-                            gap: 8px !important;
                             overflow: hidden !important;
                             box-sizing: border-box !important;
+                            position: relative !important;
+                            min-height: 48px !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="column"] {
                             min-width: 0 !important;
-                            width: auto !important;
                             box-sizing: border-box !important;
                             overflow: hidden !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="column"]:first-child {
-                            flex: 1 1 0 !important;
-                            max-width: calc(100% - 128px) !important;
+                            width: 100% !important;
+                            max-width: 100% !important;
+                            padding-right: 118px !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="column"]:last-child {
-                            flex: 0 0 120px !important;
-                            width: 120px !important;
-                            max-width: 120px !important;
+                            position: absolute !important;
+                            right: 0 !important;
+                            top: 50% !important;
+                            transform: translateY(-50%) !important;
+                            width: 108px !important;
+                            max-width: 108px !important;
                             min-width: 0 !important;
+                            margin: 0 !important;
+                            padding: 0 !important;
                         }
                         [class*="st-key-campo_riga_"] [data-testid="stSelectbox"],
                         [class*="st-key-campo_riga_"] [data-baseweb="select"],
