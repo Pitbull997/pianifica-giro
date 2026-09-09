@@ -1180,6 +1180,18 @@ def _formatta_ora_minuti(minuti):
     return f"{ore:02d}:{mins:02d}"
 
 
+def _formatta_durata_hm(minuti):
+    """Formatta una durata in minuti come 'Xh YYm' (es. 1h 43m), o 'YYm' se sotto l'ora.
+
+    Usata ovunque nell'app per mostrare durate in modo uniforme (Attesa totale,
+    Servizio totale, Tempo totale reale giro, Tempo Giro, ecc.), cosi' non
+    compaiono piu' numeri di minuti "grezzi" tipo "252 min".
+    """
+    minuti = max(0, int(round(float(minuti or 0))))
+    ore, minuti_restanti = divmod(minuti, 60)
+    return f"{ore}h {minuti_restanti:02d}m" if ore > 0 else f"{minuti_restanti}m"
+
+
 def _timestamp_oggi_alle_0520():
     """Timestamp locale Europe/Rome di oggi alle 05:20, usato come fallback."""
     try:
@@ -3096,18 +3108,13 @@ else:
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Km", f"{m.get('km_ottimizzati', 0):.1f}", delta=f"{m.get('risparmio_km', 0):+.1f} km")
-        c2.metric("Tempo strada", f"{m.get('min_ottimizzati', 0):.0f} min", delta=f"{m.get('risparmio_min', 0):+.0f} min")
+        c2.metric("Tempo strada", _formatta_durata_hm(m.get('min_ottimizzati', 0)), delta=f"{m.get('risparmio_min', 0):+.0f} min")
         c3.metric("Fermate", f"{m.get('fermate', len(df_proposto))}")
         c4.metric("Metodo", "FREE")
 
         # Per la modalità ORARI mostriamo subito sotto le metriche attuali
         # il dettaglio del tempo reale del giro.
         if str(m.get("metodo", "")).startswith("ORARI"):
-            def _formatta_durata_totale(minuti):
-                minuti = max(0, int(round(float(minuti or 0))))
-                ore, minuti_restanti = divmod(minuti, 60)
-                return f"{ore} h {minuti_restanti:02d} min" if ore else f"{minuti_restanti} min"
-
             t_viaggio = m.get("min_ottimizzati", 0)
             t_attesa = m.get("attesa_totale_min", 0)
             t_servizio = m.get("servizio_totale_min", len(df_proposto) * MINUTI_SERVIZIO_PER_FERMATA)
@@ -3115,10 +3122,10 @@ else:
 
             st.markdown("**Dettaglio tempi del giro ORARI**")
             d1, d2, d3, d4 = st.columns(4)
-            d1.metric("🚚 Tempo di viaggio", _formatta_durata_totale(t_viaggio))
-            d2.metric("⏳ Attesa totale", f"{int(round(float(t_attesa or 0)))} min")
-            d3.metric("🅿️ Servizio totale", f"{int(round(float(t_servizio or 0)))} min")
-            d4.metric("🕐 Tempo totale reale giro", _formatta_durata_totale(t_reale))
+            d1.metric("🚚 Tempo di viaggio", _formatta_durata_hm(t_viaggio))
+            d2.metric("⏳ Attesa totale", _formatta_durata_hm(t_attesa))
+            d3.metric("🅿️ Servizio totale", _formatta_durata_hm(t_servizio))
+            d4.metric("🕐 Tempo totale reale giro", _formatta_durata_hm(t_reale))
 
         colonne_anteprima = ['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta']
         if str(m.get("metodo", "")).startswith("ORARI") and 'ARRIVO STIMATO' in df_proposto.columns:
@@ -3385,12 +3392,7 @@ else:
             col_m3.metric("Comuni", f"{tot_comuni}")
             col_m4.metric("KM Totali", f"{km_visualizzati:.1f}" if km_visualizzati is not None else "—")
             if minuti_visualizzati is not None:
-                ore = int(minuti_visualizzati // 60)
-                minuti = int(round(minuti_visualizzati - ore * 60))
-                if minuti == 60:
-                    ore += 1
-                    minuti = 0
-                tempo_display = f"{ore}h {minuti:02d}m" if ore > 0 else f"{minuti} min"
+                tempo_display = _formatta_durata_hm(minuti_visualizzati)
             else:
                 tempo_display = "—"
             col_m5.metric("Tempo Giro", tempo_display)
@@ -3409,11 +3411,6 @@ else:
             bool(metriche_orari_correnti)
             and metriche_orari_correnti.get("firma") == firma_corrente
         )
-
-        def _formatta_durata_metriche(minuti):
-            minuti = max(0, int(round(float(minuti or 0))))
-            ore, minuti_restanti = divmod(minuti, 60)
-            return f"{ore} h {minuti_restanti:02d} min" if ore else f"{minuti_restanti} min"
 
         attesa_corrente = (
             float(metriche_orari_correnti.get("attesa_totale_min", 0) or 0)
@@ -3435,9 +3432,9 @@ else:
         if st.session_state.vista_giro != "CAMPO":
             st.markdown("**Dettaglio tempi reali del giro**")
             d1, d2, d3 = st.columns(3)
-            d1.metric("⏳ Attesa totale", f"{int(round(attesa_corrente))} min")
-            d2.metric("🅿️ Servizio totale", f"{int(round(servizio_corrente))} min")
-            d3.metric("🕐 Tempo totale reale giro", _formatta_durata_metriche(tempo_reale_corrente))
+            d1.metric("⏳ Attesa totale", _formatta_durata_hm(attesa_corrente))
+            d2.metric("🅿️ Servizio totale", _formatta_durata_hm(servizio_corrente))
+            d3.metric("🕐 Tempo totale reale giro", _formatta_durata_hm(tempo_reale_corrente))
 
             st.markdown("---")
 
@@ -3471,11 +3468,6 @@ else:
                 <div style='font-size:14px; color:#94A3B8; margin-top:5px;'>{sottotitolo_fine}</div>
             </div>
             """, unsafe_allow_html=True)
-            def _fmt_fine(minuti):
-                minuti = max(0, int(round(float(minuti or 0))))
-                h, m = divmod(minuti, 60)
-                return f"{h} h {m:02d} min" if h else f"{m} min"
-
             previsione = st.session_state.get("previsione_giro") or {}
             previsto = previsione.get("minuti")
             inizio = st.session_state.get("inizio_giro_reale")
@@ -3516,13 +3508,13 @@ else:
                     effettivo = max(0.0, (float(fine) - float(inizio)) / 60.0)
                     differenza = float(effettivo) - float(previsto)
                     if differenza <= 0:
-                        esito = f"🟢 {_fmt_fine(abs(differenza))} risparmiati rispetto alla stima"
+                        esito = f"🟢 {_formatta_durata_hm(abs(differenza))} risparmiati rispetto alla stima"
                     else:
-                        esito = f"🔴 {_fmt_fine(differenza)} in più rispetto alla stima"
+                        esito = f"🔴 {_formatta_durata_hm(differenza)} in più rispetto alla stima"
                     st.markdown("**📊 CONFRONTO FINALE**")
                     a, b = st.columns(2)
-                    a.metric("⏱️ Tempo previsto", _fmt_fine(previsto))
-                    b.metric("🚚 Tempo effettivo", _fmt_fine(effettivo))
+                    a.metric("⏱️ Tempo previsto", _formatta_durata_hm(previsto))
+                    b.metric("🚚 Tempo effettivo", _formatta_durata_hm(effettivo))
                     st.markdown(f"<div style='text-align:center; font-size:20px; font-weight:800; margin:8px 0 14px 0;'>{esito}</div>", unsafe_allow_html=True)
                 else:
                     st.info("Tempo effettivo non disponibile.")
@@ -3874,12 +3866,7 @@ else:
                 gestiti_campo = max(0, len(df_pos) - residui_campo)
                 km_campo_display = km_visualizzati if km_visualizzati is not None else 0.0
                 minuti_campo_display = minuti_visualizzati if minuti_visualizzati is not None else 0.0
-                ore_campo = int(float(minuti_campo_display) // 60)
-                min_campo = int(round(float(minuti_campo_display) - ore_campo * 60))
-                if min_campo == 60:
-                    ore_campo += 1
-                    min_campo = 0
-                tempo_campo_display = f"{ore_campo} h {min_campo:02d} min" if ore_campo else f"{min_campo} min"
+                tempo_campo_display = _formatta_durata_hm(minuti_campo_display)
 
                 m1, m2, m3, m4 = st.columns(4, gap="small")
                 with m1:
