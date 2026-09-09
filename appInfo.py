@@ -1533,6 +1533,324 @@ def geolocalizza_tutti_clienti(df_db, salvataggio_progressivo=None):
     progress.empty()
     return risultato, trovati, gia_presenti, non_trovati
 
+# ============================================================
+# V10.4.0 TEST — CARICA GIRO DA FOTO
+# ------------------------------------------------------------
+# Modulo isolato e conservativo (regola §25): non tocca in alcun
+# modo l'ottimizzatore ne' le altre funzioni gia' funzionanti.
+#
+# Flusso:
+#   foto -> OCR (Tesseract, gratuito) -> riga grezza (cliente
+#   grezzo + colli) -> ricerca per SOMIGLIANZA nel Foglio1 (sola
+#   consultazione) -> proposta di abbinamento -> conferma manuale
+#   -> creazione righe in GiroAttivo.
+#
+# Il Foglio1 NON viene mai scritto da questo modulo (nemmeno le
+# coordinate): l'unico scopo qui e' leggere CLIENTE/COMUNE/VIA/
+# ORA/ZONA/COORDINATE gia' presenti per il cliente riconosciuto.
+# ============================================================
+
+SOGLIA_MATCH_VERDE = 0.55  # sopra: abbinamento proposto come affidabile (verde)
+RIGA_OCR_PATTERN = __import__("re").compile(
+    r"^\D*(\d{6,12})\s+([A-Z0-9\-]{2,15})\s+(.+?)\s+(\d{1,4})[.,](\d{2})\s*$"
+)
+
+
+@st.cache_resource(show_spinner=False)
+def _ottieni_reader_easyocr():
+    """Carica il modello EasyOCR una sola volta per sessione (pip puro, no apt-get)."""
+    import easyocr
+    return easyocr.Reader(['it'], gpu=False, verbose=False)
+
+
+def _testo_da_immagine_ocr(file_bytes):
+    """Esegue l'OCR (EasyOCR, motore gratuito, libreria Python pura) su una
+    foto del giro serale.
+
+    A differenza di Tesseract non richiede alcun binario di sistema ne'
+    packages.txt: si installa come normale dipendenza pip (vedi requirements.txt).
+    EasyOCR restituisce singole parole con coordinate; qui le raggruppiamo
+    per riga (stessa fascia verticale) e le riordiniamo da sinistra a destra,
+    per ricostruire lo stesso formato di testo riga-per-riga usato a valle.
+    """
+    try:
+        from PIL import Image, ImageOps
+        import numpy as np
+    except ImportError:
+        return None, "Librerie OCR non installate (Pillow / numpy)."
+
+    try:
+        reader = _ottieni_reader_easyocr()
+    except Exception as exc:
+        return None, f"Impossibile caricare il motore OCR: {exc}"
+
+    try:
+        img = Image.open(BytesIO(file_bytes))
+        img = ImageOps.exif_transpose(img)  # corregge rotazioni da smartphone
+
+        # Le foto da smartphone di tabelle piccole beneficiano di un upscaling
+        # prima dell'OCR: si leggono meglio caratteri e cifre piu' grandi.
+        larghezza, altezza = img.size
+        if larghezza < 1800:
+            fattore = min(3, max(1, round(1800 / max(larghezza, 1))))
+            img = img.resize((larghezza * fattore, altezza * fattore), Image.LANCZOS)
+
+        arr = np.array(img.convert("RGB"))
+        risultati = reader.readtext(arr)
+        if not risultati:
+            return "", None
+
+        # Raggruppa i blocchi di testo in righe per coordinata Y (stessa fascia).
+        blocchi = []
+        for bbox, testo_blocco, _conf in risultati:
+            cy = sum(p[1] for p in bbox) / 4
+            cx = sum(p[0] for p in bbox) / 4
+            blocchi.append((cy, cx, testo_blocco))
+        blocchi.sort(key=lambda b: b[0])
+
+        TOLLERANZA_RIGA_PX = 15
+        righe, riga_corrente, y_rif = [], [], None
+        for cy, cx, testo_blocco in blocchi:
+            if y_rif is None or abs(cy - y_rif) <= TOLLERANZA_RIGA_PX:
+                riga_corrente.append((cx, testo_blocco))
+                y_rif = cy if y_rif is None else (y_rif + cy) / 2
+            else:
+                righe.append(riga_corrente)
+                riga_corrente = [(cx, testo_blocco)]
+                y_rif = cy
+        if riga_corrente:
+            righe.append(riga_corrente)
+
+        righe_testo = []
+        for r in righe:
+            r.sort(key=lambda b: b[0])  # da sinistra a destra
+            righe_testo.append(" ".join(t for _, t in r))
+
+        return "\n".join(righe_testo), None
+    except Exception as exc:
+        return None, f"Errore OCR: {exc}"
+
+
+def _righe_grezze_da_testo_ocr(testo):
+    """Interpreta il testo OCR riga per riga: codice, tratta, testo cliente, colli.
+
+    Le colonne attese nel foglio serale sono, in ordine:
+        CODICE  TRATTA  CLIENTE  COMUNE  VIA  COLLI
+    Non separiamo CLIENTE/COMUNE/VIA singolarmente (l'OCR su tabella
+    puo' spostare gli spazi): teniamo tutto insieme come "testo_grezzo"
+    e lasciamo che l'abbinamento per somiglianza trovi la riga giusta
+    nel Foglio1, che invece i campi separati li ha gia' puliti.
+    """
+    righe = []
+    non_riconosciute = []
+    if not testo:
+        return righe, non_riconosciute
+
+    for grezza in testo.splitlines():
+        grezza = grezza.strip()
+        if not grezza:
+            continue
+        m = RIGA_OCR_PATTERN.match(grezza)
+        if not m:
+            non_riconosciute.append(grezza)
+            continue
+        codice, tratta, testo_grezzo, colli_int, colli_dec = m.groups()
+        try:
+            colli = float(f"{colli_int}.{colli_dec}")
+        except ValueError:
+            colli = None
+        righe.append({
+            "codice": codice,
+            "tratta": tratta,
+            "testo_grezzo": testo_grezzo.strip(" —-"),
+            "colli": colli,
+            "riga_originale": grezza,
+        })
+    return righe, non_riconosciute
+
+
+def _abbina_riga_al_database(testo_grezzo, df_db):
+    """Cerca nel Foglio1 (sola consultazione) il cliente piu' simile al testo OCR.
+
+    Ritorna (riga_db_o_None, punteggio 0-1, lista_alternative[:3]).
+    Non scrive mai nulla nel database.
+    """
+    import difflib
+
+    if df_db is None or df_db.empty or "CLIENTE" not in df_db.columns:
+        return None, 0.0, []
+
+    chiave_ocr = _normalizza_chiave_testo(testo_grezzo)
+
+    candidati = []
+    for _, riga in df_db.iterrows():
+        chiave_db = _normalizza_chiave_testo(
+            f"{riga.get('CLIENTE', '')} {riga.get('COMUNE', '')} {riga.get('VIA', '')}"
+        )
+        if not chiave_db:
+            continue
+        punteggio = difflib.SequenceMatcher(None, chiave_ocr, chiave_db).ratio()
+        candidati.append((punteggio, riga))
+
+    if not candidati:
+        return None, 0.0, []
+
+    candidati.sort(key=lambda c: c[0], reverse=True)
+    migliore_punteggio, migliore_riga = candidati[0]
+    alternative = [r for _, r in candidati[1:4]]
+    return migliore_riga, migliore_punteggio, alternative
+
+
+def costruisci_giro_da_foto(file_bytes, df_db):
+    """Pipeline completa: foto -> OCR -> abbinamento -> tabella di controllo.
+
+    Ritorna un DataFrame con una riga per ogni cliente letto dalla foto,
+    pronto per essere mostrato nella schermata "GIRO RICONOSCIUTO" prima
+    della creazione definitiva del giro. Nessuna scrittura su Foglio1
+    ne' su GiroAttivo avviene qui: solo lettura e proposta.
+    """
+    testo_ocr, errore = _testo_da_immagine_ocr(file_bytes)
+    if errore:
+        return None, errore
+
+    righe_grezze, non_riconosciute = _righe_grezze_da_testo_ocr(testo_ocr)
+    if not righe_grezze:
+        return None, "Nessuna riga riconoscibile nella foto. Prova con una foto piu' nitida e dritta."
+
+    risultati = []
+    for riga in righe_grezze:
+        match, punteggio, alternative = _abbina_riga_al_database(riga["testo_grezzo"], df_db)
+        stato = "🟢" if match is not None and punteggio >= SOGLIA_MATCH_VERDE else "🟡 DA VERIFICARE"
+        risultati.append({
+            "Riconosciuto": stato,
+            "Testo letto dalla foto": riga["testo_grezzo"],
+            "Cliente abbinato": match.get("CLIENTE", "") if match is not None else "",
+            "Comune": match.get("COMUNE", "") if match is not None else "",
+            "Via": match.get("VIA", "") if match is not None else "",
+            "Colli": riga["colli"],
+            "Punteggio": round(punteggio, 2),
+            "_match_zona": match.get("ZONA", "") if match is not None else "",
+            "_match_ora": match.get("ORA", "") if match is not None else "",
+            "_match_coordinate": match.get("COORDINATE", "") if match is not None else "",
+            "_alternative_cliente": [a.get("CLIENTE", "") for a in alternative],
+        })
+
+    df_risultati = pd.DataFrame(risultati)
+    avviso = None
+    if non_riconosciute:
+        avviso = f"{len(non_riconosciute)} riga/e della foto non e' stato possibile interpretarle come cliente + colli."
+    return df_risultati, avviso
+
+
+def render_carica_giro_da_foto():
+    """UI isolata (TEST): carica una foto del giro serale e propone
+    l'abbinamento automatico dei clienti dal Foglio1, con controllo
+    manuale prima di creare/aggiungere righe in GiroAttivo.
+    """
+    with st.expander("📥 CARICA GIRO DELLA SERA (foto) — TEST", expanded=False):
+        st.caption(
+            "Carica la foto del foglio che ricevi la sera. L'app legge CLIENTE e "
+            "COLLI dalla foto e cerca il cliente corrispondente nel database "
+            "(Foglio1, sola consultazione). Controlla sempre la tabella prima di confermare."
+        )
+
+        file_foto = st.file_uploader(
+            "Foto del giro",
+            type=["jpg", "jpeg", "png"],
+            key="upload_foto_giro_serale",
+        )
+
+        if st.button("🔍 ANALIZZA FOTO", key="btn_analizza_foto_giro", disabled=file_foto is None):
+            with st.spinner("📷 Leggo la foto e cerco i clienti nel database..."):
+                df_riconosciuto, avviso = costruisci_giro_da_foto(file_foto.getvalue(), st.session_state.db_clienti)
+            if df_riconosciuto is None:
+                st.error(f"❌ {avviso}")
+            else:
+                st.session_state.foto_giro_riconosciuto = df_riconosciuto
+                st.session_state.foto_giro_avviso = avviso
+
+        df_riconosciuto = st.session_state.get("foto_giro_riconosciuto")
+        if df_riconosciuto is not None and not df_riconosciuto.empty:
+            avviso = st.session_state.get("foto_giro_avviso")
+            if avviso:
+                st.warning(f"⚠️ {avviso}")
+
+            n_verdi = int((df_riconosciuto["Riconosciuto"] == "🟢").sum())
+            st.markdown(f"**📋 GIRO RICONOSCIUTO** — {n_verdi}/{len(df_riconosciuto)} clienti abbinati automaticamente")
+
+            righe_confermate = []
+            for i, riga in df_riconosciuto.iterrows():
+                cols = st.columns([0.6, 3, 1.3, 1])
+                with cols[0]:
+                    st.write(riga["Riconosciuto"])
+                with cols[1]:
+                    if riga["Riconosciuto"] == "🟢":
+                        st.write(f"**{riga['Cliente abbinato']}**")
+                        st.caption(f"{riga['Via']}, {riga['Comune']}")
+                        cliente_scelto = riga["Cliente abbinato"]
+                    else:
+                        opzioni = ["— Salta questa riga —"] + [riga["Cliente abbinato"]] + list(riga.get("_alternative_cliente", []))
+                        opzioni = [o for o in dict.fromkeys(opzioni) if o]
+                        if not opzioni:
+                            opzioni = ["— Salta questa riga —"]
+                        st.caption(f"Testo letto: {riga['Testo letto dalla foto'][:60]}")
+                        cliente_scelto = st.selectbox(
+                            "Abbina a:", opzioni, key=f"foto_match_scelta_{i}", label_visibility="collapsed"
+                        )
+                        if cliente_scelto == "— Salta questa riga —":
+                            cliente_scelto = None
+                with cols[2]:
+                    colli_scelti = st.number_input(
+                        "Colli", min_value=0, value=int(riga["Colli"]) if pd.notna(riga["Colli"]) else 0,
+                        key=f"foto_colli_scelti_{i}", label_visibility="collapsed"
+                    )
+                with cols[3]:
+                    st.write("")
+
+                if cliente_scelto:
+                    match_db = st.session_state.db_clienti[
+                        st.session_state.db_clienti["CLIENTE"] == cliente_scelto
+                    ]
+                    if not match_db.empty:
+                        riga_db = match_db.iloc[0]
+                        righe_confermate.append({
+                            "CLIENTE": riga_db.get("CLIENTE", ""),
+                            "COMUNE": riga_db.get("COMUNE", ""),
+                            "VIA": riga_db.get("VIA", ""),
+                            "ORA": riga_db.get("ORA", ""),
+                            "Q.ta": colli_scelti,
+                            "STATO": STATO_DA_FARE,
+                        })
+
+            st.markdown("---")
+            c_conf, c_ann = st.columns(2)
+            with c_conf:
+                if st.button(
+                    f"✅ CONFERMA E AGGIUNGI AL GIRO ({len(righe_confermate)})",
+                    use_container_width=True, key="btn_conferma_giro_da_foto",
+                    disabled=len(righe_confermate) == 0,
+                ):
+                    df_nuove = pd.DataFrame(righe_confermate)
+                    df_nuove["POSIZIONE"] = range(
+                        len(st.session_state.giro_corrente) + 1,
+                        len(st.session_state.giro_corrente) + 1 + len(df_nuove)
+                    )
+                    st.session_state.giro_corrente = pd.concat(
+                        [st.session_state.giro_corrente, df_nuove], ignore_index=True
+                    )
+                    salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
+                    st.session_state.foto_giro_riconosciuto = None
+                    st.session_state.foto_giro_avviso = None
+                    st.success(f"✅ {len(df_nuove)} clienti aggiunti al giro.")
+                    st.rerun()
+            with c_ann:
+                if st.button("❌ ANNULLA", use_container_width=True, key="btn_annulla_giro_da_foto"):
+                    st.session_state.foto_giro_riconosciuto = None
+                    st.session_state.foto_giro_avviso = None
+                    st.rerun()
+
+
+
 # Inizializzazione Connessione Google Sheets tramite Streamlit Secrets
 @st.cache_resource
 def init_google_sheets():
@@ -2897,6 +3215,10 @@ else:
         # Se l'utente e' in CAMPO, la CAMPO resta vuota: mostra solo clienti da fare.
         # Il RIEPILOGO resta disponibile tramite il relativo pulsante e mostra tutti
         # i clienti, con quelli gestiti in fondo e leggermente offuscati.
+
+        # V10.4.0 TEST: caricamento giro serale da foto (isolato, non tocca l'ottimizzatore).
+        if st.session_state.vista_giro != "CAMPO":
+            render_carica_giro_da_foto()
 
         # V10.3.2: in CAMPO le tre tab PREPARAZIONE/RIEPILOGO/CAMPO
         # non vengono mostrate: il ritorno al RIEPILOGO avviene dal comando dedicato.
