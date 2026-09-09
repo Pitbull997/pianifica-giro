@@ -1226,6 +1226,57 @@ def _formatta_ora_partenza_reale():
     return _formatta_ora_minuti(round(minuti))
 
 
+def _minuti_trascorsi_da_inizio_giro():
+    """Minuti reali trascorsi dall'inizio del giro (INIZIA GIRO o fallback 05:20) ad ora."""
+    try:
+        tz = ZoneInfo("Europe/Rome") if ZoneInfo is not None else None
+        ora_corrente = datetime.now(tz) if tz else datetime.now()
+        minuti_ora_corrente = ora_corrente.hour * 60 + ora_corrente.minute + ora_corrente.second / 60.0
+    except Exception:
+        minuti_ora_corrente = 0.0
+    return max(0.0, minuti_ora_corrente - _ora_partenza_reale_minuti())
+
+
+def _stato_avanzamento_giro(fermate_completate, fermate_totali, previsto_totale_min):
+    """Confronta il ritmo reale con la previsione del giro, in base a quante
+    fermate sono gia' state gestite rispetto al totale.
+
+    Approssimazione: distribuisce il tempo totale previsto in proporzione al
+    numero di fermate completate (non ai singoli tragitti, che variano da
+    fermata a fermata). Serve a dare un'indicazione di massima "sei avanti
+    o indietro", non un orario di arrivo esatto per ogni cliente.
+
+    Ritorna un dict con etichetta/colore/dettaglio, oppure None se non ci
+    sono ancora abbastanza dati (nessuna consegna gestita, o nessuna
+    previsione disponibile per questo giro).
+    """
+    if not fermate_totali or not fermate_completate or not previsto_totale_min:
+        return None
+
+    tempo_atteso = float(previsto_totale_min) * (fermate_completate / fermate_totali)
+    tempo_reale = _minuti_trascorsi_da_inizio_giro()
+    scarto = tempo_atteso - tempo_reale  # positivo = in anticipo, negativo = in ritardo
+
+    SOGLIA_IN_LINEA_MIN = 5
+    if abs(scarto) <= SOGLIA_IN_LINEA_MIN:
+        return {
+            "emoji": "🟡", "colore": "#F59E0B",
+            "testo": "In linea con la previsione",
+            "dettaglio": f"scarto di {_formatta_durata_hm(abs(scarto))}",
+        }
+    if scarto > 0:
+        return {
+            "emoji": "🟢", "colore": "#22C55E",
+            "testo": f"In anticipo di {_formatta_durata_hm(scarto)}",
+            "dettaglio": "rispetto alla previsione del giro",
+        }
+    return {
+        "emoji": "🔴", "colore": "#EF4444",
+        "testo": f"In ritardo di {_formatta_durata_hm(abs(scarto))}",
+        "dettaglio": "rispetto alla previsione del giro",
+    }
+
+
 def _simula_tempo_percorso_orari(ordine, durate, orari_apertura, ora_partenza_minuti=300, minuti_servizio=MINUTI_SERVIZIO_PER_FERMATA):
     """Simula l'orario reale fermata per fermata.
 
@@ -3879,6 +3930,24 @@ else:
                     st.markdown(f'<div class="campo-metric-card"><div class="campo-metric-label">📍 POSIZIONE ATTUALE</div><div class="campo-metric-value" style="font-size:15px;">{posizione_label}</div><div class="campo-metric-sub">{posizione_comune}</div></div>', unsafe_allow_html=True)
 
                 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+                # V10.4.1 TEST: confronto live tra ritmo reale e previsione del giro.
+                # Usa la stessa previsione totale gia' calcolata per il confronto
+                # finale (§15), distribuita in proporzione alle fermate gestite.
+                previsione_avanzamento = st.session_state.get("previsione_giro") or {}
+                stato_avanzamento = _stato_avanzamento_giro(
+                    gestiti_campo, len(df_pos), previsione_avanzamento.get("minuti")
+                )
+                if stato_avanzamento is not None:
+                    st.markdown(f"""
+                    <div style="border:1px solid {stato_avanzamento['colore']}55; border-radius:12px; padding:10px 14px; margin-bottom:14px; background:{stato_avanzamento['colore']}14; display:flex; justify-content:space-between; align-items:center;">
+                        <span style="font-size:15px; font-weight:700;">{stato_avanzamento['emoji']} {stato_avanzamento['testo']}</span>
+                        <span style="font-size:12px; color:#94A3B8;">{stato_avanzamento['dettaglio']}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+                elif gestiti_campo == 0:
+                    st.caption("ℹ️ Il confronto con la previsione apparirà dopo la prima consegna gestita.")
+
                 st.markdown("<div style='font-size:16px; font-weight:800; color:#FFFFFF; margin:0 0 8px 4px;'>📍 PROSSIMA CONSEGNA</div>", unsafe_allow_html=True)
 
                 # CAMPO: mostra SOLO le consegne ancora da gestire.
