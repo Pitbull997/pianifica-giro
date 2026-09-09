@@ -509,6 +509,8 @@ def _calcola_previsione_cumulativa_giro(df_giro, df_db):
     if "STATO" not in df.columns:
         df["STATO"] = STATO_DA_FARE
     df["STATO"] = df["STATO"].fillna("").astype(str)
+    if "MIN_TRATTA_PREVISTA" not in df.columns:
+        df["MIN_TRATTA_PREVISTA"] = ""
     if "MIN_PREVISTI_CUMULATIVI" not in df.columns:
         df["MIN_PREVISTI_CUMULATIVI"] = ""
 
@@ -557,7 +559,11 @@ def _calcola_previsione_cumulativa_giro(df_giro, df_db):
         viaggio = durate[pos - 1][pos]
         if viaggio is None:
             return df, None
-        tempo_cumulativo += float(viaggio) / 60.0
+        minuti_tratta = float(viaggio) / 60.0
+        # Tempo previsto della singola tratta: origine (sede oppure ultimo cliente gestito)
+        # -> cliente corrente. Questo valore resta visibile separatamente dal cumulativo.
+        df.at[idx, "MIN_TRATTA_PREVISTA"] = round(minuti_tratta, 1)
+        tempo_cumulativo += minuti_tratta
 
         if usa_orari:
             apertura = _parse_orario_apertura(df.iloc[idx].get("ORA", ""))
@@ -2202,7 +2208,7 @@ def carica_tutti_i_giri_da_sheets():
     return pd.DataFrame(columns=['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO'])
 
 def carica_giro_utente_da_sheets(nome_utente):
-    cols_giro = ['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_PREVISTI_CUMULATIVI']
+    cols_giro = ['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI']
     df_vuoto = pd.DataFrame(columns=cols_giro)
     try:
         df = carica_tutti_i_giri_da_sheets()
@@ -2237,7 +2243,7 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
     Foglio1 e Utenti non vengono mai modificati da questa funzione.
     Le eventuali righe tecniche di backup presenti in GiroAttivo vengono mantenute.
     """
-    cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON']
+    cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON']
     for tentativo in range(5):
         try:
             if sheet_giro:
@@ -2336,7 +2342,7 @@ def salva_stato_giro_persistente(nome_utente):
         "previsione_giro": st.session_state.get("previsione_giro"),
     }
     payload = _json.dumps(meta, ensure_ascii=False)
-    cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON']
+    cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON']
     for tentativo in range(5):
         try:
             if sheet_giro:
@@ -2717,7 +2723,7 @@ if 'giro_corrente' not in st.session_state or st.session_state.get('ultimo_utent
         st.session_state.metriche_giro_corrente = None
         st.session_state.ultimo_utente_caricato = st.session_state.utente_corrente
     else:
-        st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_PREVISTI_CUMULATIVI'])
+        st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI'])
     st.session_state.metriche_giro_corrente = None
 
 if 'clienti_selezionati_m' not in st.session_state:
@@ -3149,7 +3155,7 @@ else:
             st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
             if st.button("🗑️ SVUOTA GIRO", use_container_width=True, key="btn_svuota"):
                 if not st.session_state.giro_corrente.empty:
-                    st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_PREVISTI_CUMULATIVI'])
+                    st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI'])
                     st.session_state.giro_terminato = False
                     st.session_state.inizio_giro_reale = None
                     st.session_state.fine_giro_reale = None
