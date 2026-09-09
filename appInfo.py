@@ -515,10 +515,25 @@ def _calcola_previsione_cumulativa_giro(df_giro, df_db):
     if "STATO" not in df.columns:
         df["STATO"] = STATO_DA_FARE
     df["STATO"] = df["STATO"].fillna("").astype(str)
-    if "MIN_TRATTA_PREVISTA" not in df.columns:
-        df["MIN_TRATTA_PREVISTA"] = ""
-    if "MIN_PREVISTI_CUMULATIVI" not in df.columns:
-        df["MIN_PREVISTI_CUMULATIVI"] = ""
+    # Le colonne possono arrivare da Google Sheets con dtype string/Arrow.
+    # Devono essere numeriche per poter assegnare i minuti float.
+    if "MIN_TRATTA_PREVISTA" in df.columns:
+        df["MIN_TRATTA_PREVISTA"] = pd.to_numeric(
+            df["MIN_TRATTA_PREVISTA"], errors="coerce"
+        ).astype("float64")
+    else:
+        df["MIN_TRATTA_PREVISTA"] = pd.Series(
+            float("nan"), index=df.index, dtype="float64"
+        )
+
+    if "MIN_PREVISTI_CUMULATIVI" in df.columns:
+        df["MIN_PREVISTI_CUMULATIVI"] = pd.to_numeric(
+            df["MIN_PREVISTI_CUMULATIVI"], errors="coerce"
+        ).astype("float64")
+    else:
+        df["MIN_PREVISTI_CUMULATIVI"] = pd.Series(
+            float("nan"), index=df.index, dtype="float64"
+        )
 
     stati_gestiti = [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
     gestiti_idx = [i for i in range(len(df)) if df.iloc[i]["STATO"].strip() in stati_gestiti]
@@ -3392,12 +3407,29 @@ else:
                     df_da_applicare = df_da_applicare.drop(columns=['ARRIVO STIMATO'])
                 # Le previsioni della proposta precedente non vanno riutilizzate:
                 # vengono ricostruite sull'ordine appena applicato.
-                if 'MIN_TRATTA_PREVISTA' not in df_da_applicare.columns:
-                    df_da_applicare['MIN_TRATTA_PREVISTA'] = pd.Series(index=df_da_applicare.index, dtype='object')
-                if 'MIN_PREVISTI_CUMULATIVI' not in df_da_applicare.columns:
-                    df_da_applicare['MIN_PREVISTI_CUMULATIVI'] = pd.Series(index=df_da_applicare.index, dtype='object')
-                df_da_applicare['MIN_TRATTA_PREVISTA'] = ''
-                df_da_applicare['MIN_PREVISTI_CUMULATIVI'] = ''
+                # Prepara le nuove colonne come numeriche.
+                # Google Sheets può restituirle come string/Arrow e pandas
+                # non consente di inserire float dentro una colonna stringa.
+                if 'MIN_TRATTA_PREVISTA' in df_da_applicare.columns:
+                    df_da_applicare['MIN_TRATTA_PREVISTA'] = pd.to_numeric(
+                        df_da_applicare['MIN_TRATTA_PREVISTA'], errors='coerce'
+                    ).astype('float64')
+                else:
+                    df_da_applicare['MIN_TRATTA_PREVISTA'] = pd.Series(
+                        float('nan'), index=df_da_applicare.index, dtype='float64'
+                    )
+
+                if 'MIN_PREVISTI_CUMULATIVI' in df_da_applicare.columns:
+                    df_da_applicare['MIN_PREVISTI_CUMULATIVI'] = pd.to_numeric(
+                        df_da_applicare['MIN_PREVISTI_CUMULATIVI'], errors='coerce'
+                    ).astype('float64')
+                else:
+                    df_da_applicare['MIN_PREVISTI_CUMULATIVI'] = pd.Series(
+                        float('nan'), index=df_da_applicare.index, dtype='float64'
+                    )
+
+                df_da_applicare['MIN_TRATTA_PREVISTA'] = float('nan')
+                df_da_applicare['MIN_PREVISTI_CUMULATIVI'] = float('nan')
                 st.session_state.giro_corrente = df_da_applicare
                 st.session_state.metriche_giro_corrente = None
                 # V10.2.9: conserva la previsione del tempo totale per il confronto finale.
