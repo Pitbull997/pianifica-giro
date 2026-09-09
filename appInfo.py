@@ -477,6 +477,136 @@ def _firma_ordine_giro(df):
         for _, row in df.reset_index(drop=True).iterrows()
     )
 
+
+
+def _numero_minuti_cumulativi(valore):
+    """Converte in float un valore MIN_PREVISTI_CUMULATIVI, oppure None."""
+    try:
+        if valore is None or (isinstance(valore, float) and pd.isna(valore)):
+            return None
+        testo = str(valore).strip().replace(',', '.')
+        if not testo or testo.lower() in ("nan", "none", "nat"):
+            return None
+        return float(testo)
+    except Exception:
+        return None
+
+
+def _metodo_previsione_usa_orari():
+    """Stabilisce se la previsione cumulativa deve applicare le attese ORARI."""
+    previsione = st.session_state.get("previsione_giro") or {}
+    metodo = str(previsione.get("metodo", "")).upper()
+    modalita = str(st.session_state.get("modalita_ottimizzazione", "")).upper()
+    return metodo.startswith("ORARI") or "ORARI" in modalita
+
+
+def _calcola_previsione_cumulativa_giro(df_giro, df_db):
+    """Calcola la previsione cumulativa fermata-per-fermata sull'ordine reale."""
+    if df_giro is None or df_giro.empty:
+        return df_giro.copy() if df_giro is not None else pd.DataFrame(), None
+
+    df = df_giro.copy().reset_index(drop=True)
+    if "STATO" not in df.columns:
+        df["STATO"] = STATO_DA_FARE
+    df["STATO"] = df["STATO"].fillna("").astype(str)
+    if "MIN_PREVISTI_CUMULATIVI" not in df.columns:
+        df["MIN_PREVISTI_CUMULATIVI"] = ""
+
+    stati_gestiti = [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
+    gestiti_idx = [i for i in range(len(df)) if df.iloc[i]["STATO"].strip() in stati_gestiti]
+    pendenti_idx = [i for i in range(len(df)) if df.iloc[i]["STATO"].strip() not in stati_gestiti]
+
+    if not pendenti_idx:
+        valori = [_numero_minuti_cumulativi(df.iloc[i].get("MIN_PREVISTI_CUMULATIVI")) for i in range(len(df))]
+        validi = [v for v in valori if v is not None]
+        return df, (validi[-1] + MINUTI_SERVIZIO_PER_FERMATA if validi else None)
+
+    ultimo_gestito_idx = gestiti_idx[-1] if gestiti_idx else None
+    base_cumulativa = 0.0
+    origine = COORDINATE_DEPOSITO_VANGO
+    servizio_precedente = False
+
+    if ultimo_gestito_idx is not None:
+        base_salvata = _numero_minuti_cumulativi(df.iloc[ultimo_gestito_idx].get("MIN_PREVISTI_CUMULATIVI"))
+        coord_ultima = _trova_coordinate_nel_db(df.iloc[ultimo_gestito_idx], df_db) if base_salvata is not None else None
+        if base_salvata is not None and coord_ultima is not None:
+            origine = coord_ultima
+            base_cumulativa = float(base_salvata)
+            servizio_precedente = True
+
+    coordinate = [origine]
+    for idx in pendenti_idx:
+        coord = _trova_coordinate_nel_db(df.iloc[idx], df_db)
+        if coord is None:
+            return df, None
+        coordinate.append(coord)
+    coordinate.append(COORDINATE_DEPOSITO_VANGO)
+
+    try:
+        _, durate = _richiedi_matrice_osrm(coordinate)
+    except Exception:
+        return df, None
+
+    usa_orari = _metodo_previsione_usa_orari()
+    ora_partenza = _ora_partenza_reale_minuti()
+    tempo_cumulativo = float(base_cumulativa)
+
+    for pos, idx in enumerate(pendenti_idx, start=1):
+        if servizio_precedente:
+            tempo_cumulativo += float(MINUTI_SERVIZIO_PER_FERMATA)
+        viaggio = durate[pos - 1][pos]
+        if viaggio is None:
+            return df, None
+        tempo_cumulativo += float(viaggio) / 60.0
+
+        if usa_orari:
+            apertura = _parse_orario_apertura(df.iloc[idx].get("ORA", ""))
+            if apertura is not None:
+                ora_arrivo = float(ora_partenza) + tempo_cumulativo
+                tempo_cumulativo += max(0.0, float(apertura) - ora_arrivo)
+
+        df.at[idx, "MIN_PREVISTI_CUMULATIVI"] = round(tempo_cumulativo, 1)
+        servizio_precedente = True
+
+    tempo_fine = tempo_cumulativo + float(MINUTI_SERVIZIO_PER_FERMATA)
+    rientro = durate[len(pendenti_idx)][len(pendenti_idx) + 1]
+    if rientro is None:
+        return df, None
+    tempo_fine += float(rientro) / 60.0
+    return df, round(tempo_fine, 1)
+
+
+def _assicura_previsione_cumulativa_giro(salva=True):
+    """Ricalcola OSRM solo quando cambia l'ordine reale delle fermate."""
+    df = st.session_state.get("giro_corrente")
+    if df is None or df.empty:
+        return False
+
+    firma = _firma_ordine_giro(df)
+    previsione = st.session_state.get("previsione_giro") or {}
+    firma_salvata = previsione.get("firma_ordine_cumulativa")
+    valori_mancanti = "MIN_PREVISTI_CUMULATIVI" not in df.columns or any(
+        _numero_minuti_cumulativi(v) is None for v in df["MIN_PREVISTI_CUMULATIVI"].tolist()
+    )
+    if firma_salvata == firma and not valori_mancanti:
+        return False
+
+    nuovo_df, totale = _calcola_previsione_cumulativa_giro(df, st.session_state.get("db_clienti"))
+    if totale is None:
+        return False
+
+    st.session_state.giro_corrente = nuovo_df
+    st.session_state.previsione_giro = {
+        "minuti": float(totale),
+        "metodo": str(previsione.get("metodo") or "TEMPO CUMULATIVO OSRM"),
+        "firma": firma,
+        "firma_ordine_cumulativa": firma,
+    }
+    if salva and st.session_state.get("utente_corrente"):
+        salva_stato_giro_persistente(st.session_state.utente_corrente)
+        salva_giro_utente_su_sheets(st.session_state.utente_corrente, nuovo_df)
+    return True
+
 def _gruppo_da_zona(valore):
     """Converte la ZONA numerica in un macro-gruppo.
 
@@ -1238,43 +1368,28 @@ def _minuti_trascorsi_da_inizio_giro():
 
 
 def _stato_avanzamento_giro(fermate_completate, fermate_totali, previsto_totale_min):
-    """Confronta il ritmo reale con la previsione del giro, in base a quante
-    fermate sono gia' state gestite rispetto al totale.
-
-    Approssimazione: distribuisce il tempo totale previsto in proporzione al
-    numero di fermate completate (non ai singoli tragitti, che variano da
-    fermata a fermata). Serve a dare un'indicazione di massima "sei avanti
-    o indietro", non un orario di arrivo esatto per ogni cliente.
-
-    Ritorna un dict con etichetta/colore/dettaglio, oppure None se non ci
-    sono ancora abbastanza dati (nessuna consegna gestita, o nessuna
-    previsione disponibile per questo giro).
-    """
-    if not fermate_totali or not fermate_completate or not previsto_totale_min:
+    """Confronta il tempo reale con il valore cumulativo dell'ultima fermata gestita."""
+    if not fermate_totali or not fermate_completate:
         return None
-
-    tempo_atteso = float(previsto_totale_min) * (fermate_completate / fermate_totali)
+    df = st.session_state.get("giro_corrente")
+    if df is None or df.empty or "MIN_PREVISTI_CUMULATIVI" not in df.columns:
+        return None
+    stati_gestiti = [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
+    stati = df.get("STATO", pd.Series([STATO_DA_FARE] * len(df))).fillna("").astype(str).str.strip()
+    gestiti = df[stati.isin(stati_gestiti)]
+    if gestiti.empty:
+        return None
+    previsto_arrivo = _numero_minuti_cumulativi(gestiti.iloc[-1].get("MIN_PREVISTI_CUMULATIVI"))
+    if previsto_arrivo is None:
+        return None
     tempo_reale = _minuti_trascorsi_da_inizio_giro()
-    scarto = tempo_atteso - tempo_reale  # positivo = in anticipo, negativo = in ritardo
-
+    scarto = previsto_arrivo - tempo_reale
     SOGLIA_IN_LINEA_MIN = 5
-    if abs(scarto) <= SOGLIA_IN_LINEA_MIN:
-        return {
-            "emoji": "🟡", "colore": "#F59E0B",
-            "testo": "In linea con la previsione",
-            "dettaglio": f"scarto di {_formatta_durata_hm(abs(scarto))}",
-        }
+    if abs(scarto) < SOGLIA_IN_LINEA_MIN:
+        return {"emoji":"🟡","colore":"#F59E0B","testo":"In linea con la previsione","dettaglio":f"scarto di {_formatta_durata_hm(abs(scarto))}"}
     if scarto > 0:
-        return {
-            "emoji": "🟢", "colore": "#22C55E",
-            "testo": f"In anticipo di {_formatta_durata_hm(scarto)}",
-            "dettaglio": "rispetto alla previsione del giro",
-        }
-    return {
-        "emoji": "🔴", "colore": "#EF4444",
-        "testo": f"In ritardo di {_formatta_durata_hm(abs(scarto))}",
-        "dettaglio": "rispetto alla previsione del giro",
-    }
+        return {"emoji":"🟢","colore":"#22C55E","testo":f"In anticipo di {_formatta_durata_hm(scarto)}","dettaglio":"rispetto all'arrivo previsto"}
+    return {"emoji":"🔴","colore":"#EF4444","testo":f"In ritardo di {_formatta_durata_hm(abs(scarto))}","dettaglio":"rispetto all'arrivo previsto"}
 
 
 def _simula_tempo_percorso_orari(ordine, durate, orari_apertura, ora_partenza_minuti=300, minuti_servizio=MINUTI_SERVIZIO_PER_FERMATA):
@@ -2087,7 +2202,7 @@ def carica_tutti_i_giri_da_sheets():
     return pd.DataFrame(columns=['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO'])
 
 def carica_giro_utente_da_sheets(nome_utente):
-    cols_giro = ['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO']
+    cols_giro = ['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_PREVISTI_CUMULATIVI']
     df_vuoto = pd.DataFrame(columns=cols_giro)
     try:
         df = carica_tutti_i_giri_da_sheets()
@@ -2122,7 +2237,7 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
     Foglio1 e Utenti non vengono mai modificati da questa funzione.
     Le eventuali righe tecniche di backup presenti in GiroAttivo vengono mantenute.
     """
-    cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'TIPO_RIGA', 'BACKUP_JSON']
+    cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON']
     for tentativo in range(5):
         try:
             if sheet_giro:
@@ -2221,7 +2336,7 @@ def salva_stato_giro_persistente(nome_utente):
         "previsione_giro": st.session_state.get("previsione_giro"),
     }
     payload = _json.dumps(meta, ensure_ascii=False)
-    cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'TIPO_RIGA', 'BACKUP_JSON']
+    cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON']
     for tentativo in range(5):
         try:
             if sheet_giro:
@@ -2602,7 +2717,7 @@ if 'giro_corrente' not in st.session_state or st.session_state.get('ultimo_utent
         st.session_state.metriche_giro_corrente = None
         st.session_state.ultimo_utente_caricato = st.session_state.utente_corrente
     else:
-        st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO'])
+        st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_PREVISTI_CUMULATIVI'])
     st.session_state.metriche_giro_corrente = None
 
 if 'clienti_selezionati_m' not in st.session_state:
@@ -2644,6 +2759,15 @@ if 'metriche_tempo_orari_corrente' not in st.session_state:
 
 if 'giro_backup_disponibile' not in st.session_state:
     st.session_state.giro_backup_disponibile = False
+
+# V10.4.1: ricostruisce la previsione cumulativa quando cambia l'ordine reale.
+# Il cambio STATO non modifica la firma, quindi la consegna appena gestita
+# viene confrontata con il valore gia' salvato senza una nuova chiamata OSRM.
+if st.session_state.get("utente_corrente") and not st.session_state.get("giro_corrente", pd.DataFrame()).empty:
+    try:
+        _assicura_previsione_cumulativa_giro(salva=True)
+    except Exception:
+        pass
 
 if "nav" in st.query_params and st.query_params["nav"] == "login":
     st.session_state.pagina_attiva = "login"
@@ -3025,7 +3149,7 @@ else:
             st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
             if st.button("🗑️ SVUOTA GIRO", use_container_width=True, key="btn_svuota"):
                 if not st.session_state.giro_corrente.empty:
-                    st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO'])
+                    st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_PREVISTI_CUMULATIVI'])
                     st.session_state.giro_terminato = False
                     st.session_state.inizio_giro_reale = None
                     st.session_state.fine_giro_reale = None
@@ -3193,6 +3317,10 @@ else:
                 df_da_applicare = df_proposto.copy()
                 if 'ARRIVO STIMATO' in df_da_applicare.columns:
                     df_da_applicare = df_da_applicare.drop(columns=['ARRIVO STIMATO'])
+                if 'MIN_PREVISTI_CUMULATIVI' not in df_da_applicare.columns:
+                    df_da_applicare['MIN_PREVISTI_CUMULATIVI'] = ''
+                else:
+                    df_da_applicare['MIN_PREVISTI_CUMULATIVI'] = ''
                 st.session_state.giro_corrente = df_da_applicare
                 st.session_state.metriche_giro_corrente = None
                 # V10.2.9: conserva la previsione del tempo totale per il confronto finale.
@@ -3205,6 +3333,14 @@ else:
                     "metodo": str(m.get("metodo", "")),
                     "firma": _firma_ordine_giro(df_da_applicare),
                 }
+                df_previsto, totale_cumulativo = _calcola_previsione_cumulativa_giro(
+                    df_da_applicare, st.session_state.db_clienti
+                )
+                if totale_cumulativo is not None:
+                    st.session_state.giro_corrente = df_previsto
+                    st.session_state.previsione_giro["minuti"] = float(totale_cumulativo)
+                    st.session_state.previsione_giro["firma_ordine_cumulativa"] = _firma_ordine_giro(df_previsto)
+                    df_da_applicare = df_previsto
                 st.session_state.inizio_giro_reale = None
                 st.session_state.fine_giro_reale = None
                 st.session_state.giro_terminato = False
@@ -3931,9 +4067,8 @@ else:
 
                 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
-                # V10.4.1 TEST: confronto live tra ritmo reale e previsione del giro.
-                # Usa la stessa previsione totale gia' calcolata per il confronto
-                # finale (§15), distribuita in proporzione alle fermate gestite.
+                # V10.4.1: confronto live con la previsione cumulativa
+                # specifica dell'ultima fermata realmente gestita.
                 previsione_avanzamento = st.session_state.get("previsione_giro") or {}
                 stato_avanzamento = _stato_avanzamento_giro(
                     gestiti_campo, len(df_pos), previsione_avanzamento.get("minuti")
