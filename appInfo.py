@@ -1724,7 +1724,7 @@ def geolocalizza_tutti_clienti(df_db, salvataggio_progressivo=None):
 # modo l'ottimizzatore ne' le altre funzioni gia' funzionanti.
 #
 # Flusso:
-#   foto -> OCR (Tesseract, gratuito) -> riga grezza (cliente
+#   foto -> OCR (EasyOCR, gratuito) -> riga grezza (cliente
 #   grezzo + colli) -> ricerca per SOMIGLIANZA nel Foglio1 (sola
 #   consultazione) -> proposta di abbinamento -> conferma manuale
 #   -> creazione righe in GiroAttivo.
@@ -1735,8 +1735,16 @@ def geolocalizza_tutti_clienti(df_db, salvataggio_progressivo=None):
 # ============================================================
 
 SOGLIA_MATCH_VERDE = 0.55  # sopra: abbinamento proposto come affidabile (verde)
+# Due formati supportati:
+# 1) tabella completa: CODICE  TRATTA  CLIENTE ... COLLI
+# 2) lista semplice: CLIENTE  COLLI (es. "RILOCA GELATERIA CAFFETTE 5,00")
 RIGA_OCR_PATTERN = __import__("re").compile(
-    r"^\D*(\d{6,12})\s+([A-Z0-9\-]{2,15})\s+(.+?)\s+(\d{1,4})[.,](\d{2})\s*$"
+    r"^\D*(\d{6,12})\s+([A-Z0-9\-]{2,15})\s+(.+?)\s+(\d{1,4})[.,](\d{2})\s*$",
+    __import__("re").IGNORECASE,
+)
+RIGA_OCR_SEMPLICE_PATTERN = __import__("re").compile(
+    r"^(.+?)\s+(\d{1,4})[.,](\d{2})\s*$",
+    __import__("re").IGNORECASE,
 )
 
 
@@ -1816,40 +1824,89 @@ def _testo_da_immagine_ocr(file_bytes):
 
 
 def _righe_grezze_da_testo_ocr(testo):
-    """Interpreta il testo OCR riga per riga: codice, tratta, testo cliente, colli.
+    """Interpreta il testo OCR in due formati.
 
-    Le colonne attese nel foglio serale sono, in ordine:
+    FORMATO COMPLETO:
         CODICE  TRATTA  CLIENTE  COMUNE  VIA  COLLI
-    Non separiamo CLIENTE/COMUNE/VIA singolarmente (l'OCR su tabella
-    puo' spostare gli spazi): teniamo tutto insieme come "testo_grezzo"
-    e lasciamo che l'abbinamento per somiglianza trovi la riga giusta
-    nel Foglio1, che invece i campi separati li ha gia' puliti.
+
+    FORMATO SEMPLICE:
+        CLIENTE  COLLI
+
+    Nel formato semplice non servono codice, tratta, comune o via: il nome
+    cliente viene cercato nel Foglio1 e da li' vengono recuperati COMUNE, VIA,
+    ORA e COORDINATE. Questo permette di usare anche foto che contengono solo
+    elenco clienti + quantita'.
     """
     righe = []
     non_riconosciute = []
     if not testo:
         return righe, non_riconosciute
 
+    import re
+
+    # Righe che sono chiaramente intestazioni della tabella e non clienti.
+    parole_da_ignorare = {
+        "loading reference", "route guide", "cod", "end address name",
+        "end address city", "end address address", "quantity edu",
+        "cliente", "clienti", "quantita", "quantità",
+    }
+
     for grezza in testo.splitlines():
-        grezza = grezza.strip()
+        grezza = re.sub(r"\s+", " ", grezza.strip())
         if not grezza:
             continue
-        m = RIGA_OCR_PATTERN.match(grezza)
-        if not m:
-            non_riconosciute.append(grezza)
+
+        chiave_riga = grezza.lower().strip(" :-_")
+        if chiave_riga in parole_da_ignorare or any(chiave_riga.startswith(x + " ") for x in parole_da_ignorare):
             continue
-        codice, tratta, testo_grezzo, colli_int, colli_dec = m.groups()
-        try:
-            colli = float(f"{colli_int}.{colli_dec}")
-        except ValueError:
-            colli = None
-        righe.append({
-            "codice": codice,
-            "tratta": tratta,
-            "testo_grezzo": testo_grezzo.strip(" —-"),
-            "colli": colli,
-            "riga_originale": grezza,
-        })
+
+        # 1) Prima proviamo il formato completo gia' supportato.
+        m = RIGA_OCR_PATTERN.match(grezza)
+        if m:
+            codice, tratta, testo_grezzo, colli_int, colli_dec = m.groups()
+            try:
+                colli = float(f"{colli_int}.{colli_dec}")
+            except ValueError:
+                colli = None
+            righe.append({
+                "codice": codice,
+                "tratta": tratta,
+                "testo_grezzo": testo_grezzo.strip(" —-"),
+                "colli": colli,
+                "riga_originale": grezza,
+                "formato": "completo",
+            })
+            continue
+
+        # 2) Formato semplice: CLIENTE + quantita' finale.
+        m = RIGA_OCR_SEMPLICE_PATTERN.match(grezza)
+        if m:
+            testo_cliente, colli_int, colli_dec = m.groups()
+            testo_cliente = testo_cliente.strip(" —-")
+
+            # Evita di trattare intestazioni o righe troppo corte come clienti.
+            if len(testo_cliente) < 2 or not re.search(r"[A-Za-zÀ-ÖØ-öø-ÿ]", testo_cliente):
+                non_riconosciute.append(grezza)
+                continue
+
+            try:
+                colli = float(f"{colli_int}.{colli_dec}")
+            except ValueError:
+                colli = None
+
+            righe.append({
+                "codice": "",
+                "tratta": "",
+                "testo_grezzo": testo_cliente,
+                "colli": colli,
+                "riga_originale": grezza,
+                "formato": "semplice",
+            })
+            continue
+
+        # Le righe senza quantita' non sono utilizzabili per costruire il giro.
+        non_riconosciute.append(grezza)
+
     return righe, non_riconosciute
 
 
@@ -1887,6 +1944,9 @@ def _abbina_riga_al_database(testo_grezzo, df_db):
 
 def costruisci_giro_da_foto(file_bytes, df_db):
     """Pipeline completa: foto -> OCR -> abbinamento -> tabella di controllo.
+
+    Accetta sia il formato completo con codice/tratta sia la lista semplice
+    composta da CLIENTE + COLLI.
 
     Ritorna un DataFrame con una riga per ogni cliente letto dalla foto,
     pronto per essere mostrato nella schermata "GIRO RICONOSCIUTO" prima
@@ -1934,7 +1994,8 @@ def render_carica_giro_da_foto():
     with st.expander("📥 CARICA GIRO DELLA SERA (foto) — TEST", expanded=False):
         st.caption(
             "Carica la foto del foglio che ricevi la sera. L'app legge CLIENTE e "
-            "COLLI dalla foto e cerca il cliente corrispondente nel database "
+            "COLLI sia dalla tabella completa sia dalla lista semplice e cerca "
+            "il cliente corrispondente nel database "
             "(Foglio1, sola consultazione). Controlla sempre la tabella prima di confermare."
         )
 
