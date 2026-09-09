@@ -2287,7 +2287,7 @@ def carica_tutti_i_giri_da_sheets():
                 return pd.DataFrame(data)
     except Exception as e:
         pass
-    return pd.DataFrame(columns=['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO'])
+    return pd.DataFrame(columns=['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON'])
 
 def carica_giro_utente_da_sheets(nome_utente):
     cols_giro = ['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI']
@@ -2623,10 +2623,25 @@ def _trova_riga_snapshot(df, item, usati):
     return candidati[0] if candidati else None
 
 def salva_posizione_giro():
-    """Salva l'ordine corrente in una riga tecnica di GiroAttivo."""
+    """Salva l'ordine corrente in una riga tecnica di GiroAttivo.
+
+    Prima del backup assicura che le stime cumulative presenti nel giro corrente
+    siano persistite: in questo modo il salvataggio della posizione non puo'
+    cancellare o perdere i valori appena ricalcolati dopo uno spostamento manuale.
+    """
     df = st.session_state.giro_corrente.copy()
     if df.empty or not st.session_state.utente_corrente:
         return False
+
+    # Punto di sicurezza: se l'ordine e' cambiato o mancano stime, le calcola
+    # e le salva prima di costruire il backup della posizione.
+    try:
+        _assicura_previsione_cumulativa_giro(salva=True)
+        df = st.session_state.giro_corrente.copy()
+    except Exception:
+        # Il backup della posizione deve restare disponibile anche se la
+        # previsione non e' temporaneamente calcolabile.
+        df = st.session_state.giro_corrente.copy()
     snapshot = _crea_snapshot_ordine(df)
     payload = json.dumps(snapshot, ensure_ascii=False, separators=(',', ':'))
     backup_utente = BACKUP_UTENTE_PREFIX + str(st.session_state.utente_corrente).strip()
@@ -2637,21 +2652,35 @@ def salva_posizione_giro():
                 return False
             time.sleep(1.5 * (tentativo + 1))
             data = sheet_giro.get_all_records()
-            df_all = pd.DataFrame(data) if data else pd.DataFrame(columns=['UTENTE','POSIZIONE','CLIENTE','COMUNE','VIA','ORA','Q.ta','STATO','TIPO_RIGA','BACKUP_JSON'])
+            # IMPORTANTE: il backup deve mantenere TUTTE le colonne del GiroAttivo,
+            # comprese le nuove stime MIN_TRATTA_PREVISTA e MIN_PREVISTI_CUMULATIVI.
+            cols_ordine = [
+                'UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta',
+                'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI',
+                'TIPO_RIGA', 'BACKUP_JSON'
+            ]
+            df_all = pd.DataFrame(data) if data else pd.DataFrame(columns=cols_ordine)
             df_all.columns = [str(c).strip() for c in df_all.columns]
-            for c in ['UTENTE','POSIZIONE','CLIENTE','COMUNE','VIA','ORA','Q.ta','STATO','TIPO_RIGA','BACKUP_JSON']:
+            if 'Q.TA' in df_all.columns and 'Q.ta' not in df_all.columns:
+                df_all = df_all.rename(columns={'Q.TA': 'Q.ta'})
+            for c in cols_ordine:
                 if c not in df_all.columns:
                     df_all[c] = ''
-            df_all = df_all[['UTENTE','POSIZIONE','CLIENTE','COMUNE','VIA','ORA','Q.ta','STATO','TIPO_RIGA','BACKUP_JSON']]
+            df_all = df_all[cols_ordine]
             df_all = df_all[df_all['UTENTE'].astype(str) != backup_utente].copy()
-            nuova = pd.DataFrame([{
-                'UTENTE': backup_utente, 'POSIZIONE': str(st.session_state.utente_corrente),
-                'CLIENTE': 'BACKUP POSIZIONE GIRO', 'COMUNE': '', 'VIA': '', 'ORA': '', 'Q.ta': '', 'STATO': '',
-                'TIPO_RIGA': 'BACKUP_POSIZIONE', 'BACKUP_JSON': payload
-            }])
-            df_all = pd.concat([df_all, nuova], ignore_index=True)
+
+            nuova = {c: '' for c in cols_ordine}
+            nuova.update({
+                'UTENTE': backup_utente,
+                'POSIZIONE': str(st.session_state.utente_corrente),
+                'CLIENTE': 'BACKUP POSIZIONE GIRO',
+                'TIPO_RIGA': 'BACKUP_POSIZIONE',
+                'BACKUP_JSON': payload,
+            })
+            df_all = pd.concat([df_all, pd.DataFrame([nuova])], ignore_index=True)
+
             sheet_giro.clear()
-            sheet_giro.update([['UTENTE','POSIZIONE','CLIENTE','COMUNE','VIA','ORA','Q.ta','STATO','TIPO_RIGA','BACKUP_JSON']] + df_all.astype(str).values.tolist())
+            sheet_giro.update([cols_ordine] + df_all.astype(str).values.tolist())
             st.cache_data.clear()
             st.session_state.giro_backup_disponibile = True
             return True
