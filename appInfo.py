@@ -1337,6 +1337,17 @@ def _formatta_ora_minuti(minuti):
     return f"{ore:02d}:{mins:02d}"
 
 
+def _intero_sicuro(valore, default=0):
+    """Converte un valore numerico in intero evitando errori con NaN/valori vuoti."""
+    try:
+        numero = pd.to_numeric(valore, errors="coerce")
+        if pd.isna(numero):
+            return int(default)
+        return int(round(float(numero)))
+    except (TypeError, ValueError, OverflowError):
+        return int(default)
+
+
 def _formatta_durata_hm(minuti):
     """Formatta una durata in minuti come 'Xh YYm' (es. 1h 43m), o 'YYm' se sotto l'ora.
 
@@ -3681,10 +3692,13 @@ else:
                             "N°": i,
                             "CLIENTE": str(r.get("CLIENTE", "")).strip(),
                             "STATO CONSEGNA": stato,
-                            "COLLI PREVISTI": int(round(float(r.get("Q.ta", 0) or 0))),
-                            "COLLI CONSEGNATI": int(round(float(r.get("COLLI_CONSEGNATI", 0) or 0))),
-                            "COLLI RIFIUTATI": int(round(float(r.get("COLLI_RIFIUTATI", 0) or 0))),
-                            "COLLI DA RENDERE": int(round(float(r.get("COLLI_DA_RENDERE", 0) or 0))),
+                            # I dati provenienti da Google Sheets/OCR possono contenere
+                            # NaN. Non usare "or 0" per i float: NaN e' truthy e int(NaN)
+                            # genera "cannot convert float NaN to integer".
+                            "COLLI PREVISTI": _intero_sicuro(r.get("Q.ta", 0)),
+                            "COLLI CONSEGNATI": _intero_sicuro(r.get("COLLI_CONSEGNATI", 0)),
+                            "COLLI RIFIUTATI": _intero_sicuro(r.get("COLLI_RIFIUTATI", 0)),
+                            "COLLI DA RENDERE": _intero_sicuro(r.get("COLLI_DA_RENDERE", 0)),
                         })
 
                     wb = Workbook()
