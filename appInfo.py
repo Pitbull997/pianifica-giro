@@ -24,6 +24,7 @@ st.set_page_config(
 )
 
 # Stati consegna: definiti PRIMA di qualsiasi uso nel codice.
+VERSIONE_VANGO = "V10_5_0_prime_4_analisi.py"
 STATO_DA_FARE = "⚪ DA CONSEGNARE"
 STATO_FATTO = "🟢 FATTO"
 STATO_PARZIALE = "🟡 PARZIALE"
@@ -3537,7 +3538,7 @@ else:
 
         col_info_u, col_logout_u = st.columns([3, 1])
         with col_info_u:
-            st.markdown(f"<p style='color: #94A3B8; font-size: 13px; margin: 0;'>👤 Utente: <b style='color: #60A5FA;'>{st.session_state.get('utente_corrente', '')}</b></p>", unsafe_allow_html=True)
+            st.markdown(f"<p style='color: #94A3B8; font-size: 13px; margin: 0;'>👤 {st.session_state.get('utente_corrente', '')} sta usando Vango ver. <b style='color: #60A5FA;'>{VERSIONE_VANGO}</b></p>", unsafe_allow_html=True)
         with col_logout_u:
             if st.button("🚪 LOGOUT", use_container_width=True, key="btn_logout_principale"):
                 elimina_sessione_persistente()
