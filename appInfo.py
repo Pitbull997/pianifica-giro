@@ -2340,27 +2340,58 @@ def carica_giro_utente_da_sheets(nome_utente):
     df_vuoto = pd.DataFrame(columns=cols_giro)
     try:
         df = carica_tutti_i_giri_da_sheets()
-        if not df.empty:
-            df.columns = df.columns.str.strip().str.upper()
-            if 'UTENTE' not in df.columns:
-                return df_vuoto
-            
-            df_utente = df[df['UTENTE'].astype(str).str.strip().str.lower() == nome_utente.strip().lower()].copy()
-            
-            if 'Q.TA' in df_utente.columns and 'Q.TA' not in cols_giro:
+        if df.empty:
+            return df_vuoto
+
+        df.columns = df.columns.astype(str).str.strip().str.upper()
+        if 'UTENTE' not in df.columns:
+            return df_vuoto
+
+        nome = nome_utente.strip().lower()
+        df_utente = df[df['UTENTE'].astype(str).str.strip().str.lower() == nome].copy()
+
+        # Il giro normale ha priorita'. Le righe BACKUP sono tecniche e non
+        # devono mai essere mostrate come clienti.
+        if not df_utente.empty:
+            if 'Q.TA' in df_utente.columns:
                 df_utente = df_utente.rename(columns={'Q.TA': 'Q.ta'})
-            
             for c in cols_giro:
                 if c not in df_utente.columns:
-                    df_utente[c] = ""
-            
+                    df_utente[c] = ''
             df_utente = df_utente[cols_giro]
-            if 'STATO' not in df_utente.columns:
-                df_utente['STATO'] = ''
             df_utente['STATO'] = df_utente['STATO'].fillna('').astype(str)
-            if not df_utente.empty and len(df_utente.dropna(how='all')) > 0:
+            if not df_utente.empty:
                 df_utente['POSIZIONE'] = [str(i) for i in range(1, len(df_utente) + 1)]
                 return df_utente.reset_index(drop=True)
+
+        # FALLBACK DI SICUREZZA:
+        # se per qualsiasi motivo il giro normale non c'e' piu', recuperiamo il
+        # giro completo dalla riga __VANGO_BACKUP__::utente. Questo impedisce che
+        # una riapertura dell'app perda il giro anche se restano solo le righe tecniche.
+        backup_utente = BACKUP_UTENTE_PREFIX + str(nome_utente).strip()
+        righe_backup = df[df['UTENTE'].astype(str).str.strip().str.lower() == backup_utente.lower()]
+        if not righe_backup.empty:
+            payload = str(righe_backup.iloc[-1].get('BACKUP_JSON', '') or '').strip()
+            if payload:
+                try:
+                    snapshot = json.loads(payload)
+                    if isinstance(snapshot, dict) and snapshot.get('tipo') == 'GIRO_COMPLETO':
+                        righe = snapshot.get('righe', [])
+                        if righe:
+                            recuperato = pd.DataFrame(righe).copy()
+                            if '__VANGO_POSIZIONE_BACKUP' in recuperato.columns:
+                                recuperato = recuperato.sort_values('__VANGO_POSIZIONE_BACKUP', kind='stable')
+                                recuperato = recuperato.drop(columns=['__VANGO_POSIZIONE_BACKUP'])
+                            for c in cols_giro:
+                                if c not in recuperato.columns:
+                                    recuperato[c] = ''
+                            if 'Q.TA' in recuperato.columns and 'Q.ta' not in recuperato.columns:
+                                recuperato = recuperato.rename(columns={'Q.TA': 'Q.ta'})
+                            recuperato = recuperato[cols_giro].reset_index(drop=True)
+                            recuperato['POSIZIONE'] = [str(i) for i in range(1, len(recuperato) + 1)]
+                            return recuperato
+                except Exception:
+                    pass
     except Exception as e:
         st.error(f"Errore di lettura del giro da Google Sheets: {e}")
     return df_vuoto
@@ -2710,62 +2741,86 @@ def _trova_riga_snapshot(df, item, usati):
     return candidati[0] if candidati else None
 
 def salva_posizione_giro():
-    """Salva l'ordine corrente in una riga tecnica di GiroAttivo.
+    """Salva l'ordine corrente e il giro completo senza cancellare le fermate normali.
 
-    Prima del backup assicura che le stime cumulative presenti nel giro corrente
-    siano persistite: in questo modo il salvataggio della posizione non puo'
-    cancellare o perdere i valori appena ricalcolati dopo uno spostamento manuale.
+    Il backup viene scritto in una riga tecnica separata. La parte normale del
+    GiroAttivo viene ricostruita a partire dal giro corrente, così un salvataggio
+    della posizione non puo' trasformare GiroAttivo nel solo record BACKUP.
     """
-    df = st.session_state.giro_corrente.copy()
+    df = st.session_state.giro_corrente.copy().reset_index(drop=True)
     if df.empty or not st.session_state.utente_corrente:
         return False
 
-    # Punto di sicurezza: se l'ordine e' cambiato o mancano stime, le calcola
-    # e le salva prima di costruire il backup della posizione.
+    # Prima assicuriamo che le stime eventualmente mancanti siano aggiornate.
     try:
         _assicura_previsione_cumulativa_giro(salva=True)
-        df = st.session_state.giro_corrente.copy()
+        df = st.session_state.giro_corrente.copy().reset_index(drop=True)
     except Exception:
-        # Il backup della posizione deve restare disponibile anche se la
-        # previsione non e' temporaneamente calcolabile.
-        df = st.session_state.giro_corrente.copy()
+        pass
+
     snapshot = _crea_snapshot_ordine(df)
     payload = json.dumps(snapshot, ensure_ascii=False, separators=(',', ':'))
-    backup_utente = BACKUP_UTENTE_PREFIX + str(st.session_state.utente_corrente).strip()
+    nome_utente = str(st.session_state.utente_corrente).strip()
+    backup_utente = BACKUP_UTENTE_PREFIX + nome_utente
+
+    cols_ordine = [
+        'UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta',
+        'COLLI_CONSEGNATI', 'COLLI_RIFIUTATI', 'COLLI_DA_RENDERE', 'STATO',
+        'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON'
+    ]
 
     for tentativo in range(5):
         try:
             if not sheet_giro:
                 return False
             time.sleep(1.5 * (tentativo + 1))
-            data = sheet_giro.get_all_records()
-            # IMPORTANTE: il backup deve mantenere TUTTE le colonne del GiroAttivo,
-            # comprese le nuove stime MIN_TRATTA_PREVISTA e MIN_PREVISTI_CUMULATIVI.
-            cols_ordine = [
-                'UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta',
-                'COLLI_CONSEGNATI', 'COLLI_RIFIUTATI', 'COLLI_DA_RENDERE',
-                'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI',
-                'TIPO_RIGA', 'BACKUP_JSON'
-            ]
-            df_all = pd.DataFrame(data) if data else pd.DataFrame(columns=cols_ordine)
-            df_all.columns = [str(c).strip() for c in df_all.columns]
-            if 'Q.TA' in df_all.columns and 'Q.ta' not in df_all.columns:
-                df_all = df_all.rename(columns={'Q.TA': 'Q.ta'})
-            for c in cols_ordine:
-                if c not in df_all.columns:
-                    df_all[c] = ''
-            df_all = df_all[cols_ordine]
-            df_all = df_all[df_all['UTENTE'].astype(str) != backup_utente].copy()
 
+            # Leggiamo SEMPRE il contenuto reale del foglio, non la cache.
+            data = sheet_giro.get_all_records()
+            df_all = pd.DataFrame(data) if data else pd.DataFrame(columns=cols_ordine)
+            if not df_all.empty:
+                df_all.columns = [str(c).strip() for c in df_all.columns]
+                # Normalizza i nomi delle colonne senza perdere Q.ta.
+                if 'Q.TA' in df_all.columns and 'Q.ta' not in df_all.columns:
+                    df_all = df_all.rename(columns={'Q.TA': 'Q.ta'})
+                for c in cols_ordine:
+                    if c not in df_all.columns:
+                        df_all[c] = ''
+                df_all = df_all[cols_ordine]
+            else:
+                df_all = pd.DataFrame(columns=cols_ordine)
+
+            # Togliamo solo le righe normali dell'utente corrente e il suo vecchio
+            # backup. Gli altri utenti e le altre righe tecniche restano intatti.
+            mask_utente = df_all['UTENTE'].astype(str).str.strip().str.lower() == nome_utente.lower()
+            mask_backup = df_all['UTENTE'].astype(str).str.strip().str.lower() == backup_utente.lower()
+            df_all = df_all.loc[~(mask_utente | mask_backup)].copy()
+
+            # Reinseriamo SEMPRE il giro normale corrente.
+            df_normale = df.copy()
+            df_normale['UTENTE'] = nome_utente
+            df_normale['POSIZIONE'] = [str(i) for i in range(1, len(df_normale) + 1)]
+            for c in cols_ordine:
+                if c not in df_normale.columns:
+                    df_normale[c] = ''
+            df_normale['TIPO_RIGA'] = ''
+            df_normale['BACKUP_JSON'] = ''
+            df_normale = df_normale[cols_ordine]
+
+            # E poi la riga tecnica del backup completo.
             nuova = {c: '' for c in cols_ordine}
             nuova.update({
                 'UTENTE': backup_utente,
-                'POSIZIONE': str(st.session_state.utente_corrente),
+                'POSIZIONE': nome_utente,
                 'CLIENTE': 'BACKUP POSIZIONE GIRO',
                 'TIPO_RIGA': 'BACKUP_POSIZIONE',
                 'BACKUP_JSON': payload,
             })
-            df_all = pd.concat([df_all, pd.DataFrame([nuova])], ignore_index=True)
+
+            df_all = pd.concat(
+                [df_all, df_normale, pd.DataFrame([nuova])],
+                ignore_index=True
+            )
 
             sheet_giro.clear()
             sheet_giro.update([cols_ordine] + df_all.astype(str).values.tolist())
