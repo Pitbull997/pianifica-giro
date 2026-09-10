@@ -3942,6 +3942,13 @@ else:
         else:
             tempo_reale_corrente = viaggio_corrente + attesa_corrente + servizio_corrente
 
+        # In CAMPO la metrica "TEMPO RESIDUO" deve rappresentare il lavoro reale
+        # ancora necessario, non il solo tempo di strada. Usa quindi il residuo
+        # della previsione cumulativa: strada + servizio residuo + eventuali attese
+        # + rientro in sede. Il motore di previsione non viene modificato.
+        if st.session_state.vista_giro == "CAMPO":
+            minuti_visualizzati = tempo_reale_corrente
+
         if st.session_state.vista_giro != "CAMPO":
             st.markdown("**Dettaglio tempi reali del giro**")
             d1, d2, d3 = st.columns(3)
