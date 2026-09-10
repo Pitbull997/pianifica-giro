@@ -25,6 +25,10 @@ st.set_page_config(
 
 # Stati consegna: definiti PRIMA di qualsiasi uso nel codice.
 VERSIONE_VANGO = "V10_5_0_prime_7_fix_datetime_backup.py"
+
+# DATABASE GOOGLE SHEETS DEDICATO A QUESTA ISTANZA VANGO.
+# Non usare open() per titolo: ogni ramo deve essere isolato dal database dell'altro ramo.
+VANGO_SPREADSHEET_ID = "1ydKVOiZPd6k_jY-42v0gSsXjXXOo0-mkB0trgbnFS9o"
 STATO_DA_FARE = "⚪ DA CONSEGNARE"
 STATO_FATTO = "🟢 FATTO"
 STATO_PARZIALE = "🟡 PARZIALE"
@@ -2179,7 +2183,7 @@ def init_google_sheets():
 # Connessione al foglio Google e alle relative schede
 try:
     client_gs = init_google_sheets()
-    sh = client_gs.open("VanGo Database")
+    sh = client_gs.open_by_key(VANGO_SPREADSHEET_ID)
     
     try:
         sheet_db = sh.worksheet("Foglio1")
