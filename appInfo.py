@@ -5,7 +5,7 @@ import os
 import base64
 import json
 import time
-from datetime import datetime
+from datetime import datetime, date
 try:
     from zoneinfo import ZoneInfo
 except Exception:
@@ -24,7 +24,7 @@ st.set_page_config(
 )
 
 # Stati consegna: definiti PRIMA di qualsiasi uso nel codice.
-VERSIONE_VANGO = "V10_5_0_prime_6_fix_nan_giroattivo.py"
+VERSIONE_VANGO = "V10_5_0_prime_7_fix_datetime_backup.py"
 STATO_DA_FARE = "⚪ DA CONSEGNARE"
 STATO_FATTO = "🟢 FATTO"
 STATO_PARZIALE = "🟡 PARZIALE"
