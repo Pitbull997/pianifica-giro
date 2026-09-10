@@ -24,7 +24,7 @@ st.set_page_config(
 )
 
 # Stati consegna: definiti PRIMA di qualsiasi uso nel codice.
-VERSIONE_VANGO = "V10_5_0_prime_5_fix_salvataggio_giro.py"
+VERSIONE_VANGO = "V10_5_0_prime_6_fix_nan_giroattivo.py"
 STATO_DA_FARE = "⚪ DA CONSEGNARE"
 STATO_FATTO = "🟢 FATTO"
 STATO_PARZIALE = "🟡 PARZIALE"
@@ -2670,6 +2670,31 @@ def carica_stato_giro_persistente(nome_utente):
         pass
     return risultato
 
+def _json_sicuro(dato):
+    """Converte ricorsivamente NaN/NaT e scalar numpy in valori JSON validi."""
+    if dato is None:
+        return None
+    if isinstance(dato, float) and (pd.isna(dato)):
+        return None
+    if isinstance(dato, (pd.Timestamp, datetime, date)):
+        return dato.isoformat()
+    if hasattr(dato, "item"):
+        try:
+            return _json_sicuro(dato.item())
+        except Exception:
+            pass
+    if isinstance(dato, dict):
+        return {str(k): _json_sicuro(v) for k, v in dato.items()}
+    if isinstance(dato, (list, tuple)):
+        return [_json_sicuro(v) for v in dato]
+    try:
+        if pd.isna(dato):
+            return None
+    except Exception:
+        pass
+    return dato
+
+
 def _scrivi_giro_su_sheets_sicuro(df_dati, cols_ordine):
     """Scrive GiroAttivo senza svuotarlo prima dell'aggiornamento.
 
@@ -2679,7 +2704,17 @@ def _scrivi_giro_su_sheets_sicuro(df_dati, cols_ordine):
     """
     if not sheet_giro:
         return False
-    dati = [cols_ordine] + df_dati.astype(str).values.tolist()
+    # Google Sheets non accetta NaN/NaT/numpy scalar fuori JSON.
+    # Convertiamo ogni cella in un valore JSON-safe prima della chiamata gspread.
+    df_safe = df_dati.copy()
+    df_safe = df_safe.where(pd.notna(df_safe), "")
+    dati = [cols_ordine] + [
+        [
+            ("" if pd.isna(v) else (v.item() if hasattr(v, "item") else v))
+            for v in row
+        ]
+        for row in df_safe.itertuples(index=False, name=None)
+    ]
     # gspread usa 1-based row/column. Costruiamo l'ultima cella della nuova area.
     n_rows = len(dati)
     n_cols = len(cols_ordine)
@@ -2717,7 +2752,7 @@ def salva_stato_giro_persistente(nome_utente):
         "inizio_fermo_mezzo": st.session_state.get("inizio_fermo_mezzo"),
         "minuti_fermo_mezzo": float(st.session_state.get("minuti_fermo_mezzo", 0) or 0),
     }
-    payload = _json.dumps(meta, ensure_ascii=False)
+    payload = _json.dumps(_json_sicuro(meta), ensure_ascii=False, allow_nan=False)
     cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'COLLI_CONSEGNATI', 'COLLI_RIFIUTATI', 'COLLI_DA_RENDERE', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON']
     for tentativo in range(5):
         try:
@@ -2929,9 +2964,22 @@ def _crea_snapshot_ordine(df):
     righe = df_snapshot.to_dict(orient='records')
     snapshot = []
     for posizione, riga in enumerate(righe, start=1):
-        riga = {str(k): v for k, v in riga.items()}
-        riga["__VANGO_POSIZIONE_BACKUP"] = posizione
-        snapshot.append(riga)
+        riga_safe = {}
+        for k, v in riga.items():
+            if pd.isna(v):
+                v = ""
+            elif hasattr(v, "item"):
+                try:
+                    v = v.item()
+                except Exception:
+                    pass
+            # Timestamp/datetime non sono necessari come oggetti nel backup:
+            # li convertiamo in stringa ISO per rendere il JSON sempre valido.
+            if isinstance(v, (pd.Timestamp, datetime, date)):
+                v = v.isoformat()
+            riga_safe[str(k)] = v
+        riga_safe["__VANGO_POSIZIONE_BACKUP"] = posizione
+        snapshot.append(riga_safe)
     return {
         "versione": 2,
         "tipo": "GIRO_COMPLETO",
@@ -2968,7 +3016,7 @@ def salva_posizione_giro():
         pass
 
     snapshot = _crea_snapshot_ordine(df)
-    payload = json.dumps(snapshot, ensure_ascii=False, separators=(',', ':'))
+    payload = json.dumps(_json_sicuro(snapshot), ensure_ascii=False, separators=(',', ':'), allow_nan=False)
     nome_utente = str(st.session_state.utente_corrente).strip()
     backup_utente = BACKUP_UTENTE_PREFIX + nome_utente
 
