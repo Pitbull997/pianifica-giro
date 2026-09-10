@@ -15,6 +15,13 @@ from io import BytesIO
 import gspread
 from google.oauth2.service_account import Credentials
 
+# GPS smartphone - prima fase VanGo Test.
+try:
+    from streamlit_js_eval import get_geolocation
+except ImportError:
+    get_geolocation = None
+
+
 # Configurazione Pagina
 st.set_page_config(
     page_title="VanGo - Giro Consegne",
@@ -24,7 +31,7 @@ st.set_page_config(
 )
 
 # Stati consegna: definiti PRIMA di qualsiasi uso nel codice.
-VERSIONE_VANGO = "V10_5_0_prime_7_fix_datetime_backup.py"
+VERSIONE_VANGO = "V10_5_1_GPS_TEST.py"
 
 # DATABASE GOOGLE SHEETS DEDICATO A QUESTA ISTANZA VANGO.
 # Non usare open() per titolo: ogni ramo deve essere isolato dal database dell'altro ramo.
@@ -2636,6 +2643,118 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
     return False
 
 
+# ============================================================
+# GPS LIVE SMARTPHONE - V10.5.1 TEST
+# ============================================================
+GPS_UTENTE_PREFIX = "__VANGO_GPS__::"
+
+
+def _gps_utente(nome_utente):
+    return f"{GPS_UTENTE_PREFIX}{str(nome_utente).strip()}"
+
+
+def salva_posizione_gps_su_sheets(nome_utente, posizione):
+    """Salva SOLO l'ultima posizione GPS del conducente in GiroAttivo.
+
+    La posizione viene mantenuta in una riga tecnica separata e non viene mai
+    interpretata come cliente del giro. In produzione questa parte potra'
+    essere spostata su un backend dedicato senza cambiare l'interfaccia GPS.
+    """
+    if not sheet_giro or not nome_utente or not posizione:
+        return False
+    try:
+        import json as _json
+        payload = _json.dumps(_json_sicuro(posizione), ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        utente_gps = _gps_utente(nome_utente)
+        cols = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta',
+                'COLLI_CONSEGNATI', 'COLLI_RIFIUTATI', 'COLLI_DA_RENDERE', 'STATO',
+                'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON']
+        valori = sheet_giro.get_all_values()
+        if not valori:
+            sheet_giro.append_row(cols, value_input_option="USER_ENTERED")
+            valori = [cols]
+        header = [str(x).strip() for x in valori[0]]
+        # Se il foglio non ha ancora tutte le colonne tecniche, non tocchiamo
+        # la struttura: la posizione verra' salvata solo se le colonne esistono.
+        if not all(c in header for c in cols):
+            return False
+        indice_utente = header.index('UTENTE')
+        riga_esistente = None
+        for n, riga in enumerate(valori[1:], start=2):
+            if len(riga) > indice_utente and str(riga[indice_utente]).strip().lower() == utente_gps.lower():
+                riga_esistente = n
+                break
+        nuova = {c: '' for c in cols}
+        nuova.update({
+            'UTENTE': utente_gps,
+            'POSIZIONE': str(posizione.get('timestamp_iso', '')),
+            'CLIENTE': 'GPS LIVE',
+            'TIPO_RIGA': 'GPS_LIVE',
+            'BACKUP_JSON': payload,
+        })
+        valori_riga = [nuova[c] for c in cols]
+        if riga_esistente is None:
+            sheet_giro.append_row(valori_riga, value_input_option="USER_ENTERED")
+        else:
+            ultima_col = chr(64 + len(cols)) if len(cols) <= 26 else 'O'
+            sheet_giro.update(f"A{riga_esistente}:{ultima_col}{riga_esistente}", [valori_riga])
+        return True
+    except Exception:
+        return False
+
+
+def _acquisisci_gps_e_salva():
+    """Acquisisce la posizione corrente dal browser e salva l'ultima lettura."""
+    if get_geolocation is None:
+        st.session_state.gps_errore = "Modulo GPS non installato."
+        return False
+    try:
+        loc = get_geolocation()
+        if not loc:
+            return False
+        if 'error' in loc:
+            err = loc.get('error', {})
+            st.session_state.gps_errore = str(err.get('message', 'Posizione non disponibile.'))
+            return False
+        coords = loc.get('coords', loc)
+        lat = coords.get('latitude')
+        lon = coords.get('longitude')
+        if lat is None or lon is None:
+            st.session_state.gps_errore = "Il browser non ha restituito coordinate valide."
+            return False
+        accuracy = coords.get('accuracy')
+        timestamp = loc.get('timestamp') or time.time() * 1000
+        timestamp_sec = float(timestamp) / 1000.0 if float(timestamp) > 10000000000 else float(timestamp)
+        posizione = {
+            'latitude': float(lat),
+            'longitude': float(lon),
+            'accuracy_m': float(accuracy) if accuracy is not None else None,
+            'timestamp': timestamp_sec,
+            'timestamp_iso': datetime.fromtimestamp(timestamp_sec).isoformat(timespec='seconds'),
+        }
+        st.session_state.gps_latitudine = posizione['latitude']
+        st.session_state.gps_longitudine = posizione['longitude']
+        st.session_state.gps_accuracy = posizione['accuracy_m']
+        st.session_state.gps_timestamp = posizione['timestamp']
+        st.session_state.gps_errore = None
+        salva_posizione_gps_su_sheets(st.session_state.utente_corrente, posizione)
+        return True
+    except Exception as e:
+        st.session_state.gps_errore = str(e)
+        return False
+
+
+if hasattr(st, 'fragment'):
+    @st.fragment(run_every="60s")
+    def _gps_live_refresh():
+        if (st.session_state.get('gps_attivo', False)
+                and st.session_state.get('inizio_giro_reale') is not None
+                and not st.session_state.get('giro_terminato', False)):
+            _acquisisci_gps_e_salva()
+else:
+    def _gps_live_refresh():
+        pass
+
 BACKUP_UTENTE_PREFIX = "__VANGO_BACKUP__::"
 GIRO_META_PREFIX = "__VANGO_META__::"
 
@@ -3267,6 +3386,20 @@ if 'minuti_fermo_mezzo' not in st.session_state:
     st.session_state.minuti_fermo_mezzo = 0.0
 if 'campo_parziale_idx' not in st.session_state:
     st.session_state.campo_parziale_idx = None
+
+# GPS live: stato della posizione dell'autista sul dispositivo corrente.
+if 'gps_attivo' not in st.session_state:
+    st.session_state.gps_attivo = False
+if 'gps_latitudine' not in st.session_state:
+    st.session_state.gps_latitudine = None
+if 'gps_longitudine' not in st.session_state:
+    st.session_state.gps_longitudine = None
+if 'gps_accuracy' not in st.session_state:
+    st.session_state.gps_accuracy = None
+if 'gps_timestamp' not in st.session_state:
+    st.session_state.gps_timestamp = None
+if 'gps_errore' not in st.session_state:
+    st.session_state.gps_errore = None
 
 if 'forza_gruppamento_zona' not in st.session_state:
     st.session_state.forza_gruppamento_zona = 50
@@ -4648,6 +4781,36 @@ else:
                     st.caption("🕐 Se non premi INIZIA GIRO, per il calcolo effettivo verranno usate le 05:20.")
                 elif st.session_state.get("inizio_giro_reale") is not None and not st.session_state.get("giro_terminato", False):
                     st.caption(f"🕐 Giro iniziato alle {_formatta_ora_partenza_reale()}: il tempo effettivo viene calcolato fino a TERMINA GIRO.")
+
+                # ------------------------------------------------------------
+                # GPS LIVE - V10.5.1 TEST
+                # ------------------------------------------------------------
+                if st.session_state.get('inizio_giro_reale') is not None and not st.session_state.get('giro_terminato', False):
+                    g1, g2 = st.columns([2, 1], gap="small")
+                    with g1:
+                        if not st.session_state.get('gps_attivo', False):
+                            if st.button("📍  ATTIVA GPS DEL TELEFONO", use_container_width=True, key="btn_attiva_gps"):
+                                st.session_state.gps_attivo = True
+                                st.session_state.gps_errore = None
+                                st.rerun()
+                        else:
+                            st.success("📍 GPS LIVE attivo — aggiornamento automatico ogni 60 secondi")
+                            _gps_live_refresh()
+                    with g2:
+                        if st.session_state.get('gps_latitudine') is not None:
+                            acc = st.session_state.get('gps_accuracy')
+                            acc_txt = f"±{acc:.0f} m" if isinstance(acc, (int, float)) else "accuratezza n/d"
+                            ora_gps = datetime.fromtimestamp(float(st.session_state.gps_timestamp)).strftime('%H:%M:%S') if st.session_state.get('gps_timestamp') else "--:--:--"
+                            st.metric("Ultima posizione", ora_gps, acc_txt)
+                    if st.session_state.get('gps_latitudine') is not None and st.session_state.get('gps_longitudine') is not None:
+                        gps_df = pd.DataFrame([{
+                            'lat': st.session_state.gps_latitudine,
+                            'lon': st.session_state.gps_longitudine,
+                        }])
+                        st.map(gps_df, latitude='lat', longitude='lon', zoom=15, height=220)
+                    if st.session_state.get('gps_errore'):
+                        st.warning(f"📍 GPS: {st.session_state.gps_errore}")
+                    st.caption("FASE TEST: la posizione viene salvata come ultima posizione GPS del conducente. Il tracking continua finché questa pagina resta aperta.")
 
                 # Ultima posizione conosciuta = ultima consegna gestita; altrimenti deposito.
                 df_pos = st.session_state.giro_corrente.copy()
