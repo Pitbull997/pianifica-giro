@@ -2193,11 +2193,26 @@ try:
         sheet_giro = sh.worksheet("GiroAttivo") # Terza scheda: Giro Attivo
     except Exception:
         sheet_giro = None
+    try:
+        sheet_registro = sh.worksheet("RegistroVisite") # Storico reale
+    except Exception:
+        sheet_registro = None
+    try:
+        sheet_statistiche = sh.worksheet("StatisticheClienti") # Statistiche elaborate
+    except Exception:
+        sheet_statistiche = None
+    try:
+        sheet_configurazione = sh.worksheet("Configurazione") # Configurazione
+    except Exception:
+        sheet_configurazione = None
 except Exception as e:
     st.error(f"⚠️ Errore di connessione a Google Sheets: {e}")
     sheet_db = None
     sheet_utenti = None
     sheet_giro = None
+    sheet_registro = None
+    sheet_statistiche = None
+    sheet_configurazione = None
 
 # Funzioni per caricare e salvare gli utenti da Google Sheets (TTL ottimizzato a 300s)
 @st.cache_data(ttl=300, show_spinner=False)
@@ -2322,6 +2337,171 @@ def carica_db_da_google_sheets_cached():
 
 def carica_db_da_google_sheets():
     return carica_db_da_google_sheets_cached()
+
+# ==========================================
+# ANALISI - lettura di RegistroVisite e StatisticheClienti
+# ==========================================
+# ANALISI e' esclusivamente di lettura: non modifica i fogli dati.
+
+def _normalizza_colonne_analisi(df):
+    if df is None or df.empty:
+        return pd.DataFrame()
+    out = df.copy()
+    out.columns = [str(c).strip() for c in out.columns]
+    return out
+
+@st.cache_data(ttl=120, show_spinner=False)
+def carica_registro_visite_da_sheets():
+    try:
+        if sheet_registro:
+            data = sheet_registro.get_all_records()
+            if data:
+                return _normalizza_colonne_analisi(pd.DataFrame(data))
+    except Exception:
+        pass
+    return pd.DataFrame()
+
+@st.cache_data(ttl=120, show_spinner=False)
+def carica_statistiche_clienti_da_sheets():
+    try:
+        if sheet_statistiche:
+            data = sheet_statistiche.get_all_records()
+            if data:
+                return _normalizza_colonne_analisi(pd.DataFrame(data))
+    except Exception:
+        pass
+    return pd.DataFrame()
+
+def _colonna_analisi(df, candidati):
+    if df is None or df.empty:
+        return None
+    normal = {str(c).strip().upper(): c for c in df.columns}
+    for nome in candidati:
+        if str(nome).strip().upper() in normal:
+            return normal[str(nome).strip().upper()]
+    return None
+
+def _serie_numerica_analisi(df, candidati):
+    c = _colonna_analisi(df, candidati)
+    if c is None:
+        return pd.Series(0.0, index=df.index)
+    return pd.to_numeric(df[c], errors='coerce').fillna(0.0)
+
+def _serie_data_analisi(df):
+    c = _colonna_analisi(df, ['DATA','DATA_VISITA','DATA VISITA','GIORNO','DATE','DATA_ARRIVO','DATA ARRIVO','TIMESTAMP','DATETIME'])
+    if c is None:
+        return pd.Series(pd.NaT, index=df.index)
+    return pd.to_datetime(df[c], errors='coerce', dayfirst=True)
+
+def _minuti_da_colonne_analisi(df, candidati):
+    vals = _serie_numerica_analisi(df, candidati)
+    if not vals.empty and vals.max() > 0 and vals.max() < 1:
+        return vals * 1440.0
+    return vals
+
+def _formatta_hm_analisi(minuti):
+    try:
+        minuti = max(0.0, float(minuti))
+    except Exception:
+        minuti = 0.0
+    h = int(minuti // 60)
+    m = int(round(minuti - h * 60))
+    if m >= 60:
+        h += 1; m = 0
+    return f"{h}h {m:02d}m" if h else f"{m} min"
+
+def _formatta_numero_analisi(valore, decimali=1):
+    try:
+        x = float(valore)
+        if abs(x-round(x)) < 1e-9:
+            return f"{int(round(x)):,}".replace(',', '.')
+        return f"{x:.{decimali}f}".replace('.', ',')
+    except Exception:
+        return '0'
+
+def _metriche_analisi_oggi(df, oggi=None):
+    if df is None or df.empty:
+        return {'visite':0,'completati':0,'consegnati':0,'rifiutati':0,'strada':0.0,'servizio':0.0,'fermo':0.0,'totale':0.0,'previsto':0.0,'reale':0.0}
+    oggi = oggi or datetime.now().date()
+    date = _serie_data_analisi(df)
+    d = df[date.dt.date == oggi].copy() if date.notna().any() else df.copy()
+    stato = _colonna_analisi(d, ['STATO','STATO_CONSEGNA','ESITO'])
+    completati = int(d[stato].fillna('').astype(str).str.strip().ne('').sum()) if stato else len(d)
+    consegnati = _serie_numerica_analisi(d, ['COLLI_CONSEGNATI','COLLI CONSEGNATI','COLLI','QTA_CONSEGNATA','QTA CONSEGNATA']).sum()
+    rifiutati = _serie_numerica_analisi(d, ['COLLI_RIFIUTATI','COLLI RIFIUTATI','COLLI_DA_RENDERE','COLLI DA RENDERE','RESI','RIFIUTATI']).sum()
+    strada = _minuti_da_colonne_analisi(d, ['MINUTI_STRADA','TEMPO_STRADA','TEMPO STRADA','MIN_STRADA']).sum()
+    servizio = _minuti_da_colonne_analisi(d, ['MINUTI_SERVIZIO','TEMPO_SERVIZIO','TEMPO SERVIZIO','MIN_SERVIZIO']).sum()
+    fermo = _minuti_da_colonne_analisi(d, ['MINUTI_FERMO','FERMO_MEZZO','TEMPO_FERMO','TEMPO FERMO']).sum()
+    totale = _minuti_da_colonne_analisi(d, ['MINUTI_TOTALI','TEMPO_TOTALE','TEMPO TOTALE','TEMPO_REALE','TEMPO REALE']).sum()
+    previsto = _minuti_da_colonne_analisi(d, ['MINUTI_PREVISTI','TEMPO_PREVISTO','TEMPO PREVISTO','PREVISTO']).sum()
+    reale = _minuti_da_colonne_analisi(d, ['MINUTI_REALI','TEMPO_REALE','TEMPO REALE','MINUTI_TOTALI']).sum()
+    if totale == 0: totale = strada + servizio
+    if reale == 0: reale = totale
+    return {'visite':len(d),'completati':completati,'consegnati':consegnati,'rifiutati':rifiutati,'strada':strada,'servizio':servizio,'fermo':fermo,'totale':totale,'previsto':previsto,'reale':reale}
+
+def _metriche_analisi_mese(df):
+    if df is None or df.empty:
+        return {'visite':0,'colli':0.0,'resi':0.0,'tempo_medio':0.0,'colli_medi':0.0}
+    oggi = datetime.now(); date = _serie_data_analisi(df)
+    d = df[(date.dt.year == oggi.year) & (date.dt.month == oggi.month)].copy() if date.notna().any() else df.copy()
+    colli = _serie_numerica_analisi(d, ['COLLI_CONSEGNATI','COLLI CONSEGNATI','COLLI','QTA_CONSEGNATA','QTA CONSEGNATA']).sum()
+    resi = _serie_numerica_analisi(d, ['COLLI_RIFIUTATI','COLLI RIFIUTATI','COLLI_DA_RENDERE','COLLI DA RENDERE','RESI','RIFIUTATI']).sum()
+    tempi = _minuti_da_colonne_analisi(d, ['MINUTI_SERVIZIO','TEMPO_SERVIZIO','TEMPO SERVIZIO','MINUTI_REALI','TEMPO_REALE','TEMPO REALE'])
+    return {'visite':len(d),'colli':colli,'resi':resi,'tempo_medio':float(tempi.mean()) if len(tempi) else 0.0,'colli_medi':float(colli)/len(d) if len(d) else 0.0}
+
+def _classifiche_clienti_analisi(df):
+    if df is None or df.empty: return pd.DataFrame(columns=['CLIENTE','VISITE','COLLI','RESI','TEMPO'])
+    cc = _colonna_analisi(df, ['CLIENTE','NOME CLIENTE'])
+    if cc is None: return pd.DataFrame(columns=['CLIENTE','VISITE','COLLI','RESI','TEMPO'])
+    x=df.copy(); x['__CLIENTE']=x[cc].fillna('').astype(str).str.strip(); x=x[x['__CLIENTE']!='']
+    x['__COLLI']=_serie_numerica_analisi(x,['COLLI_CONSEGNATI','COLLI CONSEGNATI','COLLI','QTA_CONSEGNATA','QTA CONSEGNATA'])
+    x['__RESI']=_serie_numerica_analisi(x,['COLLI_RIFIUTATI','COLLI RIFIUTATI','COLLI_DA_RENDERE','COLLI DA RENDERE','RESI','RIFIUTATI'])
+    x['__TEMPO']=_minuti_da_colonne_analisi(x,['MINUTI_SERVIZIO','TEMPO_SERVIZIO','TEMPO SERVIZIO','MINUTI_REALI','TEMPO_REALE','TEMPO REALE'])
+    return x.groupby('__CLIENTE').agg(VISITE=('__CLIENTE','size'),COLLI=('__COLLI','sum'),RESI=('__RESI','sum'),TEMPO=('__TEMPO','sum')).reset_index().rename(columns={'__CLIENTE':'CLIENTE'}).sort_values('VISITE',ascending=False).reset_index(drop=True)
+
+def _render_card_analisi(titolo,valore,sottotitolo=''):
+    st.markdown(f"<div style=\"border:1px solid rgba(148,163,184,.25);border-radius:14px;padding:15px 16px;background:rgba(30,41,59,.20);min-height:105px;\"><div style=\"font-size:12px;color:#94A3B8;text-transform:uppercase;font-weight:700;\">{titolo}</div><div style=\"font-size:27px;font-weight:800;margin-top:7px;\">{valore}</div><div style=\"font-size:12px;color:#94A3B8;margin-top:4px;\">{sottotitolo}</div></div>", unsafe_allow_html=True)
+
+def render_analisi():
+    st.markdown('## 📊 ANALISI')
+    st.caption('Lettura dei dati reali di RegistroVisite e delle statistiche elaborate. Questa pagina non modifica i dati.')
+    registro=carica_registro_visite_da_sheets(); statistiche=carica_statistiche_clienti_da_sheets()
+    if registro.empty and statistiche.empty:
+        st.info('📭 Non ci sono ancora dati disponibili in RegistroVisite o StatisticheClienti.')
+        if st.button('🔄 AGGIORNA DATI ANALISI',use_container_width=True,key='btn_refresh_analisi_empty'): st.cache_data.clear(); st.rerun()
+        return
+    oggi=_metriche_analisi_oggi(registro); mese=_metriche_analisi_mese(registro); classifiche=_classifiche_clienti_analisi(registro)
+    st.markdown('### OGGI'); c=st.columns(4)
+    for col,t,v in zip(c,['Clienti visitati','Clienti completati','Colli consegnati','Colli rifiutati'],[oggi['visite'],oggi['completati'],oggi['consegnati'],oggi['rifiutati']]):
+        with col: _render_card_analisi(t,_formatta_numero_analisi(v))
+    c=st.columns(5)
+    vals=[('Tempo strada',_formatta_hm_analisi(oggi['strada'])),('Tempo servizio',_formatta_hm_analisi(oggi['servizio'])),('Fermo mezzo',_formatta_hm_analisi(oggi['fermo'])),('Tempo totale',_formatta_hm_analisi(oggi['totale']))]
+    for col,(t,v) in zip(c[:4],vals):
+        with col: _render_card_analisi(t,v)
+    scarto=oggi['reale']-oggi['previsto'] if oggi['previsto'] else 0; confronto='Nessun previsto registrato' if not oggi['previsto'] else (('+' if scarto>=0 else '-')+_formatta_hm_analisi(abs(scarto)))
+    with c[4]: _render_card_analisi('Previsto vs reale',confronto)
+    st.markdown('### QUESTO MESE'); c=st.columns(5)
+    vals=[('Numero visite',_formatta_numero_analisi(mese['visite'])),('Totale colli',_formatta_numero_analisi(mese['colli'])),('Totale resi',_formatta_numero_analisi(mese['resi'])),('Tempo medio / cliente',_formatta_hm_analisi(mese['tempo_medio'])),('Colli medi / visita',_formatta_numero_analisi(mese['colli_medi'],1))]
+    for col,(t,v) in zip(c,vals):
+        with col: _render_card_analisi(t,v)
+    st.markdown('### CLIENTI')
+    if classifiche.empty: st.info('Nessun cliente disponibile nello storico.')
+    else:
+        cols=st.columns(5)
+        for col,tit,sc,asc in zip(cols,['🥇 PIÙ VISITATI','📦 PIÙ COLLI','↩️ PIÙ RESI','⏱️ PIÙ TEMPO RICHIESTO','⚡ PIÙ VELOCI'],['VISITE','COLLI','RESI','TEMPO','TEMPO'],[False,False,False,False,True]):
+            with col:
+                st.markdown(f'**{tit}**'); top=classifiche.sort_values(sc,ascending=asc).head(5)[['CLIENTE',sc]].copy(); top.columns=['CLIENTE','VALORE']; st.dataframe(top,hide_index=True,use_container_width=True,height=225)
+    st.markdown('### 🔎 CERCA CLIENTE')
+    nomi=sorted(classifiche['CLIENTE'].astype(str).unique().tolist()) if not classifiche.empty else []
+    cliente=st.selectbox('Seleziona cliente',['']+nomi,key='analisi_cliente_select')
+    if cliente:
+        r=classifiche[classifiche['CLIENTE'].astype(str)==cliente].iloc[0]; st.markdown(f'### {cliente}'); c=st.columns(4)
+        for col,t,v in zip(c,['Visite','Colli consegnati','Colli rifiutati','Tempo medio'],[r['VISITE'],r['COLLI'],r['RESI'],float(r['TEMPO'])/float(r['VISITE']) if float(r['VISITE']) else 0]):
+            with col: _render_card_analisi(t,_formatta_numero_analisi(v) if t!='Tempo medio' else _formatta_hm_analisi(v))
+        if not registro.empty:
+            cc=_colonna_analisi(registro,['CLIENTE','NOME CLIENTE']); mask=registro[cc].fillna('').astype(str).str.strip().eq(cliente) if cc else pd.Series(False,index=registro.index); storico=registro.loc[mask].copy(); dd=_serie_data_analisi(registro).loc[mask]; storico['__DATA']=dd; storico['__TEMPO']=_minuti_da_colonne_analisi(storico,['MINUTI_SERVIZIO','TEMPO_SERVIZIO','TEMPO SERVIZIO','MINUTI_REALI','TEMPO_REALE','TEMPO REALE']); storico=storico.sort_values('__DATA',ascending=False); righe=pd.DataFrame({'DATA':storico['__DATA'].dt.strftime('%d/%m/%Y').fillna(''),'TEMPO':storico['__TEMPO'].map(_formatta_hm_analisi)}); st.markdown('**Ultime visite**'); st.dataframe(righe.head(10),hide_index=True,use_container_width=True)
+    st.markdown('### 🧠 AUTOAPPRENDIMENTO'); st.info("Sezione predisposta per la FASE 5: tempo standard, osservazioni, media reale e tempi in funzione dei colli verranno collegati allo storico quando attiveremo l'autoapprendimento.")
+    if st.button('🔄 AGGIORNA DATI ANALISI',use_container_width=True,key='btn_refresh_analisi'): st.cache_data.clear(); st.rerun()
 
 # --- Gestione Giro per singolo utente su Google Sheets (TTL ottimizzato a 120s) ---
 @st.cache_data(ttl=120, show_spinner=False)
@@ -3371,9 +3551,9 @@ else:
 
     if st.session_state.vista_giro != "CAMPO":
         if st.session_state.is_admin:
-            col_sw1, col_sw2, col_sw3 = st.columns(3)
+            col_sw1, col_sw2, col_sw3, col_sw4 = st.columns(4)
         else:
-            col_sw1, col_sw2 = st.columns(2)
+            col_sw1, col_sw2, col_sw3 = st.columns(3)
 
         with col_sw1:
             css_class = "btn-active" if st.session_state.pagina_attiva == "db" else "btn-inactive"
@@ -3391,8 +3571,17 @@ else:
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
+        with col_sw3:
+            css_class = "btn-active" if st.session_state.pagina_attiva == "analisi" else "btn-inactive"
+            st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
+            if st.button("📊 ANALISI", use_container_width=True, key="btn_analisi"):
+                st.session_state.pagina_attiva = "analisi"
+                st.session_state.vista_giro = "RIEPILOGO"
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
         if st.session_state.is_admin:
-            with col_sw3:
+            with col_sw4:
                 css_class = "btn-active" if st.session_state.pagina_attiva == "utenti" else "btn-inactive"
                 st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
                 if st.button("🔑 UTENTI", use_container_width=True, key="btn_utenti"):
@@ -4738,6 +4927,12 @@ else:
                 ''' , unsafe_allow_html=True)
         else:
             st.info("Nessuna fermata nel tuo giro corrente. Clicca in alto su '📁 CLIENTI' per aggiungerne.")
+
+    # ==========================================
+    # SCHERMATA ANALISI
+    # ==========================================
+    elif st.session_state.pagina_attiva == "analisi":
+        render_analisi()
 
     # ==========================================
     # SCHERMATA 2: INSERISCI CLIENTE
