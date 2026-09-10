@@ -2647,6 +2647,7 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
 # GPS LIVE SMARTPHONE - V10.5.1 TEST
 # ============================================================
 GPS_UTENTE_PREFIX = "__VANGO_GPS__::"
+GPS_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
 
 
 def _gps_utente(nome_utente):
@@ -2731,12 +2732,45 @@ def _acquisisci_gps_e_salva():
             'accuracy_m': float(accuracy) if accuracy is not None else None,
             'timestamp': timestamp_sec,
             'timestamp_iso': datetime.fromtimestamp(timestamp_sec).isoformat(timespec='seconds'),
+            'via': '',
+            'comune': '',
         }
+
+        # Reverse geocoding gratuito: trasformiamo le coordinate GPS in
+        # indirizzo leggibile da mostrare nel riquadro POSIZIONE ATTUALE.
+        try:
+            headers = {'User-Agent': 'VanGo-GPS/1.0'}
+            risposta = requests.get(
+                GPS_REVERSE_URL,
+                params={
+                    'lat': posizione['latitude'],
+                    'lon': posizione['longitude'],
+                    'format': 'jsonv2',
+                    'zoom': 18,
+                    'addressdetails': 1,
+                    'accept-language': 'it',
+                },
+                headers=headers,
+                timeout=8,
+            )
+            if risposta.status_code == 200:
+                indirizzo = risposta.json().get('address', {}) or {}
+                via = indirizzo.get('road') or indirizzo.get('pedestrian') or indirizzo.get('footway') or indirizzo.get('path') or ''
+                numero = indirizzo.get('house_number') or ''
+                comune = (indirizzo.get('city') or indirizzo.get('town') or indirizzo.get('village')
+                          or indirizzo.get('municipality') or indirizzo.get('city_district') or '')
+                posizione['via'] = f"{via} {numero}".strip() if via else ''
+                posizione['comune'] = str(comune).strip()
+                posizione['display_name'] = risposta.json().get('display_name', '')
+        except Exception:
+            pass
         st.session_state.gps_latitudine = posizione['latitude']
         st.session_state.gps_longitudine = posizione['longitude']
         st.session_state.gps_accuracy = posizione['accuracy_m']
         st.session_state.gps_timestamp = posizione['timestamp']
         st.session_state.gps_errore = None
+        st.session_state.gps_via = posizione.get('via', '')
+        st.session_state.gps_comune = posizione.get('comune', '')
         salva_posizione_gps_su_sheets(st.session_state.utente_corrente, posizione)
         return True
     except Exception as e:
@@ -2748,7 +2782,6 @@ if hasattr(st, 'fragment'):
     @st.fragment(run_every="60s")
     def _gps_live_refresh():
         if (st.session_state.get('gps_attivo', False)
-                and st.session_state.get('inizio_giro_reale') is not None
                 and not st.session_state.get('giro_terminato', False)):
             _acquisisci_gps_e_salva()
 else:
@@ -4783,15 +4816,18 @@ else:
                     st.caption(f"🕐 Giro iniziato alle {_formatta_ora_partenza_reale()}: il tempo effettivo viene calcolato fino a TERMINA GIRO.")
 
                 # ------------------------------------------------------------
-                # GPS LIVE - V10.5.1 TEST
+                # GPS LIVE - V10.5.2 TEST
+                # Il GPS puo' essere attivato gia' dalla schermata CAMPO,
+                # anche prima di premere INIZIA GIRO.
                 # ------------------------------------------------------------
-                if st.session_state.get('inizio_giro_reale') is not None and not st.session_state.get('giro_terminato', False):
+                if not st.session_state.get('giro_terminato', False):
                     g1, g2 = st.columns([2, 1], gap="small")
                     with g1:
                         if not st.session_state.get('gps_attivo', False):
                             if st.button("📍  ATTIVA GPS DEL TELEFONO", use_container_width=True, key="btn_attiva_gps"):
                                 st.session_state.gps_attivo = True
                                 st.session_state.gps_errore = None
+                                _acquisisci_gps_e_salva()
                                 st.rerun()
                         else:
                             st.success("📍 GPS LIVE attivo — aggiornamento automatico ogni 60 secondi")
@@ -4810,22 +4846,30 @@ else:
                         st.map(gps_df, latitude='lat', longitude='lon', zoom=15, height=220)
                     if st.session_state.get('gps_errore'):
                         st.warning(f"📍 GPS: {st.session_state.gps_errore}")
-                    st.caption("FASE TEST: la posizione viene salvata come ultima posizione GPS del conducente. Il tracking continua finché questa pagina resta aperta.")
+                    st.caption("FASE TEST: la posizione viene salvata come ultima posizione GPS del conducente. Il tracking continua finche' questa pagina resta aperta.")
 
-                # Ultima posizione conosciuta = ultima consegna gestita; altrimenti deposito.
-                df_pos = st.session_state.giro_corrente.copy()
-                if "STATO" not in df_pos.columns:
-                    df_pos["STATO"] = STATO_DA_FARE
-                stati_pos = df_pos["STATO"].fillna("").astype(str).str.upper()
-                mask_gestiti_pos = stati_pos.str.contains("FATTO|PARZIALE|RESPINTO", regex=True)
-                gestiti_pos = df_pos[mask_gestiti_pos]
-                if not gestiti_pos.empty:
-                    ultima = gestiti_pos.iloc[-1]
-                    posizione_label = str(ultima.get("VIA", "")).strip() or "Ultima consegna"
-                    posizione_comune = str(ultima.get("COMUNE", "")).strip()
+                # POSIZIONE ATTUALE: se il GPS e' attivo usiamo la posizione
+                # reale del telefono; in assenza di GPS manteniamo il comportamento
+                # precedente basato sull'ultima consegna gestita/deposito.
+                gps_via = str(st.session_state.get('gps_via', '') or '').strip()
+                gps_comune = str(st.session_state.get('gps_comune', '') or '').strip()
+                if st.session_state.get('gps_attivo', False) and (gps_via or gps_comune):
+                    posizione_label = gps_via or "Posizione GPS"
+                    posizione_comune = gps_comune or "Posizione rilevata dal telefono"
                 else:
-                    posizione_label = DEPOSITO_VANGO
-                    posizione_comune = "Punto di partenza"
+                    df_pos = st.session_state.giro_corrente.copy()
+                    if "STATO" not in df_pos.columns:
+                        df_pos["STATO"] = STATO_DA_FARE
+                    stati_pos = df_pos["STATO"].fillna("").astype(str).str.upper()
+                    mask_gestiti_pos = stati_pos.str.contains("FATTO|PARZIALE|RESPINTO", regex=True)
+                    gestiti_pos = df_pos[mask_gestiti_pos]
+                    if not gestiti_pos.empty:
+                        ultima = gestiti_pos.iloc[-1]
+                        posizione_label = str(ultima.get("VIA", "")).strip() or "Ultima consegna"
+                        posizione_comune = str(ultima.get("COMUNE", "")).strip()
+                    else:
+                        posizione_label = DEPOSITO_VANGO
+                        posizione_comune = "Punto di partenza"
 
                 df_metriche_campo = df_pos[~df_pos["STATO"].fillna("").astype(str).isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO])].copy()
                 residui_campo = len(df_metriche_campo)
