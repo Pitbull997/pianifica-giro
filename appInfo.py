@@ -1383,6 +1383,40 @@ def _formatta_ora_partenza_reale():
     return _formatta_ora_minuti(round(minuti))
 
 
+def _assicura_colonne_colli(df):
+    """Garantisce le colonne operative dei colli senza alterare Q.ta."""
+    out = df.copy()
+    for c in ["COLLI_CONSEGNATI", "COLLI_RIFIUTATI", "COLLI_DA_RENDERE"]:
+        if c not in out.columns:
+            out[c] = 0.0
+        out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0.0).astype(float)
+    if "Q.ta" not in out.columns:
+        out["Q.ta"] = 0.0
+    out["Q.ta"] = pd.to_numeric(out["Q.ta"], errors="coerce").fillna(0.0)
+    return out
+
+def _totali_colli_giro(df):
+    """Restituisce iniziali, residui, consegnati e rifiutati del giro."""
+    if df is None or df.empty:
+        return {"iniziali": 0, "residui": 0, "consegnati": 0, "rifiutati": 0, "da_rendere": 0}
+    x = _assicura_colonne_colli(df)
+    gestiti = x["STATO"].fillna("").astype(str).isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]) if "STATO" in x.columns else pd.Series(False, index=x.index)
+    iniziali = int(round(float(x["Q.ta"].sum())))
+    residui = int(round(float(x.loc[~gestiti, "Q.ta"].sum())))
+    consegnati = int(round(float(x["COLLI_CONSEGNATI"].sum())))
+    rifiutati = int(round(float(x["COLLI_RIFIUTATI"].sum())))
+    da_rendere = int(round(float(x["COLLI_DA_RENDERE"].sum())))
+    return {"iniziali": iniziali, "residui": residui, "consegnati": consegnati, "rifiutati": rifiutati, "da_rendere": da_rendere}
+
+def _minuti_fermo_totali():
+    totale = float(st.session_state.get("minuti_fermo_mezzo", 0) or 0)
+    if st.session_state.get("fermo_mezzo_attivo") and st.session_state.get("inizio_fermo_mezzo"):
+        try:
+            totale += max(0.0, (time.time() - float(st.session_state.inizio_fermo_mezzo)) / 60.0)
+        except Exception:
+            pass
+    return totale
+
 def _minuti_trascorsi_da_inizio_giro():
     """Minuti reali trascorsi dall'inizio del giro (INIZIA GIRO o fallback 05:20) ad ora."""
     try:
@@ -1391,7 +1425,8 @@ def _minuti_trascorsi_da_inizio_giro():
         minuti_ora_corrente = ora_corrente.hour * 60 + ora_corrente.minute + ora_corrente.second / 60.0
     except Exception:
         minuti_ora_corrente = 0.0
-    return max(0.0, minuti_ora_corrente - _ora_partenza_reale_minuti())
+    trascorsi = max(0.0, minuti_ora_corrente - _ora_partenza_reale_minuti())
+    return max(0.0, trascorsi - _minuti_fermo_totali())
 
 
 def _stato_avanzamento_giro(fermate_completate, fermate_totali, previsto_totale_min):
@@ -2287,10 +2322,10 @@ def carica_tutti_i_giri_da_sheets():
                 return pd.DataFrame(data)
     except Exception as e:
         pass
-    return pd.DataFrame(columns=['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON'])
+    return pd.DataFrame(columns=['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'COLLI_CONSEGNATI', 'COLLI_RIFIUTATI', 'COLLI_DA_RENDERE', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON'])
 
 def carica_giro_utente_da_sheets(nome_utente):
-    cols_giro = ['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI']
+    cols_giro = ['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'COLLI_CONSEGNATI', 'COLLI_RIFIUTATI', 'COLLI_DA_RENDERE', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI']
     df_vuoto = pd.DataFrame(columns=cols_giro)
     try:
         df = carica_tutti_i_giri_da_sheets()
@@ -2325,7 +2360,7 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
     Foglio1 e Utenti non vengono mai modificati da questa funzione.
     Le eventuali righe tecniche di backup presenti in GiroAttivo vengono mantenute.
     """
-    cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON']
+    cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'COLLI_CONSEGNATI', 'COLLI_RIFIUTATI', 'COLLI_DA_RENDERE', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON']
     for tentativo in range(5):
         try:
             if sheet_giro:
@@ -2387,7 +2422,8 @@ def _meta_utente_giro(nome_utente):
 
 def carica_stato_giro_persistente(nome_utente):
     """Legge lo stato tecnico del giro da GiroAttivo, senza modificare Foglio1/Utenti."""
-    risultato = {"giro_terminato": False, "inizio_giro_reale": None, "fine_giro_reale": None, "previsione_giro": None}
+    risultato = {"giro_terminato": False, "inizio_giro_reale": None, "fine_giro_reale": None, "previsione_giro": None,
+                 "fermo_mezzo_attivo": False, "inizio_fermo_mezzo": None, "minuti_fermo_mezzo": 0.0}
     try:
         df = carica_tutti_i_giri_da_sheets()
         if df.empty:
@@ -2409,6 +2445,9 @@ def carica_stato_giro_persistente(nome_utente):
         risultato["inizio_giro_reale"] = dati.get("inizio_giro_reale")
         risultato["fine_giro_reale"] = dati.get("fine_giro_reale")
         risultato["previsione_giro"] = dati.get("previsione_giro")
+        risultato["fermo_mezzo_attivo"] = bool(dati.get("fermo_mezzo_attivo", False))
+        risultato["inizio_fermo_mezzo"] = dati.get("inizio_fermo_mezzo")
+        risultato["minuti_fermo_mezzo"] = float(dati.get("minuti_fermo_mezzo", 0) or 0)
     except Exception:
         pass
     return risultato
@@ -2422,9 +2461,12 @@ def salva_stato_giro_persistente(nome_utente):
         "inizio_giro_reale": st.session_state.get("inizio_giro_reale"),
         "fine_giro_reale": st.session_state.get("fine_giro_reale"),
         "previsione_giro": st.session_state.get("previsione_giro"),
+        "fermo_mezzo_attivo": bool(st.session_state.get("fermo_mezzo_attivo", False)),
+        "inizio_fermo_mezzo": st.session_state.get("inizio_fermo_mezzo"),
+        "minuti_fermo_mezzo": float(st.session_state.get("minuti_fermo_mezzo", 0) or 0),
     }
     payload = _json.dumps(meta, ensure_ascii=False)
-    cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON']
+    cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'COLLI_CONSEGNATI', 'COLLI_RIFIUTATI', 'COLLI_DA_RENDERE', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON']
     for tentativo in range(5):
         try:
             if sheet_giro:
@@ -2456,20 +2498,54 @@ def salva_stato_giro_persistente(nome_utente):
                 return False
     return False
 
-def salva_stato_consegna(idx, stato):
-    """Aggiorna solo lo stato della consegna e lo salva su GiroAttivo."""
-    df = st.session_state.giro_corrente.copy()
+def salva_stato_consegna(idx, stato, colli_consegnati=None):
+    """Aggiorna stato e consuntivo colli della consegna."""
+    df = _assicura_colonne_colli(st.session_state.giro_corrente.copy())
     if df.empty or idx < 0 or idx >= len(df):
         return
-    if 'STATO' not in df.columns:
-        df['STATO'] = STATO_DA_FARE
+    try:
+        qta = int(round(float(df.at[idx, "Q.ta"]))) if pd.notna(df.at[idx, "Q.ta"]) else 0
+    except Exception:
+        qta = 0
+    qta = max(0, qta)
+    if stato == STATO_FATTO:
+        consegnati, rifiutati = qta, 0
+    elif stato == STATO_RESPINTO:
+        consegnati, rifiutati = 0, qta
+    elif stato == STATO_PARZIALE:
+        consegnati = max(0, min(qta, int(colli_consegnati or 0)))
+        rifiutati = qta - consegnati
+    else:
+        consegnati, rifiutati = 0, 0
     df.at[idx, 'STATO'] = stato
+    df.at[idx, 'COLLI_CONSEGNATI'] = float(consegnati)
+    df.at[idx, 'COLLI_RIFIUTATI'] = float(rifiutati)
+    df.at[idx, 'COLLI_DA_RENDERE'] = float(rifiutati)
     st.session_state.giro_corrente = df
     st.session_state.fine_giro_reale = None
     st.session_state.giro_terminato = False
     salva_stato_giro_persistente(st.session_state.utente_corrente)
     salva_giro_utente_su_sheets(st.session_state.utente_corrente, df)
-    st.rerun()
+
+def avvia_fermo_mezzo():
+    """Avvia un fermo operativo; il tempo resta escluso dal ritardo effettivo."""
+    if not st.session_state.get("fermo_mezzo_attivo", False):
+        st.session_state.fermo_mezzo_attivo = True
+        st.session_state.inizio_fermo_mezzo = time.time()
+        salva_stato_giro_persistente(st.session_state.utente_corrente)
+
+def termina_fermo_mezzo():
+    """Chiude il fermo e accumula i minuti di pausa."""
+    if st.session_state.get("fermo_mezzo_attivo", False):
+        inizio = st.session_state.get("inizio_fermo_mezzo")
+        if inizio is not None:
+            try:
+                st.session_state.minuti_fermo_mezzo = float(st.session_state.get("minuti_fermo_mezzo", 0) or 0) + max(0.0, (time.time() - float(inizio)) / 60.0)
+            except Exception:
+                pass
+        st.session_state.fermo_mezzo_attivo = False
+        st.session_state.inizio_fermo_mezzo = None
+        salva_stato_giro_persistente(st.session_state.utente_corrente)
 
 def prepara_vista_giro(df):
     """Restituisce una vista operativa con i clienti da fare prima e quelli gestiti in fondo.
@@ -2656,6 +2732,7 @@ def salva_posizione_giro():
             # comprese le nuove stime MIN_TRATTA_PREVISTA e MIN_PREVISTI_CUMULATIVI.
             cols_ordine = [
                 'UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta',
+                'COLLI_CONSEGNATI', 'COLLI_RIFIUTATI', 'COLLI_DA_RENDERE',
                 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI',
                 'TIPO_RIGA', 'BACKUP_JSON'
             ]
@@ -2826,15 +2903,19 @@ if not st.session_state.autenticato:
 if 'giro_corrente' not in st.session_state or st.session_state.get('ultimo_utente_caricato') != st.session_state.utente_corrente:
     if st.session_state.utente_corrente:
         st.session_state.giro_corrente = carica_giro_utente_da_sheets(st.session_state.utente_corrente)
+        st.session_state.giro_corrente = _assicura_colonne_colli(st.session_state.giro_corrente)
         stato_persistente = carica_stato_giro_persistente(st.session_state.utente_corrente)
         st.session_state.giro_terminato = bool(stato_persistente.get("giro_terminato", False))
         st.session_state.inizio_giro_reale = stato_persistente.get("inizio_giro_reale")
         st.session_state.fine_giro_reale = stato_persistente.get("fine_giro_reale")
         st.session_state.previsione_giro = stato_persistente.get("previsione_giro")
+        st.session_state.fermo_mezzo_attivo = bool(stato_persistente.get("fermo_mezzo_attivo", False))
+        st.session_state.inizio_fermo_mezzo = stato_persistente.get("inizio_fermo_mezzo")
+        st.session_state.minuti_fermo_mezzo = float(stato_persistente.get("minuti_fermo_mezzo", 0) or 0)
         st.session_state.metriche_giro_corrente = None
         st.session_state.ultimo_utente_caricato = st.session_state.utente_corrente
     else:
-        st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI'])
+        st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'COLLI_CONSEGNATI', 'COLLI_RIFIUTATI', 'COLLI_DA_RENDERE', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI'])
     st.session_state.metriche_giro_corrente = None
 
 if 'clienti_selezionati_m' not in st.session_state:
@@ -2852,6 +2933,14 @@ if 'fine_giro_reale' not in st.session_state:
     st.session_state.fine_giro_reale = None
 if 'giro_terminato' not in st.session_state:
     st.session_state.giro_terminato = False
+if 'fermo_mezzo_attivo' not in st.session_state:
+    st.session_state.fermo_mezzo_attivo = False
+if 'inizio_fermo_mezzo' not in st.session_state:
+    st.session_state.inizio_fermo_mezzo = None
+if 'minuti_fermo_mezzo' not in st.session_state:
+    st.session_state.minuti_fermo_mezzo = 0.0
+if 'campo_parziale_idx' not in st.session_state:
+    st.session_state.campo_parziale_idx = None
 
 if 'forza_gruppamento_zona' not in st.session_state:
     st.session_state.forza_gruppamento_zona = 50
@@ -3266,7 +3355,7 @@ else:
             st.markdown('<div class="btn-inactive">', unsafe_allow_html=True)
             if st.button("🗑️ SVUOTA GIRO", use_container_width=True, key="btn_svuota"):
                 if not st.session_state.giro_corrente.empty:
-                    st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI'])
+                    st.session_state.giro_corrente = pd.DataFrame(columns=['POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'COLLI_CONSEGNATI', 'COLLI_RIFIUTATI', 'COLLI_DA_RENDERE', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI'])
                     st.session_state.giro_terminato = False
                     st.session_state.inizio_giro_reale = None
                     st.session_state.fine_giro_reale = None
@@ -3482,6 +3571,9 @@ else:
                 st.session_state.inizio_giro_reale = None
                 st.session_state.fine_giro_reale = None
                 st.session_state.giro_terminato = False
+                st.session_state.fermo_mezzo_attivo = False
+                st.session_state.inizio_fermo_mezzo = None
+                st.session_state.minuti_fermo_mezzo = 0.0
                 salva_stato_giro_persistente(st.session_state.utente_corrente)
                 # Conserva i dati temporali ORARI del giro appena applicato.
                 if str(m.get("metodo", "")).startswith("ORARI"):
@@ -3589,12 +3681,16 @@ else:
                             "N°": i,
                             "CLIENTE": str(r.get("CLIENTE", "")).strip(),
                             "STATO CONSEGNA": stato,
+                            "COLLI PREVISTI": int(round(float(r.get("Q.ta", 0) or 0))),
+                            "COLLI CONSEGNATI": int(round(float(r.get("COLLI_CONSEGNATI", 0) or 0))),
+                            "COLLI RIFIUTATI": int(round(float(r.get("COLLI_RIFIUTATI", 0) or 0))),
+                            "COLLI DA RENDERE": int(round(float(r.get("COLLI_DA_RENDERE", 0) or 0))),
                         })
 
                     wb = Workbook()
                     ws = wb.active
                     ws.title = "Resoconto Giro"
-                    intestazioni = ["N°", "CLIENTE", "STATO CONSEGNA"]
+                    intestazioni = ["N°", "CLIENTE", "STATO CONSEGNA", "COLLI PREVISTI", "COLLI CONSEGNATI", "COLLI RIFIUTATI", "COLLI DA RENDERE"]
                     ws.append(intestazioni)
 
                     for riga in righe_export:
@@ -3608,7 +3704,7 @@ else:
                     ws.auto_filter.ref = ws.dimensions
                     ws.row_dimensions[1].height = 24
 
-                    larghezze = {"A": 8, "B": 42, "C": 24}
+                    larghezze = {"A": 8, "B": 42, "C": 24, "D": 16, "E": 18, "F": 17, "G": 17}
                     for col, larghezza in larghezze.items():
                         ws.column_dimensions[col].width = larghezza
 
@@ -3752,7 +3848,30 @@ else:
         else:
             servizio_corrente = float(len(st.session_state.giro_corrente) * MINUTI_SERVIZIO_PER_FERMATA)
         viaggio_corrente = float(minuti_visualizzati or 0)
-        tempo_reale_corrente = viaggio_corrente + attesa_corrente + servizio_corrente
+        # In CAMPO il tempo totale residuo rappresenta il lavoro che resta:
+        # strada + servizio delle sole consegne pendenti + eventuali attese residue.
+        if st.session_state.vista_giro == "CAMPO":
+            previsione_residua = st.session_state.get("previsione_giro") or {}
+            previsto_totale = previsione_residua.get("minuti")
+            residuo_da_previsione = None
+            if previsto_totale is not None:
+                try:
+                    df_tmp = _assicura_colonne_colli(st.session_state.giro_corrente.copy())
+                    stati_tmp = df_tmp["STATO"].fillna("").astype(str)
+                    gestiti_tmp = df_tmp[stati_tmp.isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO])]
+                    if gestiti_tmp.empty:
+                        residuo_da_previsione = float(previsto_totale)
+                    else:
+                        ultimo_cum = _numero_minuti_cumulativi(gestiti_tmp.iloc[-1].get("MIN_PREVISTI_CUMULATIVI"))
+                        if ultimo_cum is not None:
+                            # Il cumulativo si ferma all'arrivo: il servizio del cliente
+                            # appena completato e' gia' stato svolto e quindi va escluso.
+                            residuo_da_previsione = max(0.0, float(previsto_totale) - float(ultimo_cum) - float(MINUTI_SERVIZIO_PER_FERMATA))
+                except Exception:
+                    residuo_da_previsione = None
+            tempo_reale_corrente = residuo_da_previsione if residuo_da_previsione is not None else (viaggio_corrente + attesa_corrente + servizio_corrente)
+        else:
+            tempo_reale_corrente = viaggio_corrente + attesa_corrente + servizio_corrente
 
         if st.session_state.vista_giro != "CAMPO":
             st.markdown("**Dettaglio tempi reali del giro**")
@@ -4166,6 +4285,20 @@ else:
                     else:
                         st.button("🏁  TERMINA GIRO", use_container_width=True, disabled=True, key="btn_termina_giro_dashboard_disabled")
 
+                # FERMO MEZZO / PAUSA: il tempo viene sottratto dal tempo effettivo usato
+                # per il confronto anticipo/ritardo e resta memorizzato anche dopo un rerun.
+                if st.session_state.get("fermo_mezzo_attivo", False):
+                    if st.button("⏸️  PAUSA TERMINATA", use_container_width=True, type="primary", key="btn_pausa_terminata"):
+                        termina_fermo_mezzo()
+                        st.rerun()
+                    st.warning(f"⏸️ FERMO MEZZO attivo — tempo escluso dal ritardo: {_formatta_durata_hm(_minuti_fermo_totali())}")
+                elif not st.session_state.get("giro_terminato", False):
+                    if st.button("⏸️  FERMO MEZZO", use_container_width=True, key="btn_fermo_mezzo"):
+                        avvia_fermo_mezzo()
+                        st.rerun()
+                    if _minuti_fermo_totali() > 0:
+                        st.caption(f"⏸️ Tempo totale di fermo registrato: {_formatta_durata_hm(_minuti_fermo_totali())}")
+
                 if not st.session_state.get("giro_terminato", False) and st.session_state.get("inizio_giro_reale") is None:
                     st.caption("🕐 Se non premi INIZIA GIRO, per il calcolo effettivo verranno usate le 05:20.")
                 elif st.session_state.get("inizio_giro_reale") is not None and not st.session_state.get("giro_terminato", False):
@@ -4202,6 +4335,15 @@ else:
                     st.markdown(f'<div class="campo-metric-card"><div class="campo-metric-label">🕐 TEMPO RESIDUO</div><div class="campo-metric-value">{tempo_campo_display}</div><div class="campo-metric-sub">incluso rientro in sede</div></div>', unsafe_allow_html=True)
                 with m4:
                     st.markdown(f'<div class="campo-metric-card"><div class="campo-metric-label">📍 POSIZIONE ATTUALE</div><div class="campo-metric-value" style="font-size:15px;">{posizione_label}</div><div class="campo-metric-sub">{posizione_comune}</div></div>', unsafe_allow_html=True)
+
+                totali_colli_campo = _totali_colli_giro(st.session_state.giro_corrente)
+                c1c, c2c, c3c = st.columns(3, gap="small")
+                with c1c:
+                    st.markdown(f'<div class="campo-metric-card"><div class="campo-metric-label">📦 COLLI DA CONSEGNARE</div><div class="campo-metric-value">{totali_colli_campo["residui"]}</div><div class="campo-metric-sub">su {totali_colli_campo["iniziali"]} iniziali</div></div>', unsafe_allow_html=True)
+                with c2c:
+                    st.markdown(f'<div class="campo-metric-card"><div class="campo-metric-label">✅ COLLI CONSEGNATI</div><div class="campo-metric-value">{totali_colli_campo["consegnati"]}</div><div class="campo-metric-sub">effettivamente consegnati</div></div>', unsafe_allow_html=True)
+                with c3c:
+                    st.markdown(f'<div class="campo-metric-card"><div class="campo-metric-label">↩️ COLLI DA RENDERE</div><div class="campo-metric-value">{totali_colli_campo["da_rendere"]}</div><div class="campo-metric-sub">rifiutati</div></div>', unsafe_allow_html=True)
 
                 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
@@ -4362,6 +4504,23 @@ else:
                         if st.session_state.campo_menu_aperto == idx_reale:
                             with st.container(key=f"campo_menu_stati_{idx_reale}"):
                                 st.caption("Stato consegna")
+                                if st.session_state.get("campo_parziale_idx") == idx_reale:
+                                    qta_riga = max(0, int(round(float(row.get("Q.ta", 0) or 0))))
+                                    consegnati_parziali = st.number_input(
+                                        f"Colli consegnati (su {qta_riga})",
+                                        min_value=0, max_value=qta_riga,
+                                        value=min(qta_riga, int(st.session_state.get(f"campo_parziale_qta_{idx_reale}", 0) or 0)),
+                                        key=f"campo_parziale_qta_input_{idx_reale}"
+                                    )
+                                    if st.button("✅ CONFERMA PARZIALE", use_container_width=True, key=f"campo_conferma_parziale_{idx_reale}"):
+                                        salva_stato_consegna(idx_reale, STATO_PARZIALE, consegnati_parziali)
+                                        st.session_state.campo_parziale_idx = None
+                                        st.session_state.campo_menu_aperto = None
+                                        st.rerun()
+                                    if st.button("↩️ ANNULLA", use_container_width=True, key=f"campo_annulla_parziale_{idx_reale}"):
+                                        st.session_state.campo_parziale_idx = None
+                                        st.session_state.campo_menu_aperto = None
+                                        st.rerun()
                                 # Menu stati verticale: una voce sotto l'altra.
                                 for opzione_stato in STATI_CONSEGNA:
                                     if st.button(
@@ -4369,18 +4528,22 @@ else:
                                         key=f"campo_stato_opzione_{idx_reale}_{opzione_stato}",
                                         use_container_width=True,
                                     ):
-                                        stato_nuovo = opzione_stato
-                                        st.session_state.campo_menu_aperto = None
-                                        st.session_state[f"campo_stato_scelto_{idx_reale}"] = opzione_stato
-                                        st.rerun()
-
-                        stato_scelto = st.session_state.pop(f"campo_stato_scelto_{idx_reale}", None)
-                        if stato_scelto in STATI_CONSEGNA:
-                            stato_nuovo = stato_scelto
+                                        if opzione_stato == STATO_PARZIALE:
+                                            st.session_state.campo_parziale_idx = idx_reale
+                                            st.session_state.campo_menu_aperto = idx_reale
+                                            st.rerun()
+                                        else:
+                                            salva_stato_consegna(idx_reale, opzione_stato)
+                                            st.session_state.campo_menu_aperto = None
+                                            st.rerun()
 
                     if stato_nuovo != stato_attuale:
-                        # Aggiornamento immediato del dataframe reale: il cliente
-                        # deve sparire dalla CAMPO al rerun successivo.
+                        # Compatibilita' con eventuali selezioni residue: usa sempre il
+                        # percorso unico che registra anche i colli consegnati/rifiutati.
+                        salva_stato_consegna(idx_reale, stato_nuovo)
+                        st.session_state.campo_menu_aperto = None
+                        st.rerun()
+                        # Codice legacy non raggiungibile, mantenuto fuori dal flusso operativo.
                         df_reale = st.session_state.giro_corrente.copy().reset_index(drop=True)
                         if 0 <= idx_reale < len(df_reale):
                             if "STATO" not in df_reale.columns:
