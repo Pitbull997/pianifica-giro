@@ -24,7 +24,7 @@ st.set_page_config(
 )
 
 # Stati consegna: definiti PRIMA di qualsiasi uso nel codice.
-VERSIONE_VANGO = "V10_5_0_prime_4_analisi.py"
+VERSIONE_VANGO = "V10_5_0_prime_5_fix_salvataggio_giro.py"
 STATO_DA_FARE = "⚪ DA CONSEGNARE"
 STATO_FATTO = "🟢 FATTO"
 STATO_PARZIALE = "🟡 PARZIALE"
@@ -2617,12 +2617,7 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
                     df_agg = df_agg[cols_ordine]
                     df_tutti = pd.concat([df_tutti, df_agg], ignore_index=True)
 
-                sheet_giro.clear()
-                if df_tutti.empty:
-                    sheet_giro.update([cols_ordine])
-                else:
-                    data_to_update = [cols_ordine] + df_tutti.astype(str).values.tolist()
-                    sheet_giro.update(data_to_update)
+                _scrivi_giro_su_sheets_sicuro(df_tutti, cols_ordine)
 
                 st.cache_data.clear()
                 return True
@@ -2675,6 +2670,40 @@ def carica_stato_giro_persistente(nome_utente):
         pass
     return risultato
 
+def _scrivi_giro_su_sheets_sicuro(df_dati, cols_ordine):
+    """Scrive GiroAttivo senza svuotarlo prima dell'aggiornamento.
+
+    Prima viene scritto il nuovo contenuto nell'area necessaria; solo dopo un
+    aggiornamento riuscito vengono eliminate eventuali righe vecchie in coda.
+    In questo modo un errore Google Sheets/429 non puo' lasciare GiroAttivo vuoto.
+    """
+    if not sheet_giro:
+        return False
+    dati = [cols_ordine] + df_dati.astype(str).values.tolist()
+    # gspread usa 1-based row/column. Costruiamo l'ultima cella della nuova area.
+    n_rows = len(dati)
+    n_cols = len(cols_ordine)
+    col = n_cols
+    letters = ""
+    while col:
+        col, rem = divmod(col - 1, 26)
+        letters = chr(65 + rem) + letters
+    ultima_cella = f"{letters}{n_rows}"
+
+    # IMPORTANTE: prima update, senza clear preventivo.
+    sheet_giro.update(dati, "A1")
+
+    # Se il vecchio foglio era piu' lungo, puliamo solo la coda ormai obsoleta.
+    try:
+        righe_attuali = len(sheet_giro.get_all_values())
+        if righe_attuali > n_rows:
+            sheet_giro.batch_clear([f"A{n_rows + 1}:{letters}{righe_attuali}"])
+    except Exception:
+        # La scrittura principale e' gia' riuscita: una mancata pulizia della
+        # coda non deve far fallire il salvataggio del giro.
+        pass
+    return True
+
 def salva_stato_giro_persistente(nome_utente):
     """Memorizza lo stato di TERMINA GIRO dentro GiroAttivo."""
     import json as _json
@@ -2712,8 +2741,7 @@ def salva_stato_giro_persistente(nome_utente):
                 riga['TIPO_RIGA'] = 'STATO_GIRO'
                 riga['BACKUP_JSON'] = payload
                 df_tutti = pd.concat([df_tutti, pd.DataFrame([riga])], ignore_index=True)
-                sheet_giro.clear()
-                sheet_giro.update([cols_ordine] + df_tutti.astype(str).values.tolist())
+                _scrivi_giro_su_sheets_sicuro(df_tutti, cols_ordine)
                 st.cache_data.clear()
                 return True
         except Exception:
@@ -3003,8 +3031,7 @@ def salva_posizione_giro():
                 ignore_index=True
             )
 
-            sheet_giro.clear()
-            sheet_giro.update([cols_ordine] + df_all.astype(str).values.tolist())
+            _scrivi_giro_su_sheets_sicuro(df_all, cols_ordine)
             st.cache_data.clear()
             st.session_state.giro_backup_disponibile = True
             return True
