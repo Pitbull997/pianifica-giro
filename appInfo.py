@@ -32,7 +32,7 @@ st.set_page_config(
 )
 
 # Stati consegna: definiti PRIMA di qualsiasi uso nel codice.
-VERSIONE_VANGO = "V10_5_8_V3_TEST_4.py"
+VERSIONE_VANGO = "V10_5_8_V3_TEST_5.py"
 
 # DATABASE GOOGLE SHEETS DEDICATO A QUESTA ISTANZA VANGO.
 # Non usare open() per titolo: ogni ramo deve essere isolato dal database dell'altro ramo.
@@ -2825,7 +2825,20 @@ def _acquisisci_gps_e_salva():
         ) + 1
         gps_nonce = st.session_state.gps_component_counter
         gps_js_expression = f"getLocation() /* vango_gps_refresh_{gps_nonce} */"
-        loc = streamlit_js_eval(js_expressions=gps_js_expression, key="vango_gps_live", want_output=True)
+        # Il componente browser e' necessario ma non deve lasciare una riga bianca
+        # sopra la mappa. Lo racchiudiamo in un contenitore senza altezza visiva.
+        st.markdown("""<style>
+        [class*="st-key-gps_component_hidden"] {
+            height: 0 !important; min-height: 0 !important; overflow: hidden !important;
+            margin: 0 !important; padding: 0 !important;
+        }
+        [class*="st-key-gps_component_hidden"] iframe {
+            height: 0 !important; min-height: 0 !important; border: 0 !important;
+            margin: 0 !important; padding: 0 !important; display: block !important;
+        }
+        </style>""", unsafe_allow_html=True)
+        with st.container(key="gps_component_hidden"):
+            loc = streamlit_js_eval(js_expressions=gps_js_expression, key="vango_gps_live", want_output=True)
         if not loc:
             st.session_state.gps_errore = 'Il telefono non ha ancora restituito la posizione GPS. Verifica il permesso di posizione del browser e attendi qualche secondo.'
             return False
@@ -2871,13 +2884,23 @@ def _acquisisci_gps_e_salva():
             )
             if risposta.status_code == 200:
                 indirizzo = risposta.json().get('address', {}) or {}
-                via = indirizzo.get('road') or indirizzo.get('pedestrian') or indirizzo.get('footway') or indirizzo.get('path') or ''
+                via = (indirizzo.get('road') or indirizzo.get('pedestrian') or indirizzo.get('footway')
+                       or indirizzo.get('path') or indirizzo.get('cycleway') or '')
                 numero = indirizzo.get('house_number') or ''
                 comune = (indirizzo.get('city') or indirizzo.get('town') or indirizzo.get('village')
-                          or indirizzo.get('municipality') or indirizzo.get('city_district') or '')
+                          or indirizzo.get('municipality') or indirizzo.get('city_district')
+                          or indirizzo.get('suburb') or indirizzo.get('township') or '')
+                display_name = risposta.json().get('display_name', '') or ''
                 posizione['via'] = f"{via} {numero}".strip() if via else ''
                 posizione['comune'] = str(comune).strip()
-                posizione['display_name'] = risposta.json().get('display_name', '')
+                posizione['display_name'] = display_name
+                # Se Nominatim non restituisce road/city, non mostriamo il deposito:
+                # la posizione GPS reale resta comunque disponibile tramite display_name.
+                if not posizione['via'] and display_name:
+                    parti = [p.strip() for p in display_name.split(',') if p.strip()]
+                    posizione['via'] = parti[0] if parti else display_name
+                if not posizione['comune'] and len(parti) >= 2:
+                    posizione['comune'] = parti[-4] if len(parti) >= 4 else parti[-2]
         except Exception:
             pass
         st.session_state.gps_latitudine = posizione['latitude']
@@ -2887,6 +2910,7 @@ def _acquisisci_gps_e_salva():
         st.session_state.gps_errore = None
         st.session_state.gps_via = posizione.get('via', '')
         st.session_state.gps_comune = posizione.get('comune', '')
+        st.session_state.gps_display_name = posizione.get('display_name', '')
         salva_posizione_gps_su_sheets(st.session_state.utente_corrente, posizione)
         return True
     except Exception as e:
@@ -3571,6 +3595,8 @@ if 'gps_timestamp' not in st.session_state:
     st.session_state.gps_timestamp = None
 if 'gps_errore' not in st.session_state:
     st.session_state.gps_errore = None
+if 'gps_display_name' not in st.session_state:
+    st.session_state.gps_display_name = ''
 if 'gps_component_counter' not in st.session_state:
     st.session_state.gps_component_counter = 0
 
@@ -4975,7 +5001,7 @@ else:
                     st.caption(f"🕐 Giro iniziato alle {_formatta_ora_partenza_reale()}: il tempo effettivo viene calcolato fino a TERMINA GIRO.")
 
                 # ------------------------------------------------------------
-                # GPS LIVE - V10.5.8 V3 TEST_3
+                # GPS LIVE - V10.5.8 V3 TEST_5
                 # Una sola istanza GPS viene creata qui. Il fragment si aggiorna
                 # automaticamente ogni 60 secondi e la mappa viene renderizzata
                 # nello stesso fragment, cosi' si aggiorna insieme alle coordinate.
@@ -4995,10 +5021,11 @@ else:
 
                 gps_via = str(st.session_state.get('gps_via', '') or '').strip()
                 gps_comune = str(st.session_state.get('gps_comune', '') or '').strip()
-                if st.session_state.get('gps_attivo', False) and (gps_via or gps_comune):
-                    # Mostra sempre l'indirizzo su due righe:
-                    # Via + civico / Comune (es. Via Daniele Manin / Vimercate).
-                    posizione_label = gps_via or "Posizione GPS"
+                if st.session_state.get('gps_attivo', False) and st.session_state.get('gps_latitudine') is not None:
+                    # Con GPS attivo la posizione attuale deve essere SEMPRE quella del telefono,
+                    # mai il deposito. Il reverse geocoding puo' restituire solo un display_name:
+                    # in quel caso usiamo comunque quello invece di ricadere su Acquaviva.
+                    posizione_label = gps_via or str(st.session_state.get('gps_display_name', '') or '').split(',')[0].strip() or "Posizione GPS"
                     posizione_comune = gps_comune or "Posizione rilevata dal telefono"
                 else:
                     stati_pos = df_pos["STATO"].fillna("").astype(str).str.upper()
