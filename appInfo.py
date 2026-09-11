@@ -1809,12 +1809,17 @@ SOGLIA_MATCH_VERDE = 0.55  # sopra: abbinamento proposto come affidabile (verde)
 # Due formati supportati:
 # 1) tabella completa: CODICE  TRATTA  CLIENTE ... COLLI
 # 2) lista semplice: CLIENTE  COLLI (es. "RILOCA GELATERIA CAFFETTE 5,00")
+# Le quantita' possono arrivare dall'OCR in formati diversi:
+#   5 / 5,0 / 5.0 / 5,00 / 5.00
+# Il vecchio parser accettava SOLO il formato con due decimali
+# (es. 5,00), quindi una tabella come "IL LATO DOLCE ... 5"
+# veniva letta dall'OCR ma poi scartata completamente.
 RIGA_OCR_PATTERN = __import__("re").compile(
-    r"^\D*(\d{6,12})\s+([A-Z0-9\-]{2,15})\s+(.+?)\s+(\d{1,4})[.,](\d{2})\s*$",
+    r"^\D*(\d{6,12})\s+([A-Z0-9\-]{2,15})\s+(.+?)\s+(\d{1,4})(?:[.,](\d{1,2}))?\s*$",
     __import__("re").IGNORECASE,
 )
 RIGA_OCR_SEMPLICE_PATTERN = __import__("re").compile(
-    r"^(.+?)\s+(\d{1,4})[.,](\d{2})\s*$",
+    r"^(.+?)\s+(\d{1,4})(?:[.,](\d{1,2}))?\s*$",
     __import__("re").IGNORECASE,
 )
 
@@ -1936,8 +1941,11 @@ def _righe_grezze_da_testo_ocr(testo):
         if m:
             codice, tratta, testo_grezzo, colli_int, colli_dec = m.groups()
             try:
-                colli = float(f"{colli_int}.{colli_dec}")
-            except ValueError:
+                colli = float(
+                    colli_int if not colli_dec
+                    else f"{colli_int}.{colli_dec}"
+                )
+            except (TypeError, ValueError):
                 colli = None
             righe.append({
                 "codice": codice,
@@ -1961,8 +1969,11 @@ def _righe_grezze_da_testo_ocr(testo):
                 continue
 
             try:
-                colli = float(f"{colli_int}.{colli_dec}")
-            except ValueError:
+                colli = float(
+                    colli_int if not colli_dec
+                    else f"{colli_int}.{colli_dec}"
+                )
+            except (TypeError, ValueError):
                 colli = None
 
             righe.append({
