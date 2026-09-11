@@ -32,7 +32,7 @@ st.set_page_config(
 )
 
 # Stati consegna: definiti PRIMA di qualsiasi uso nel codice.
-VERSIONE_VANGO = "V10_5_8_V3_TEST.py"
+VERSIONE_VANGO = "V10_5_8_V3_TEST_3.py"
 
 # DATABASE GOOGLE SHEETS DEDICATO A QUESTA ISTANZA VANGO.
 # Non usare open() per titolo: ogni ramo deve essere isolato dal database dell'altro ramo.
@@ -2814,7 +2814,14 @@ def _acquisisci_gps_e_salva():
         st.session_state.gps_errore = "Modulo GPS non installato."
         return False
     try:
-        loc = get_geolocation(component_key='vango_gps_live')
+        # getLocation() e' un componente browser: una chiave nuova per ogni
+        # nuova lettura permette al browser di eseguire una nuova richiesta GPS,
+        # senza creare due componenti con la stessa chiave nello stesso render.
+        st.session_state.gps_component_counter = int(
+            st.session_state.get('gps_component_counter', 0)
+        ) + 1
+        gps_component_key = f"vango_gps_live_{st.session_state.gps_component_counter}"
+        loc = get_geolocation(component_key=gps_component_key)
         if not loc:
             st.session_state.gps_errore = 'Il telefono non ha ancora restituito la posizione GPS. Verifica il permesso di posizione del browser e attendi qualche secondo.'
             return False
@@ -2887,12 +2894,28 @@ def _acquisisci_gps_e_salva():
 if hasattr(st, 'fragment'):
     @st.fragment(run_every="60s")
     def _gps_live_refresh():
-        # Il fragment viene richiamato una sola volta dalla pagina CAMPO.
-        # La chiave del componente GPS resta stabile, evitando il warning
-        # "multiple elements with the same key='getLocation()'".
         if (st.session_state.get('gps_attivo', False)
                 and not st.session_state.get('giro_terminato', False)):
             _acquisisci_gps_e_salva()
+
+            if st.session_state.get('gps_latitudine') is not None and st.session_state.get('gps_longitudine') is not None:
+                gps_df = pd.DataFrame([{
+                    'lat': st.session_state.gps_latitudine,
+                    'lon': st.session_state.gps_longitudine,
+                }])
+                st.map(gps_df, latitude='lat', longitude='lon', zoom=15, height=220)
+
+            if st.session_state.get('gps_errore'):
+                st.warning(f"📍 GPS: {st.session_state.gps_errore}")
+
+            if st.session_state.get('gps_latitudine') is not None:
+                acc = st.session_state.get('gps_accuracy')
+                acc_txt = f"±{acc:.0f} m" if isinstance(acc, (int, float)) else "accuratezza n/d"
+                ts = st.session_state.get('gps_timestamp')
+                ora_gps = datetime.fromtimestamp(float(ts)).strftime('%H:%M:%S') if ts else "--:--:--"
+                st.metric("Ultima posizione", ora_gps, acc_txt)
+
+            st.caption("FASE TEST: la posizione viene salvata come ultima posizione GPS del conducente. Il tracking continua finche' questa pagina resta aperta.")
 else:
     def _gps_live_refresh():
         if (st.session_state.get('gps_attivo', False)
@@ -3544,6 +3567,8 @@ if 'gps_timestamp' not in st.session_state:
     st.session_state.gps_timestamp = None
 if 'gps_errore' not in st.session_state:
     st.session_state.gps_errore = None
+if 'gps_component_counter' not in st.session_state:
+    st.session_state.gps_component_counter = 0
 
 
 def _toggle_gps():
@@ -3900,12 +3925,9 @@ else:
             _mostra_comando_gps("btn_gps_campo_header")
             st.markdown('<div style="height:5px"></div>', unsafe_allow_html=True)
 
-            # GPS LIVE: una sola istanza del componente getLocation().
-            # Il fragment gestisce la prima lettura e gli aggiornamenti ogni 60s.
-            # Non viene piu' effettuata una seconda chiamata diretta qui,
-            # evitando duplicazioni del componente e mantenendo la mappa nella
-            # normale esecuzione della pagina CAMPO.
-            _gps_live_refresh()
+            # Il GPS LIVE viene gestito nel riquadro GPS piu' sotto.
+            # Qui lasciamo soltanto il comando ON/OFF, evitando di creare una
+            # seconda istanza del componente getLocation().
             if st.button("↩️ TORNA A VISTA RIEPILOGO", use_container_width=True, key="btn_torna_riepilogo_campo"):
                 st.session_state.vista_giro = "RIEPILOGO"
                 st.rerun()
@@ -4949,40 +4971,12 @@ else:
                     st.caption(f"🕐 Giro iniziato alle {_formatta_ora_partenza_reale()}: il tempo effettivo viene calcolato fino a TERMINA GIRO.")
 
                 # ------------------------------------------------------------
-                # GPS LIVE - V10.5.7
-                # Il GPS puo' essere attivato gia' dalla schermata CAMPO,
-                # anche prima di premere INIZIA GIRO.
-                #
-                # Ogni ciclo usa una nuova chiave del componente GPS, cosi' il
-                # browser esegue una nuova richiesta di posizione. Dopo una
-                # lettura riuscita viene fatto un rerun completo dell'app: in
-                # questo modo si aggiornano insieme mappa e POSIZIONE ATTUALE.
-                # Il normale intervallo resta di 60 secondi.
-
+                # GPS LIVE - V10.5.8 V3 TEST_3
+                # Una sola istanza GPS viene creata qui. Il fragment si aggiorna
+                # automaticamente ogni 60 secondi e la mappa viene renderizzata
+                # nello stesso fragment, cosi' si aggiorna insieme alle coordinate.
                 if not st.session_state.get('giro_terminato', False):
-                    g1, g2 = st.columns([2, 1], gap="small")
-                    with g1:
-                        if st.session_state.get('gps_attivo', False):
-                            st.success("📍 GPS LIVE attivo — aggiornamento automatico ogni 60 secondi")
-                        else:
-                            st.info("📍 GPS LIVE spento")
-                        if st.session_state.get('gps_errore'):
-                            st.warning(f"⚠️ GPS: {st.session_state.gps_errore}")
-                    with g2:
-                        if st.session_state.get('gps_latitudine') is not None:
-                            acc = st.session_state.get('gps_accuracy')
-                            acc_txt = f"±{acc:.0f} m" if isinstance(acc, (int, float)) else "accuratezza n/d"
-                            ora_gps = datetime.fromtimestamp(float(st.session_state.gps_timestamp)).strftime('%H:%M:%S') if st.session_state.get('gps_timestamp') else "--:--:--"
-                            st.metric("Ultima posizione", ora_gps, acc_txt)
-                    if st.session_state.get('gps_latitudine') is not None and st.session_state.get('gps_longitudine') is not None:
-                        gps_df = pd.DataFrame([{
-                            'lat': st.session_state.gps_latitudine,
-                            'lon': st.session_state.gps_longitudine,
-                        }])
-                        st.map(gps_df, latitude='lat', longitude='lon', zoom=15, height=220)
-                    if st.session_state.get('gps_errore'):
-                        st.warning(f"📍 GPS: {st.session_state.gps_errore}")
-                    st.caption("FASE TEST: la posizione viene salvata come ultima posizione GPS del conducente. Mappa e POSIZIONE ATTUALE si aggiornano a ogni nuova lettura. Il tracking continua finche' questa pagina resta aperta.")
+                    _gps_live_refresh()
 
                 # POSIZIONE ATTUALE: se il GPS e' attivo usiamo la posizione
                 # reale del telefono; in assenza di GPS manteniamo il comportamento
