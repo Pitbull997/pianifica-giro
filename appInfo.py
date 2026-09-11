@@ -32,7 +32,7 @@ st.set_page_config(
 )
 
 # Stati consegna: definiti PRIMA di qualsiasi uso nel codice.
-VERSIONE_VANGO = "V10_5_1_GPS_TEST.py"
+VERSIONE_VANGO = "V10_5_8_V2_OSRM_ETA_TEST.py"
 
 # DATABASE GOOGLE SHEETS DEDICATO A QUESTA ISTANZA VANGO.
 # Non usare open() per titolo: ogni ramo deve essere isolato dal database dell'altro ramo.
