@@ -32,7 +32,7 @@ st.set_page_config(
 )
 
 # Stati consegna: definiti PRIMA di qualsiasi uso nel codice.
-VERSIONE_VANGO = "V10_5_8_V3_TEST_5.py"
+VERSIONE_VANGO = "V10_5_8_V3_TEST_7.py"
 
 # DATABASE GOOGLE SHEETS DEDICATO A QUESTA ISTANZA VANGO.
 # Non usare open() per titolo: ogni ramo deve essere isolato dal database dell'altro ramo.
@@ -2912,6 +2912,8 @@ def _acquisisci_gps_e_salva():
         st.session_state.gps_comune = posizione.get('comune', '')
         st.session_state.gps_display_name = posizione.get('display_name', '')
         salva_posizione_gps_su_sheets(st.session_state.utente_corrente, posizione)
+        # Se il giro e' attivo, controlliamo automaticamente la prossima fermata.
+        _controlla_arrivo_cliente_successivo()
         return True
     except Exception as e:
         st.session_state.gps_errore = str(e)
@@ -2959,7 +2961,8 @@ def _meta_utente_giro(nome_utente):
 def carica_stato_giro_persistente(nome_utente):
     """Legge lo stato tecnico del giro da GiroAttivo, senza modificare Foglio1/Utenti."""
     risultato = {"giro_terminato": False, "inizio_giro_reale": None, "fine_giro_reale": None, "previsione_giro": None,
-                 "fermo_mezzo_attivo": False, "inizio_fermo_mezzo": None, "minuti_fermo_mezzo": 0.0}
+                 "fermo_mezzo_attivo": False, "inizio_fermo_mezzo": None, "minuti_fermo_mezzo": 0.0,
+                 "gps_arrivi_clienti": {}}
     try:
         df = carica_tutti_i_giri_da_sheets()
         if df.empty:
@@ -2984,6 +2987,8 @@ def carica_stato_giro_persistente(nome_utente):
         risultato["fermo_mezzo_attivo"] = bool(dati.get("fermo_mezzo_attivo", False))
         risultato["inizio_fermo_mezzo"] = dati.get("inizio_fermo_mezzo")
         risultato["minuti_fermo_mezzo"] = float(dati.get("minuti_fermo_mezzo", 0) or 0)
+        arrivi = dati.get("gps_arrivi_clienti", {})
+        risultato["gps_arrivi_clienti"] = arrivi if isinstance(arrivi, dict) else {}
     except Exception:
         pass
     return risultato
@@ -3069,6 +3074,7 @@ def salva_stato_giro_persistente(nome_utente):
         "fermo_mezzo_attivo": bool(st.session_state.get("fermo_mezzo_attivo", False)),
         "inizio_fermo_mezzo": st.session_state.get("inizio_fermo_mezzo"),
         "minuti_fermo_mezzo": float(st.session_state.get("minuti_fermo_mezzo", 0) or 0),
+        "gps_arrivi_clienti": st.session_state.get("gps_arrivi_clienti", {}),
     }
     payload = _json.dumps(_json_sicuro(meta), ensure_ascii=False, allow_nan=False)
     cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'COLLI_CONSEGNATI', 'COLLI_RIFIUTATI', 'COLLI_DA_RENDERE', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON']
@@ -3128,8 +3134,10 @@ def salva_stato_consegna(idx, stato, colli_consegnati=None):
     st.session_state.giro_corrente = df
     st.session_state.fine_giro_reale = None
     st.session_state.giro_terminato = False
+    # Prima salviamo lo stato operativo, poi registriamo la visita conclusa.
     salva_stato_giro_persistente(st.session_state.utente_corrente)
     salva_giro_utente_su_sheets(st.session_state.utente_corrente, df)
+    registra_visita_su_registro(idx, stato, consegnati, fine_servizio_ts=time.time())
 
 def avvia_fermo_mezzo():
     """Avvia un fermo operativo; il tempo resta escluso dal ritardo effettivo."""
@@ -3599,6 +3607,173 @@ if 'gps_display_name' not in st.session_state:
     st.session_state.gps_display_name = ''
 if 'gps_component_counter' not in st.session_state:
     st.session_state.gps_component_counter = 0
+if 'gps_arrivi_clienti' not in st.session_state:
+    st.session_state.gps_arrivi_clienti = {}
+if 'registro_visite_salvate' not in st.session_state:
+    st.session_state.registro_visite_salvate = set()
+
+
+def _chiave_cliente_visita(row):
+    """Chiave stabile per associare un arrivo GPS alla fermata."""
+    return "|".join([
+        _normalizza_chiave_testo(row.get("CLIENTE", "")),
+        _normalizza_chiave_testo(row.get("COMUNE", "")),
+        _normalizza_chiave_testo(row.get("VIA", "")),
+    ])
+
+def _distanza_gps_metri(lat1, lon1, lat2, lon2):
+    """Distanza approssimata tra due coordinate GPS in metri."""
+    import math
+    try:
+        r = 6371000.0
+        p1 = math.radians(float(lat1))
+        p2 = math.radians(float(lat2))
+        dp = math.radians(float(lat2) - float(lat1))
+        dl = math.radians(float(lon2) - float(lon1))
+        a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+        return 2 * r * math.asin(min(1.0, math.sqrt(a)))
+    except Exception:
+        return None
+
+def _registra_arrivo_gps_cliente(idx, salva=True):
+    """Registra l'arrivo quando il GPS entra entro 100 m dal cliente successivo."""
+    if not st.session_state.get("gps_attivo", False):
+        return False
+    if st.session_state.get("fermo_mezzo_attivo", False):
+        return False
+    df = st.session_state.get("giro_corrente")
+    db = st.session_state.get("db_clienti")
+    if df is None or df.empty or db is None or db.empty or idx < 0 or idx >= len(df):
+        return False
+    row = df.iloc[idx]
+    stato = str(row.get("STATO", "")).strip()
+    if stato in [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]:
+        return False
+    lat = st.session_state.get("gps_latitudine")
+    lon = st.session_state.get("gps_longitudine")
+    ts = st.session_state.get("gps_timestamp")
+    if lat is None or lon is None or ts is None:
+        return False
+    try:
+        accuracy = float(st.session_state.get("gps_accuracy")) if st.session_state.get("gps_accuracy") is not None else None
+    except Exception:
+        accuracy = None
+    # Con accuratezza molto scarsa non confermiamo automaticamente l'arrivo.
+    if accuracy is not None and accuracy > 100:
+        return False
+    coord_cliente = _trova_coordinate_nel_db(row, db)
+    if coord_cliente is None:
+        return False
+    distanza = _distanza_gps_metri(lat, lon, coord_cliente[0], coord_cliente[1])
+    if distanza is None or distanza > 100.0:
+        return False
+    chiave = _chiave_cliente_visita(row)
+    if chiave in st.session_state.gps_arrivi_clienti:
+        return False
+    st.session_state.gps_arrivi_clienti[chiave] = float(ts)
+    if salva and st.session_state.get("utente_corrente"):
+        salva_stato_giro_persistente(st.session_state.utente_corrente)
+    return True
+
+def _controlla_arrivo_cliente_successivo():
+    """Controlla solo la prossima consegna pendente, non tutte le fermate."""
+    df = st.session_state.get("giro_corrente")
+    if df is None or df.empty:
+        return False
+    for idx in range(len(df)):
+        stato = str(df.iloc[idx].get("STATO", "")).strip()
+        if stato not in [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]:
+            return _registra_arrivo_gps_cliente(idx, salva=True)
+    return False
+
+def _ora_arrivo_prevista_cliente(row):
+    """Restituisce l'ora prevista cumulativa della fermata in formato HH:MM."""
+    partenza = _ora_partenza_reale_minuti()
+    cumulativo = _numero_minuti_cumulativi(row.get("MIN_PREVISTI_CUMULATIVI"))
+    if partenza is None or cumulativo is None:
+        return ""
+    return _formatta_ora_minuti(partenza + cumulativo)
+
+def _garantisci_arrivo_da_gps_corrente(idx):
+    """Se il conducente e' gia' entro 100 m al momento della chiusura, salva l'ultimo timestamp GPS."""
+    if idx < 0:
+        return None
+    if _registra_arrivo_gps_cliente(idx, salva=False):
+        df = st.session_state.giro_corrente
+        return st.session_state.gps_arrivi_clienti.get(_chiave_cliente_visita(df.iloc[idx]))
+    df = st.session_state.get("giro_corrente")
+    if df is None or df.empty:
+        return None
+    return st.session_state.get("gps_arrivi_clienti", {}).get(_chiave_cliente_visita(df.iloc[idx]))
+
+def registra_visita_su_registro(idx, stato, colli_consegnati, fine_servizio_ts=None):
+    """Scrive una visita conclusa in RegistroVisite. La colonna DATA e' tecnica per lo storico."""
+    if not sheet_registro or not st.session_state.get("utente_corrente"):
+        return False
+    df = st.session_state.get("giro_corrente")
+    if df is None or df.empty or idx < 0 or idx >= len(df):
+        return False
+    row = df.iloc[idx]
+    chiave = _chiave_cliente_visita(row)
+    if chiave in st.session_state.registro_visite_salvate:
+        return True
+    arrivo_ts = _garantisci_arrivo_da_gps_corrente(idx)
+    fine_ts = float(fine_servizio_ts or time.time())
+    tempo_servizio = ""
+    if arrivo_ts is not None:
+        tempo_servizio = round(max(0.0, (fine_ts - float(arrivo_ts)) / 60.0), 1)
+    ora_prevista = _ora_arrivo_prevista_cliente(row)
+    ora_arrivo_reale = ""
+    if arrivo_ts is not None:
+        try:
+            tz = ZoneInfo("Europe/Rome") if ZoneInfo else None
+            dt_arrivo = datetime.fromtimestamp(float(arrivo_ts), tz=tz) if tz else datetime.fromtimestamp(float(arrivo_ts))
+            ora_arrivo_reale = dt_arrivo.strftime("%H:%M:%S")
+        except Exception:
+            ora_arrivo_reale = ""
+    intestazioni = ["DATA", "CLIENTE", "COMUNE", "VIA", "STATO", "COLLI_CONSEGNATI", "ORA_ARRIVO_PREVISTA", "ORA_ARRIVO_REALE", "TEMPO_SERVIZIO"]
+    try:
+        valori = sheet_registro.get_all_values()
+        if not valori:
+            sheet_registro.append_row(intestazioni, value_input_option="USER_ENTERED")
+        else:
+            header = [str(x).strip().upper() for x in valori[0]]
+            if header != [x.upper() for x in intestazioni]:
+                # Se il foglio ha gia' un'intestazione compatibile, la usiamo senza distruggerla.
+                if not all(x.upper() in header for x in intestazioni):
+                    return False
+                riga = [""] * len(header)
+                dati = {
+                    "DATA": datetime.now().strftime("%Y-%m-%d"),
+                    "CLIENTE": str(row.get("CLIENTE", "")),
+                    "COMUNE": str(row.get("COMUNE", "")),
+                    "VIA": str(row.get("VIA", "")),
+                    "STATO": str(stato),
+                    "COLLI_CONSEGNATI": _intero_sicuro(colli_consegnati),
+                    "ORA_ARRIVO_PREVISTA": ora_prevista,
+                    "ORA_ARRIVO_REALE": ora_arrivo_reale,
+                    "TEMPO_SERVIZIO": tempo_servizio,
+                }
+                for nome, valore in dati.items():
+                    riga[header.index(nome.upper())] = valore
+                sheet_registro.append_row(riga, value_input_option="USER_ENTERED")
+            else:
+                sheet_registro.append_row([
+                    datetime.now().strftime("%Y-%m-%d"),
+                    str(row.get("CLIENTE", "")),
+                    str(row.get("COMUNE", "")),
+                    str(row.get("VIA", "")),
+                    str(stato),
+                    _intero_sicuro(colli_consegnati),
+                    ora_prevista,
+                    ora_arrivo_reale,
+                    tempo_servizio,
+                ], value_input_option="USER_ENTERED")
+        st.session_state.registro_visite_salvate.add(chiave)
+        st.cache_data.clear()
+        return True
+    except Exception:
+        return False
 
 
 def _toggle_gps():
@@ -4961,6 +5136,10 @@ else:
                             st.session_state.inizio_giro_reale = time.time()
                             st.session_state.fine_giro_reale = None
                             st.session_state.giro_terminato = False
+                            # INIZIA GIRO attiva automaticamente il GPS LIVE.
+                            st.session_state.gps_attivo = True
+                            st.session_state.gps_errore = None
+                            st.session_state.gps_component_counter = 0
                             salva_stato_giro_persistente(st.session_state.utente_corrente)
                             st.rerun()
                     else:
