@@ -32,7 +32,7 @@ st.set_page_config(
 )
 
 # Stati consegna: definiti PRIMA di qualsiasi uso nel codice.
-VERSIONE_VANGO = "V10_5_8_V3_TEST_8.py"
+VERSIONE_VANGO = "V10_5_8_V3_TEST_9.py"
 
 # DATABASE GOOGLE SHEETS DEDICATO A QUESTA ISTANZA VANGO.
 # Non usare open() per titolo: ogni ramo deve essere isolato dal database dell'altro ramo.
@@ -2698,7 +2698,8 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
     for tentativo in range(5):
         try:
             if sheet_giro:
-                time.sleep(1.5 * (tentativo + 1))
+                if tentativo:
+                    time.sleep(min(8.0, 1.5 * (2 ** (tentativo - 1))))
 
                 data_totale = sheet_giro.get_all_records()
                 df_tutti = pd.DataFrame(data_totale) if data_totale else pd.DataFrame(columns=cols_ordine)
@@ -2755,160 +2756,107 @@ def _gps_utente(nome_utente):
 
 
 def salva_posizione_gps_su_sheets(nome_utente, posizione):
-    """Salva SOLO l'ultima posizione GPS del conducente in GiroAttivo.
+    """Compatibilita' storica: il GPS LIVE NON viene piu' salvato su Google Sheets.
 
-    La posizione viene mantenuta in una riga tecnica separata e non viene mai
-    interpretata come cliente del giro. In produzione questa parte potra'
-    essere spostata su un backend dedicato senza cambiare l'interfaccia GPS.
+    La posizione resta in session_state e viene usata solo per rilevare l'arrivo
+    dal cliente. Google Sheets riceve esclusivamente gli eventi operativi utili
+    (arrivo/consegna/RegistroVisite), non le singole posizioni GPS.
     """
-    if not sheet_giro or not nome_utente or not posizione:
-        return False
-    try:
-        import json as _json
-        payload = _json.dumps(_json_sicuro(posizione), ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-        utente_gps = _gps_utente(nome_utente)
-        cols = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta',
-                'COLLI_CONSEGNATI', 'COLLI_RIFIUTATI', 'COLLI_DA_RENDERE', 'STATO',
-                'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON']
-        valori = sheet_giro.get_all_values()
-        if not valori:
-            sheet_giro.append_row(cols, value_input_option="USER_ENTERED")
-            valori = [cols]
-        header = [str(x).strip() for x in valori[0]]
-        # Se il foglio non ha ancora tutte le colonne tecniche, non tocchiamo
-        # la struttura: la posizione verra' salvata solo se le colonne esistono.
-        if not all(c in header for c in cols):
-            return False
-        indice_utente = header.index('UTENTE')
-        riga_esistente = None
-        for n, riga in enumerate(valori[1:], start=2):
-            if len(riga) > indice_utente and str(riga[indice_utente]).strip().lower() == utente_gps.lower():
-                riga_esistente = n
-                break
-        nuova = {c: '' for c in cols}
-        # Salviamo anche l'indirizzo leggibile ottenuto dal reverse geocoding.
-        # In GiroAttivo: VIA = strada (+ numero civico), COMUNE = paese/citta'.
-        nuova.update({
-            'UTENTE': utente_gps,
-            'POSIZIONE': str(posizione.get('timestamp_iso', '')),
-            'CLIENTE': 'GPS LIVE',
-            'COMUNE': str(posizione.get('comune', '') or ''),
-            'VIA': str(posizione.get('via', '') or ''),
-            'TIPO_RIGA': 'GPS_LIVE',
-            'BACKUP_JSON': payload,
-        })
-        valori_riga = [nuova[c] for c in cols]
-        if riga_esistente is None:
-            sheet_giro.append_row(valori_riga, value_input_option="USER_ENTERED")
-        else:
-            ultima_col = chr(64 + len(cols)) if len(cols) <= 26 else 'O'
-            sheet_giro.update(f"A{riga_esistente}:{ultima_col}{riga_esistente}", [valori_riga])
-        return True
-    except Exception:
-        return False
+    return False
 
 
 def _acquisisci_gps_e_salva():
-    """Acquisisce la posizione corrente dal browser e salva l'ultima lettura.
+    """Acquisisce la posizione corrente del browser senza scriverla su Google Sheets.
 
-    Il componente streamlit-js-eval usa una chiave fissa e dedicata al GPS.
-    In questo modo non vengono create piu' istanze di getLocation() durante
-    i rerun/refresh del fragment e il browser mantiene una sola richiesta
-    di geolocalizzazione attiva.
+    Il controllo viene eseguito dal fragment ogni ~60 secondi. La posizione resta
+    in memoria nell'app e viene usata per riconoscere l'arrivo entro 100 m dal
+    prossimo cliente. Nessun salvataggio GPS continuo su GiroAttivo.
     """
     if get_geolocation is None:
         st.session_state.gps_errore = "Modulo GPS non installato."
         return False
     try:
-        # Manteniamo UNA SOLA chiave del componente GPS.
-        # streamlit-js-eval riesegue l'espressione solo quando il testo
-        # dell'espressione cambia; aggiungiamo quindi un nonce innocuo
-        # ad ogni ciclo dei 60 secondi, senza creare nuove chiavi.
-        # In questo modo evitiamo sia il warning "same key=getLocation()"
-        # sia la creazione continua di iframe/componenti GPS.
-        st.session_state.gps_component_counter = int(
-            st.session_state.get('gps_component_counter', 0)
-        ) + 1
-        gps_nonce = st.session_state.gps_component_counter
-        gps_js_expression = f"getLocation() /* vango_gps_refresh_{gps_nonce} */"
-        # Il componente browser e' necessario ma non deve lasciare una riga bianca
-        # sopra la mappa. Lo racchiudiamo in un contenitore senza altezza visiva.
-        st.markdown("""<style>
-        [class*="st-key-gps_component_hidden"] {
-            height: 0 !important; min-height: 0 !important; overflow: hidden !important;
-            margin: 0 !important; padding: 0 !important;
-        }
-        [class*="st-key-gps_component_hidden"] iframe {
-            height: 0 !important; min-height: 0 !important; border: 0 !important;
-            margin: 0 !important; padding: 0 !important; display: block !important;
-        }
-        </style>""", unsafe_allow_html=True)
-        with st.container(key="gps_component_hidden"):
-            loc = streamlit_js_eval(js_expressions=gps_js_expression, key="vango_gps_live", want_output=True)
+        # Il wrapper ufficiale del componente evita di costruire manualmente
+        # espressioni JS con nonce diversi ad ogni ciclo, che possono provocare
+        # rerun/component refresh superflui.
+        loc = get_geolocation()
         if not loc:
             st.session_state.gps_errore = 'Il telefono non ha ancora restituito la posizione GPS. Verifica il permesso di posizione del browser e attendi qualche secondo.'
             return False
         if 'error' in loc:
-            err = loc.get('error', {})
+            err = loc.get('error', {}) or {}
             st.session_state.gps_errore = str(err.get('message', 'Posizione non disponibile.'))
             return False
+
         coords = loc.get('coords', loc)
         lat = coords.get('latitude')
         lon = coords.get('longitude')
         if lat is None or lon is None:
             st.session_state.gps_errore = "Il browser non ha restituito coordinate valide."
             return False
+
         accuracy = coords.get('accuracy')
         timestamp = loc.get('timestamp') or time.time() * 1000
         timestamp_sec = float(timestamp) / 1000.0 if float(timestamp) > 10000000000 else float(timestamp)
+        tz_rome = ZoneInfo('Europe/Rome') if ZoneInfo else None
         posizione = {
             'latitude': float(lat),
             'longitude': float(lon),
             'accuracy_m': float(accuracy) if accuracy is not None else None,
             'timestamp': timestamp_sec,
-            'timestamp_iso': datetime.fromtimestamp(timestamp_sec).isoformat(timespec='seconds'),
-            'via': '',
-            'comune': '',
+            'timestamp_iso': datetime.fromtimestamp(timestamp_sec, tz=tz_rome).isoformat(timespec='seconds') if tz_rome else datetime.fromtimestamp(timestamp_sec).isoformat(timespec='seconds'),
+            'via': st.session_state.get('gps_via', ''),
+            'comune': st.session_state.get('gps_comune', ''),
+            'display_name': st.session_state.get('gps_display_name', ''),
         }
 
-        # Reverse geocoding gratuito: trasformiamo le coordinate GPS in
-        # indirizzo leggibile da mostrare nel riquadro POSIZIONE ATTUALE.
-        try:
-            headers = {'User-Agent': 'VanGo-GPS/1.0'}
-            risposta = requests.get(
-                GPS_REVERSE_URL,
-                params={
-                    'lat': posizione['latitude'],
-                    'lon': posizione['longitude'],
-                    'format': 'jsonv2',
-                    'zoom': 18,
-                    'addressdetails': 1,
-                    'accept-language': 'it',
-                },
-                headers=headers,
-                timeout=8,
-            )
-            if risposta.status_code == 200:
-                indirizzo = risposta.json().get('address', {}) or {}
-                via = (indirizzo.get('road') or indirizzo.get('pedestrian') or indirizzo.get('footway')
-                       or indirizzo.get('path') or indirizzo.get('cycleway') or '')
-                numero = indirizzo.get('house_number') or ''
-                comune = (indirizzo.get('city') or indirizzo.get('town') or indirizzo.get('village')
-                          or indirizzo.get('municipality') or indirizzo.get('city_district')
-                          or indirizzo.get('suburb') or indirizzo.get('township') or '')
-                display_name = risposta.json().get('display_name', '') or ''
-                posizione['via'] = f"{via} {numero}".strip() if via else ''
-                posizione['comune'] = str(comune).strip()
-                posizione['display_name'] = display_name
-                # Se Nominatim non restituisce road/city, non mostriamo il deposito:
-                # la posizione GPS reale resta comunque disponibile tramite display_name.
-                if not posizione['via'] and display_name:
-                    parti = [p.strip() for p in display_name.split(',') if p.strip()]
-                    posizione['via'] = parti[0] if parti else display_name
-                if not posizione['comune'] and len(parti) >= 2:
-                    posizione['comune'] = parti[-4] if len(parti) >= 4 else parti[-2]
-        except Exception:
-            pass
+        # Reverse geocoding solo al primo rilevamento o quando ci si e' spostati
+        # abbastanza. Evitiamo una richiesta Nominatim ad ogni ciclo GPS.
+        reverse_lat = st.session_state.get('gps_reverse_latitudine')
+        reverse_lon = st.session_state.get('gps_reverse_longitudine')
+        distanza_reverse = None
+        if reverse_lat is not None and reverse_lon is not None:
+            distanza_reverse = _distanza_gps_metri(float(lat), float(lon), float(reverse_lat), float(reverse_lon))
+
+        if reverse_lat is None or reverse_lon is None or (distanza_reverse is not None and distanza_reverse >= 150.0):
+            try:
+                headers = {'User-Agent': 'VanGo-GPS/1.0'}
+                risposta = requests.get(
+                    GPS_REVERSE_URL,
+                    params={
+                        'lat': posizione['latitude'],
+                        'lon': posizione['longitude'],
+                        'format': 'jsonv2',
+                        'zoom': 18,
+                        'addressdetails': 1,
+                        'accept-language': 'it',
+                    },
+                    headers=headers,
+                    timeout=8,
+                )
+                if risposta.status_code == 200:
+                    dati_reverse = risposta.json() or {}
+                    indirizzo = dati_reverse.get('address', {}) or {}
+                    via = (indirizzo.get('road') or indirizzo.get('pedestrian') or indirizzo.get('footway')
+                           or indirizzo.get('path') or indirizzo.get('cycleway') or '')
+                    numero = indirizzo.get('house_number') or ''
+                    comune = (indirizzo.get('city') or indirizzo.get('town') or indirizzo.get('village')
+                              or indirizzo.get('municipality') or indirizzo.get('city_district')
+                              or indirizzo.get('suburb') or indirizzo.get('township') or '')
+                    display_name = dati_reverse.get('display_name', '') or ''
+                    posizione['via'] = f"{via} {numero}".strip() if via else ''
+                    posizione['comune'] = str(comune).strip()
+                    posizione['display_name'] = display_name
+                    if not posizione['via'] and display_name:
+                        parti = [p.strip() for p in display_name.split(',') if p.strip()]
+                        posizione['via'] = parti[0] if parti else display_name
+                        if not posizione['comune'] and len(parti) >= 2:
+                            posizione['comune'] = parti[-4] if len(parti) >= 4 else parti[-2]
+                    st.session_state.gps_reverse_latitudine = float(lat)
+                    st.session_state.gps_reverse_longitudine = float(lon)
+            except Exception:
+                pass
+
         st.session_state.gps_latitudine = posizione['latitude']
         st.session_state.gps_longitudine = posizione['longitude']
         st.session_state.gps_accuracy = posizione['accuracy_m']
@@ -2917,14 +2865,14 @@ def _acquisisci_gps_e_salva():
         st.session_state.gps_via = posizione.get('via', '')
         st.session_state.gps_comune = posizione.get('comune', '')
         st.session_state.gps_display_name = posizione.get('display_name', '')
-        salva_posizione_gps_su_sheets(st.session_state.utente_corrente, posizione)
-        # Se il giro e' attivo, controlliamo automaticamente la prossima fermata.
+
+        # IMPORTANTE: nessuna scrittura su GiroAttivo per la singola posizione GPS.
+        # Salviamo su Sheets solo quando un arrivo cliente viene realmente rilevato.
         _controlla_arrivo_cliente_successivo()
         return True
     except Exception as e:
         st.session_state.gps_errore = str(e)
         return False
-
 
 
 if hasattr(st, 'fragment'):
@@ -2951,7 +2899,7 @@ if hasattr(st, 'fragment'):
                 ora_gps = datetime.fromtimestamp(float(ts)).strftime('%H:%M:%S') if ts else "--:--:--"
                 st.metric("Ultima posizione", ora_gps, acc_txt)
 
-            st.caption("FASE TEST: la posizione viene salvata come ultima posizione GPS del conducente. Il tracking continua finche' questa pagina resta aperta.")
+            st.caption("📍 GPS attivo: controllo posizione circa ogni 60 secondi. La posizione non viene salvata su Google Sheets.")
 else:
     def _gps_live_refresh():
         if (st.session_state.get('gps_attivo', False)
@@ -3057,19 +3005,26 @@ def _scrivi_giro_su_sheets_sicuro(df_dati, cols_ordine):
     # IMPORTANTE: prima update, senza clear preventivo.
     sheet_giro.update(dati, "A1")
 
-    # Se il vecchio foglio era piu' lungo, puliamo solo la coda ormai obsoleta.
+    # Non rileggiamo tutto il foglio per contare le vecchie righe: il conteggio
+    # sarebbe un'altra richiesta Google Sheets ad ogni salvataggio. Ridimensioniamo
+    # direttamente il worksheet alla nuova altezza quando possibile.
     try:
-        righe_attuali = len(sheet_giro.get_all_values())
-        if righe_attuali > n_rows:
-            sheet_giro.batch_clear([f"A{n_rows + 1}:{letters}{righe_attuali}"])
+        if hasattr(sheet_giro, 'resize'):
+            sheet_giro.resize(rows=max(n_rows, 1))
     except Exception:
-        # La scrittura principale e' gia' riuscita: una mancata pulizia della
-        # coda non deve far fallire il salvataggio del giro.
+        # La scrittura principale e' gia' riuscita: la pulizia della coda non
+        # deve far fallire il salvataggio del giro.
         pass
     return True
 
 def salva_stato_giro_persistente(nome_utente):
-    """Memorizza lo stato di TERMINA GIRO dentro GiroAttivo."""
+    """Memorizza lo stato tecnico del giro con una sola ricerca mirata.
+
+    Non rileggiamo piu' tutto GiroAttivo per aggiornare una sola riga tecnica:
+    cerchiamo la riga STATO_GIRO dell'utente e aggiorniamo soltanto N:O.
+    """
+    if not sheet_giro or not nome_utente:
+        return False
     import json as _json
     meta = {
         "tipo": "STATO_GIRO",
@@ -3083,36 +3038,32 @@ def salva_stato_giro_persistente(nome_utente):
         "gps_arrivi_clienti": st.session_state.get("gps_arrivi_clienti", {}),
     }
     payload = _json.dumps(_json_sicuro(meta), ensure_ascii=False, allow_nan=False)
-    cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta', 'COLLI_CONSEGNATI', 'COLLI_RIFIUTATI', 'COLLI_DA_RENDERE', 'STATO', 'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON']
-    for tentativo in range(5):
+    meta_utente = _meta_utente_giro(nome_utente)
+    cols_ordine = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta',
+                   'COLLI_CONSEGNATI', 'COLLI_RIFIUTATI', 'COLLI_DA_RENDERE', 'STATO',
+                   'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON']
+    for tentativo in range(4):
         try:
-            if sheet_giro:
-                time.sleep(1.5 * (tentativo + 1))
-                data_totale = sheet_giro.get_all_records()
-                df_tutti = pd.DataFrame(data_totale) if data_totale else pd.DataFrame(columns=cols_ordine)
-                if not df_tutti.empty:
-                    df_tutti.columns = df_tutti.columns.str.strip().str.upper()
-                    if 'Q.TA' in df_tutti.columns:
-                        df_tutti = df_tutti.rename(columns={'Q.TA': 'Q.ta'})
-                    for c in cols_ordine:
-                        if c not in df_tutti.columns:
-                            df_tutti[c] = ""
-                    df_tutti = df_tutti[cols_ordine]
-                    meta_user = _meta_utente_giro(nome_utente).strip().lower()
-                    mask_meta = df_tutti['UTENTE'].astype(str).str.strip().str.lower() == meta_user
-                    df_tutti = df_tutti.loc[~mask_meta].copy()
-                riga = {c: "" for c in cols_ordine}
-                riga['UTENTE'] = _meta_utente_giro(nome_utente)
-                riga['TIPO_RIGA'] = 'STATO_GIRO'
-                riga['BACKUP_JSON'] = payload
-                df_tutti = pd.concat([df_tutti, pd.DataFrame([riga])], ignore_index=True)
-                _scrivi_giro_su_sheets_sicuro(df_tutti, cols_ordine)
-                st.cache_data.clear()
-                return True
-        except Exception:
-            if tentativo == 4:
-                return False
+            # Una sola lettura mirata, non get_all_records().
+            matches = sheet_giro.findall(meta_utente, in_column=1) if hasattr(sheet_giro, 'findall') else []
+            if matches:
+                riga = matches[-1].row
+                # N = TIPO_RIGA, O = BACKUP_JSON. Aggiorniamo solo le due celle necessarie.
+                sheet_giro.update(f"N{riga}:O{riga}", [["STATO_GIRO", payload]], value_input_option="USER_ENTERED")
+            else:
+                nuova = {c: '' for c in cols_ordine}
+                nuova['UTENTE'] = meta_utente
+                nuova['TIPO_RIGA'] = 'STATO_GIRO'
+                nuova['BACKUP_JSON'] = payload
+                sheet_giro.append_row([nuova[c] for c in cols_ordine], value_input_option="USER_ENTERED")
+            return True
+        except Exception as e:
+            if "429" in str(e) and tentativo < 3:
+                time.sleep(min(8.0, 1.5 * (2 ** tentativo)))
+                continue
+            return False
     return False
+
 
 def salva_stato_consegna(idx, stato, colli_consegnati=None):
     """Aggiorna stato e consuntivo colli della consegna."""
@@ -3362,9 +3313,11 @@ def salva_posizione_giro():
         try:
             if not sheet_giro:
                 return False
-            time.sleep(1.5 * (tentativo + 1))
+            if tentativo:
+                time.sleep(min(8.0, 1.5 * (2 ** (tentativo - 1))))
 
-            # Leggiamo SEMPRE il contenuto reale del foglio, non la cache.
+            # Leggiamo il contenuto reale del foglio solo quando il salvataggio
+            # operativo lo richiede, non durante ogni ciclo GPS.
             data = sheet_giro.get_all_records()
             df_all = pd.DataFrame(data) if data else pd.DataFrame(columns=cols_ordine)
             if not df_all.empty:
@@ -3613,6 +3566,10 @@ if 'gps_display_name' not in st.session_state:
     st.session_state.gps_display_name = ''
 if 'gps_component_counter' not in st.session_state:
     st.session_state.gps_component_counter = 0
+if 'gps_reverse_latitudine' not in st.session_state:
+    st.session_state.gps_reverse_latitudine = None
+if 'gps_reverse_longitudine' not in st.session_state:
+    st.session_state.gps_reverse_longitudine = None
 if 'gps_arrivi_clienti' not in st.session_state:
     st.session_state.gps_arrivi_clienti = {}
 if 'registro_visite_salvate' not in st.session_state:
@@ -5195,10 +5152,9 @@ else:
                     st.caption(f"🕐 Giro iniziato alle {_formatta_ora_partenza_reale()}: il tempo effettivo viene calcolato fino a TERMINA GIRO.")
 
                 # ------------------------------------------------------------
-                # GPS LIVE - V10.5.8 V3 TEST_5
-                # Una sola istanza GPS viene creata qui. Il fragment si aggiorna
-                # automaticamente ogni 60 secondi e la mappa viene renderizzata
-                # nello stesso fragment, cosi' si aggiorna insieme alle coordinate.
+                # GPS LIVE - V10.5.8 V3 TEST_9
+                # Il fragment controlla la posizione circa ogni 60 secondi.
+                # Nessuna posizione GPS viene salvata continuamente su Google Sheets.
                 if not st.session_state.get('giro_terminato', False):
                     _gps_live_refresh()
 
