@@ -18,7 +18,7 @@ from google.oauth2.service_account import Credentials
 
 # GPS smartphone - prima fase VanGo Test.
 try:
-    from streamlit_js_eval import get_geolocation
+    from streamlit_js_eval import get_geolocation, streamlit_js_eval
 except ImportError:
     get_geolocation = None
 
@@ -32,7 +32,7 @@ st.set_page_config(
 )
 
 # Stati consegna: definiti PRIMA di qualsiasi uso nel codice.
-VERSIONE_VANGO = "V10_5_8_V3_TEST_3.py"
+VERSIONE_VANGO = "V10_5_8_V3_TEST_4.py"
 
 # DATABASE GOOGLE SHEETS DEDICATO A QUESTA ISTANZA VANGO.
 # Non usare open() per titolo: ogni ramo deve essere isolato dal database dell'altro ramo.
@@ -2814,14 +2814,18 @@ def _acquisisci_gps_e_salva():
         st.session_state.gps_errore = "Modulo GPS non installato."
         return False
     try:
-        # getLocation() e' un componente browser: una chiave nuova per ogni
-        # nuova lettura permette al browser di eseguire una nuova richiesta GPS,
-        # senza creare due componenti con la stessa chiave nello stesso render.
+        # Manteniamo UNA SOLA chiave del componente GPS.
+        # streamlit-js-eval riesegue l'espressione solo quando il testo
+        # dell'espressione cambia; aggiungiamo quindi un nonce innocuo
+        # ad ogni ciclo dei 60 secondi, senza creare nuove chiavi.
+        # In questo modo evitiamo sia il warning "same key=getLocation()"
+        # sia la creazione continua di iframe/componenti GPS.
         st.session_state.gps_component_counter = int(
             st.session_state.get('gps_component_counter', 0)
         ) + 1
-        gps_component_key = f"vango_gps_live_{st.session_state.gps_component_counter}"
-        loc = get_geolocation(component_key=gps_component_key)
+        gps_nonce = st.session_state.gps_component_counter
+        gps_js_expression = f"getLocation() /* vango_gps_refresh_{gps_nonce} */"
+        loc = streamlit_js_eval(js_expressions=gps_js_expression, key="vango_gps_live", want_output=True)
         if not loc:
             st.session_state.gps_errore = 'Il telefono non ha ancora restituito la posizione GPS. Verifica il permesso di posizione del browser e attendi qualche secondo.'
             return False
