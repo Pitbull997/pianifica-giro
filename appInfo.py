@@ -32,7 +32,7 @@ st.set_page_config(
 )
 
 # Stati consegna: definiti PRIMA di qualsiasi uso nel codice.
-VERSIONE_VANGO = "V10_5_8_V3_TEST_9.py"
+VERSIONE_VANGO = "V10_5_8_V3_TEST_10.py"
 
 # DATABASE GOOGLE SHEETS DEDICATO A QUESTA ISTANZA VANGO.
 # Non usare open() per titolo: ogni ramo deve essere isolato dal database dell'altro ramo.
@@ -2776,10 +2776,18 @@ def _acquisisci_gps_e_salva():
         st.session_state.gps_errore = "Modulo GPS non installato."
         return False
     try:
-        # Il wrapper ufficiale del componente evita di costruire manualmente
-        # espressioni JS con nonce diversi ad ogni ciclo, che possono provocare
-        # rerun/component refresh superflui.
-        loc = get_geolocation()
+        # Forziamo una nuova acquisizione browser ad ogni ciclo del fragment.
+        # La chiave del componente resta stabile per evitare la creazione di
+        # iframe multipli, mentre cambia solo l'espressione ogni minuto.
+        # Il bucket temporale evita il loop: l'eventuale rerun generato dal
+        # componente riusa la stessa espressione fino al minuto successivo.
+        gps_minute = int(time.time() // 60)
+        gps_js_expression = f"getLocation() /* vango_gps_refresh_{gps_minute} */"
+        loc = streamlit_js_eval(
+            js_expressions=gps_js_expression,
+            key="vango_gps_live",
+            want_output=True,
+        )
         if not loc:
             st.session_state.gps_errore = 'Il telefono non ha ancora restituito la posizione GPS. Verifica il permesso di posizione del browser e attendi qualche secondo.'
             return False
@@ -2896,7 +2904,12 @@ if hasattr(st, 'fragment'):
                 acc = st.session_state.get('gps_accuracy')
                 acc_txt = f"±{acc:.0f} m" if isinstance(acc, (int, float)) else "accuratezza n/d"
                 ts = st.session_state.get('gps_timestamp')
-                ora_gps = datetime.fromtimestamp(float(ts)).strftime('%H:%M:%S') if ts else "--:--:--"
+                tz_rome = ZoneInfo('Europe/Rome') if ZoneInfo else None
+                ora_gps = (
+                    datetime.fromtimestamp(float(ts), tz=tz_rome).strftime('%H:%M:%S')
+                    if ts and tz_rome
+                    else (datetime.fromtimestamp(float(ts)).strftime('%H:%M:%S') if ts else "--:--:--")
+                )
                 st.metric("Ultima posizione", ora_gps, acc_txt)
 
             st.caption("📍 GPS attivo: controllo posizione circa ogni 60 secondi. La posizione non viene salvata su Google Sheets.")
