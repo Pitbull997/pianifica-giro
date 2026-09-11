@@ -2860,7 +2860,7 @@ def _acquisisci_gps_e_salva():
             'longitude': float(lon),
             'accuracy_m': float(accuracy) if accuracy is not None else None,
             'timestamp': timestamp_sec,
-            'timestamp_iso': datetime.fromtimestamp(timestamp_sec).isoformat(timespec='seconds'),
+            'timestamp_iso': (datetime.fromtimestamp(timestamp_sec, tz=ZoneInfo('Europe/Rome')).isoformat(timespec='seconds') if ZoneInfo else datetime.fromtimestamp(timestamp_sec).isoformat(timespec='seconds')),
             'via': '',
             'comune': '',
         }
@@ -2942,7 +2942,7 @@ if hasattr(st, 'fragment'):
                 acc = st.session_state.get('gps_accuracy')
                 acc_txt = f"±{acc:.0f} m" if isinstance(acc, (int, float)) else "accuratezza n/d"
                 ts = st.session_state.get('gps_timestamp')
-                ora_gps = datetime.fromtimestamp(float(ts)).strftime('%H:%M:%S') if ts else "--:--:--"
+                ora_gps = _formatta_ora_timestamp(ts) if ts else "--:--:--"
                 st.metric("Ultima posizione", ora_gps, acc_txt)
 
             st.caption("FASE TEST: la posizione viene salvata come ultima posizione GPS del conducente. Il tracking continua finche' questa pagina resta aperta.")
