@@ -32,7 +32,7 @@ st.set_page_config(
 )
 
 # Stati consegna: definiti PRIMA di qualsiasi uso nel codice.
-VERSIONE_VANGO = "V10_5_8_V3_TEST_7.py"
+VERSIONE_VANGO = "V10_5_8_V3_TEST_8.py"
 
 # DATABASE GOOGLE SHEETS DEDICATO A QUESTA ISTANZA VANGO.
 # Non usare open() per titolo: ogni ramo deve essere isolato dal database dell'altro ramo.
@@ -1571,13 +1571,15 @@ def _stato_avanzamento_giro(fermate_completate, fermate_totali, previsto_totale_
     }
 
 
-def _simula_tempo_percorso_orari(ordine, durate, orari_apertura, ora_partenza_minuti=300, minuti_servizio=MINUTI_SERVIZIO_PER_FERMATA):
+def _simula_tempo_percorso_orari(ordine, durate, orari_apertura, ora_partenza_minuti=None, minuti_servizio=MINUTI_SERVIZIO_PER_FERMATA):
     """Simula l'orario reale fermata per fermata.
 
     Regola: si viaggia, si arriva, si attende solo se necessario per l'apertura,
     poi si effettuano 12 minuti di parcheggio+scarico prima di ripartire.
     Il servizio viene applicato a ogni cliente, ma non al deposito finale.
     """
+    if ora_partenza_minuti is None:
+        raise ValueError("L'ora di partenza deve essere fornita esplicitamente.")
     tempo = float(ora_partenza_minuti)
     arrivi = {}
     attese = {}
@@ -1598,13 +1600,15 @@ def _simula_tempo_percorso_orari(ordine, durate, orari_apertura, ora_partenza_mi
     return {"arrivi": arrivi, "attese": attese, "servizi": servizi, "fine": tempo}
 
 
-def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=300):
+def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=None):
     """V10.2 TEST: un solo furgone + aperture + 12 min medi per fermata.
 
     OSRM fornisce i tempi stradali; OR-Tools decide l'ordine.
     Non esistono orari di chiusura nel DB, quindi ogni ORA valida e' trattata
     come "non prima di HH:MM". 01:00/blank = nessun vincolo.
     """
+    if ora_partenza_minuti is None:
+        raise ValueError("L'ora di partenza deve essere fornita esplicitamente.")
     try:
         from ortools.constraint_solver import pywrapcp, routing_enums_pb2
     except ImportError:
@@ -1650,8 +1654,8 @@ def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=
 
     tempo_callback = routing.RegisterTransitCallback(tempo_arco)
 
-    # Orizzonte: dalle 05:00 fino a fine giornata.  Il tempo e' espresso
-    # come minuti trascorsi dall'inizio del giro alle 05:00.
+    # Orizzonte: dall'ora effettiva di partenza fino a fine giornata.
+    # Il tempo interno e' espresso come minuti trascorsi dall'inizio del giro.
     fine_giornata = 24 * 60
     slack_massimo = fine_giornata
     routing.AddDimension(
@@ -1728,13 +1732,15 @@ def _ottimizza_con_ortools_orari(distanze, durate, df_giro, ora_partenza_minuti=
     }
 
 
-def ottimizza_giro_orari_test(df_giro, df_db=None, ora_partenza_minuti=300):
+def ottimizza_giro_orari_test(df_giro, df_db=None, ora_partenza_minuti=None):
     """V10.2 TEST ORARI: aperture + 12 min medi di servizio per fermata.
 
     E' una modalita' separata: non usa ZONA come criterio.
     01:00 e' sconosciuto e quindi non impone alcun vincolo temporale.
     Ogni cliente aggiunge 12 minuti di parcheggio + scarico al giro.
     """
+    if ora_partenza_minuti is None:
+        raise ValueError("L'ora di partenza deve essere fornita esplicitamente.")
     if df_giro is None or df_giro.empty:
         raise ValueError("Il giro è vuoto.")
     if len(df_giro) > 99:
@@ -2860,7 +2866,7 @@ def _acquisisci_gps_e_salva():
             'longitude': float(lon),
             'accuracy_m': float(accuracy) if accuracy is not None else None,
             'timestamp': timestamp_sec,
-            'timestamp_iso': (datetime.fromtimestamp(timestamp_sec, tz=ZoneInfo('Europe/Rome')).isoformat(timespec='seconds') if ZoneInfo else datetime.fromtimestamp(timestamp_sec).isoformat(timespec='seconds')),
+            'timestamp_iso': datetime.fromtimestamp(timestamp_sec).isoformat(timespec='seconds'),
             'via': '',
             'comune': '',
         }
@@ -2942,7 +2948,7 @@ if hasattr(st, 'fragment'):
                 acc = st.session_state.get('gps_accuracy')
                 acc_txt = f"±{acc:.0f} m" if isinstance(acc, (int, float)) else "accuratezza n/d"
                 ts = st.session_state.get('gps_timestamp')
-                ora_gps = _formatta_ora_timestamp(ts) if ts else "--:--:--"
+                ora_gps = datetime.fromtimestamp(float(ts)).strftime('%H:%M:%S') if ts else "--:--:--"
                 st.metric("Ultima posizione", ora_gps, acc_txt)
 
             st.caption("FASE TEST: la posizione viene salvata come ultima posizione GPS del conducente. Il tracking continua finche' questa pagina resta aperta.")
@@ -4359,7 +4365,7 @@ else:
         st.markdown("---")
         st.subheader("🧠 Anteprima percorso ottimizzato")
         if str(m.get("metodo", "")).startswith("ORARI"):
-            st.caption("Start e fine giro: Dolciaria Acquaviva — Via Enrico Fermi 10, Burago di Molgora. Partenza test alle 05:00. 01:00 = orario sconosciuto, quindi nessun vincolo.")
+            st.caption("Start e fine giro: Dolciaria Acquaviva — Via Enrico Fermi 10, Burago di Molgora. Partenza basata sull'orario effettivo del giro. 01:00 = orario sconosciuto, quindi nessun vincolo.")
             st.info(f"🕐 Orari conosciuti: **{m.get('orari_conosciuti', 0)}** — sconosciuti (01:00/vuoti): **{m.get('orari_sconosciuti', 0)}** — attesa totale: **{m.get('attesa_totale_min', 0)} min**")
         else:
             st.caption("Start e fine giro: Dolciaria Acquaviva — Via Enrico Fermi 10, Burago di Molgora. Il campo ORA non viene usato per l'ottimizzazione V9.")
