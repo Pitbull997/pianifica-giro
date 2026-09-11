@@ -3893,7 +3893,6 @@ else:
             # La chiamata al componente resta fuori dal callback del pulsante.
             if (st.session_state.get("gps_attivo", False)
                     and not st.session_state.get("giro_terminato", False)):
-                _acquisisci_gps_e_salva()
                 _gps_live_refresh()
             if st.button("↩️ TORNA A VISTA RIEPILOGO", use_container_width=True, key="btn_torna_riepilogo_campo"):
                 st.session_state.vista_giro = "RIEPILOGO"
