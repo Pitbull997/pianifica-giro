@@ -3706,6 +3706,15 @@ def _garantisci_arrivo_da_gps_corrente(idx):
         return None
     return st.session_state.get("gps_arrivi_clienti", {}).get(_chiave_cliente_visita(df.iloc[idx]))
 
+def _formatta_ora_timestamp(ts):
+    """Formatta un timestamp Unix nell'ora locale italiana (Europe/Rome)."""
+    try:
+        dt = datetime.fromtimestamp(float(ts), tz=ZoneInfo("Europe/Rome") if ZoneInfo else None)
+        return dt.strftime("%H:%M:%S")
+    except Exception:
+        return ""
+
+
 def registra_visita_su_registro(idx, stato, colli_consegnati, fine_servizio_ts=None):
     """Scrive una visita conclusa in RegistroVisite. La colonna DATA e' tecnica per lo storico."""
     if not sheet_registro or not st.session_state.get("utente_corrente"):
