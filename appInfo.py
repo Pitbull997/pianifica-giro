@@ -1,4 +1,4 @@
-# V10.5.7 - GPS LIVE: nuova acquisizione ogni 60s + aggiornamento completo mappa/riquadro
+# V10.5.8 V3 - GPS LIVE: base GPS V10.5.4 + ETA OSRM V2
 import streamlit as st
 import pandas as pd
 import urllib.parse
@@ -2808,14 +2808,7 @@ def _acquisisci_gps_e_salva():
         st.session_state.gps_errore = "Modulo GPS non installato."
         return False
     try:
-        # Usiamo una chiave COMPONENTE diversa ad ogni acquisizione.
-        # get_geolocation() e' una chiamata singola del browser: con la stessa
-        # chiave il componente puo' restituire il risultato precedente.
-        # Una nuova chiave forza invece una nuova richiesta al GPS del telefono.
-        contatore = int(st.session_state.get("gps_component_counter", 0)) + 1
-        st.session_state.gps_component_counter = contatore
-        component_key = f"GPS_LIVE_{contatore}"
-        loc = get_geolocation(component_key=component_key)
+        loc = get_geolocation()
         if not loc:
             st.session_state.gps_errore = 'Il telefono non ha ancora restituito la posizione GPS. Verifica il permesso di posizione del browser e attendi qualche secondo.'
             return False
@@ -2860,19 +2853,14 @@ def _acquisisci_gps_e_salva():
                 timeout=8,
             )
             if risposta.status_code == 200:
-                dati_reverse = risposta.json() or {}
-                indirizzo = dati_reverse.get('address', {}) or {}
-                via = (indirizzo.get('road') or indirizzo.get('pedestrian')
-                       or indirizzo.get('footway') or indirizzo.get('path') or '')
+                indirizzo = risposta.json().get('address', {}) or {}
+                via = indirizzo.get('road') or indirizzo.get('pedestrian') or indirizzo.get('footway') or indirizzo.get('path') or ''
                 numero = indirizzo.get('house_number') or ''
-                # Nominatim puo' restituire il comune in campi diversi a seconda
-                # della zona. Li proviamo in ordine dal piu' preciso al piu' generale.
-                comune = (indirizzo.get('city') or indirizzo.get('town')
-                          or indirizzo.get('village') or indirizzo.get('municipality')
-                          or indirizzo.get('city_district') or indirizzo.get('suburb') or '')
+                comune = (indirizzo.get('city') or indirizzo.get('town') or indirizzo.get('village')
+                          or indirizzo.get('municipality') or indirizzo.get('city_district') or '')
                 posizione['via'] = f"{via} {numero}".strip() if via else ''
                 posizione['comune'] = str(comune).strip()
-                posizione['display_name'] = dati_reverse.get('display_name', '')
+                posizione['display_name'] = risposta.json().get('display_name', '')
         except Exception:
             pass
         st.session_state.gps_latitudine = posizione['latitude']
@@ -2889,37 +2877,13 @@ def _acquisisci_gps_e_salva():
         return False
 
 
+
 if hasattr(st, 'fragment'):
     @st.fragment(run_every="60s")
     def _gps_live_refresh():
-        """Aggiorna il GPS ogni 60 secondi e poi ricarica tutta la pagina.
-
-        Il fragment da solo ridisegna soltanto la propria area. Siccome
-        POSIZIONE ATTUALE e mappa sono nel corpo principale della CAMPO,
-        dopo una nuova lettura GPS facciamo un rerun dell'intera app: in questo
-        modo coordinate, mappa e riquadro scritto vengono aggiornati insieme.
-
-        Dopo il rerun completo evitiamo una seconda acquisizione immediata
-        usando un piccolo intervallo di protezione. Il prossimo tentativo
-        avverra' quindi con il normale intervallo di 60 secondi.
-        """
         if (st.session_state.get('gps_attivo', False)
                 and not st.session_state.get('giro_terminato', False)):
-            adesso = time.time()
-            ultimo_tentativo = float(st.session_state.get('gps_ultimo_tentativo', 0) or 0)
-
-            # Evita una doppia acquisizione durante il rerun completo
-            # generato subito dopo una lettura GPS riuscita.
-            if adesso - ultimo_tentativo < 5:
-                return
-
-            st.session_state.gps_ultimo_tentativo = adesso
-            aggiornato = _acquisisci_gps_e_salva()
-
-            if aggiornato:
-                # Aggiorna anche gli elementi che stanno fuori dal fragment:
-                # mappa GPS e riquadro POSIZIONE ATTUALE.
-                st.rerun()
+            _acquisisci_gps_e_salva()
 else:
     def _gps_live_refresh():
         pass
@@ -3905,10 +3869,6 @@ elif not st.session_state.autenticato and st.session_state.pagina_attiva == "log
 # APPLICAZIONE PRINCIPALE (ACCESSO CONSENTITO)
 # ==========================================
 else:
-    # GPS LIVE globale: resta attivo anche passando tra PREPARAZIONE, RIEPILOGO e CAMPO.
-    # Il fragment viene eseguito una sola volta per ogni rerun dell'app.
-    _gps_live_refresh()
-
     if st.session_state.vista_giro == "CAMPO":
         # Testata CAMPO compatta: nessun logo, utente o LOGOUT durante la guida.
         campo_h1, campo_h2 = st.columns([3.7, 1.3], gap="small")
@@ -3928,6 +3888,13 @@ else:
             st.markdown('<div style="height:2px"></div>', unsafe_allow_html=True)
             _mostra_comando_gps("btn_gps_campo_header")
             st.markdown('<div style="height:5px"></div>', unsafe_allow_html=True)
+
+            # GPS: acquisizione principale come nella V10.5.4 verificata funzionante.
+            # La chiamata al componente resta fuori dal callback del pulsante.
+            if (st.session_state.get("gps_attivo", False)
+                    and not st.session_state.get("giro_terminato", False)):
+                _acquisisci_gps_e_salva()
+                _gps_live_refresh()
             if st.button("↩️ TORNA A VISTA RIEPILOGO", use_container_width=True, key="btn_torna_riepilogo_campo"):
                 st.session_state.vista_giro = "RIEPILOGO"
                 st.rerun()
