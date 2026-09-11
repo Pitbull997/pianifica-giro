@@ -1,3 +1,4 @@
+# V10.5.7 - GPS LIVE: nuova acquisizione ogni 60s + aggiornamento completo mappa/riquadro
 import streamlit as st
 import pandas as pd
 import urllib.parse
@@ -15,6 +16,13 @@ from io import BytesIO
 import gspread
 from google.oauth2.service_account import Credentials
 
+# GPS smartphone - prima fase VanGo Test.
+try:
+    from streamlit_js_eval import get_geolocation
+except ImportError:
+    get_geolocation = None
+
+
 # Configurazione Pagina
 st.set_page_config(
     page_title="VanGo - Giro Consegne",
@@ -24,7 +32,11 @@ st.set_page_config(
 )
 
 # Stati consegna: definiti PRIMA di qualsiasi uso nel codice.
-VERSIONE_VANGO = "V10_5_0_prime_8_giro_reale_osrm.py"
+VERSIONE_VANGO = "V10_5_8_V2_OSRM_ETA_TEST.py"
+
+# DATABASE GOOGLE SHEETS DEDICATO A QUESTA ISTANZA VANGO.
+# Non usare open() per titolo: ogni ramo deve essere isolato dal database dell'altro ramo.
+VANGO_SPREADSHEET_ID = "1OMdvDb7Ttgj6lZxr3kinLqv3Gry130RSXo7xnZaLyRE"
 STATO_DA_FARE = "⚪ DA CONSEGNARE"
 STATO_FATTO = "🟢 FATTO"
 STATO_PARZIALE = "🟡 PARZIALE"
@@ -386,21 +398,98 @@ def _percorso_da_indici(indici, distanze, durate):
         totale_s += float(t)
     return totale_m, totale_s
 
-def calcola_metriche_giro_campo(df_giro, df_db):
-    """Calcola KM e tempo della parte di giro ancora da fare in CAMPO.
+def _origine_live_giro(df_giro, df_db):
+    """Restituisce l'origine operativa del giro per il calcolo CAMPO.
 
-    L'origine e' l'ultima consegna gia' gestita; se non ce n'e' una, parte dal
-    deposito. Include tutte le fermate ancora da consegnare nell'ordine corrente
-    e il rientro al deposito. Non modifica il giro e non riottimizza nulla.
+    V10.5.8 TEST: per il confronto avanzamento NON usa il GPS.
+    L'origine e' sempre l'ultima consegna gestita (FATTO/PARZIALE/RESPINTO);
+    se non esiste ancora una consegna gestita, parte dal deposito.
+    Non modifica mai l'ordine del giro.
+    """
+    if df_giro is not None and not df_giro.empty:
+        df = df_giro.copy().reset_index(drop=True)
+        if "STATO" not in df.columns:
+            df["STATO"] = STATO_DA_FARE
+        stati_gestiti = [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
+        gestiti = df[df["STATO"].fillna("").astype(str).str.strip().isin(stati_gestiti)]
+        if not gestiti.empty:
+            ultima_gestita = gestiti.iloc[-1]
+            origine = _trova_coordinate_nel_db(ultima_gestita, df_db)
+            if origine is not None:
+                return origine
+    return COORDINATE_DEPOSITO_VANGO
+
+def _calcola_tempo_residuo_live(df_giro, df_db, coordinate):
+    """Calcola il tempo residuo reale: strada + servizio + eventuali attese.
+
+    Il percorso resta nell'ordine gia' presente nel giro. OSRM aggiorna solo i
+    tempi a partire dalla posizione attuale, non decide un nuovo ordine.
+    """
+    if not coordinate or len(coordinate) < 2:
+        return {"minuti_strada": 0.0, "minuti_servizio": 0.0, "minuti_attesa": 0.0, "minuti_totali": 0.0}
+
+    distanze, durate = _richiedi_matrice_osrm(coordinate)
+    ordine = list(range(len(coordinate)))
+    km, secondi = _percorso_da_indici(ordine, distanze, durate)
+    minuti_strada = float(secondi) / 60.0
+
+    n_pendenti = max(0, len(coordinate) - 2)  # origine + clienti pendenti + deposito
+    minuti_servizio = float(n_pendenti * MINUTI_SERVIZIO_PER_FERMATA)
+    minuti_attesa = 0.0
+
+    # Le attese vengono ricalcolate in tempo reale solo nella modalita' ORARI.
+    # 01:00/blank resta "orario sconosciuto" e non genera attesa.
+    if n_pendenti > 0 and _metodo_previsione_usa_orari():
+        orari_apertura = []
+        for _, row in df_giro.iterrows():
+            orari_apertura.append(_parse_orario_apertura(row.get("ORA", "")))
+        try:
+            tz = ZoneInfo("Europe/Rome") if ZoneInfo is not None else None
+            adesso = datetime.now(tz) if tz else datetime.now()
+            ora_corrente = adesso.hour * 60 + adesso.minute + adesso.second / 60.0
+        except Exception:
+            ora_corrente = _ora_partenza_reale_minuti()
+        simulazione = _simula_tempo_percorso_orari(
+            ordine,
+            durate,
+            orari_apertura,
+            ora_partenza_minuti=ora_corrente,
+            minuti_servizio=MINUTI_SERVIZIO_PER_FERMATA,
+        )
+        if simulazione is not None:
+            minuti_attesa = float(sum(simulazione.get("attese", {}).values()))
+            # La simulazione e' la fonte piu' precisa del tempo residuo quando
+            # esistono finestre di apertura: strada + servizio + attese.
+            minuti_totali = max(0.0, float(simulazione.get("fine", ora_corrente)) - float(ora_corrente))
+        else:
+            minuti_totali = minuti_strada + minuti_servizio
+    else:
+        minuti_totali = minuti_strada + minuti_servizio
+
+    return {
+        "km": float(km) / 1000.0,
+        "minuti": float(minuti_totali),
+        "minuti_strada": float(minuti_strada),
+        "minuti_servizio": float(minuti_servizio),
+        "minuti_attesa": float(minuti_attesa),
+    }
+
+
+def calcola_metriche_giro_campo(df_giro, df_db):
+    """Calcola in tempo reale il percorso ancora da fare in CAMPO.
+
+    V10.5.8 TEST: OSRM parte sempre dall'ultima consegna gestita;
+    se non c'e' ancora una consegna gestita, parte dal deposito. Il GPS non
+    viene usato per questo calcolo.
+
+    IMPORTANTE: OSRM ricalcola esclusivamente distanze e tempi. L'ordine delle
+    fermate rimane identico a quello gia' presente nel giro: nessuna
+    riottimizzazione automatica.
     """
     if df_giro is None or df_giro.empty:
-        return {"km": 0.0, "minuti": 0.0}
+        return {"km": 0.0, "minuti": 0.0, "minuti_strada": 0.0, "minuti_servizio": 0.0, "minuti_attesa": 0.0}
 
     df = df_giro.copy().reset_index(drop=True)
-    # Protezione: alcuni DataFrame prodotti dall'ottimizzatore possono contenere
-    # colonne duplicate. Con colonne duplicate, df.at[...] puo' generare
-    # "TypeError" quando assegniamo un singolo valore. Manteniamo la prima
-    # occorrenza di ogni nome, evitando di interrompere APPLICA GIRO OTTIMIZZATO.
     if df.columns.duplicated().any():
         df = df.loc[:, ~df.columns.duplicated(keep="first")].copy()
     if "STATO" not in df.columns:
@@ -409,28 +498,14 @@ def calcola_metriche_giro_campo(df_giro, df_db):
 
     stati_gestiti = [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
     pendenti = df[~df["STATO"].isin(stati_gestiti)].copy().reset_index(drop=True)
+    origine = _origine_live_giro(df, df_db)
 
-    gestiti = df[df["STATO"].isin(stati_gestiti)]
-    if not gestiti.empty:
-        ultima_gestita = gestiti.iloc[-1]
-        origine = _trova_coordinate_nel_db(ultima_gestita, df_db)
-        if origine is None:
-            origine = COORDINATE_DEPOSITO_VANGO
-    else:
-        origine = COORDINATE_DEPOSITO_VANGO
-
-    # A fine consegne resta comunque il rientro dall'ultima fermata alla sede.
     if pendenti.empty:
         coordinate = [origine, COORDINATE_DEPOSITO_VANGO]
         try:
-            distanze, durate = _richiedi_matrice_osrm(coordinate)
-            d = distanze[0][1]
-            t = durate[0][1]
-            if d is None or t is None:
-                return {"km": 0.0, "minuti": 0.0}
-            return {"km": float(d) / 1000.0, "minuti": float(t) / 60.0}
+            return _calcola_tempo_residuo_live(df.iloc[0:0], df_db, coordinate)
         except Exception:
-            return {"km": 0.0, "minuti": 0.0}
+            return {"km": 0.0, "minuti": 0.0, "minuti_strada": 0.0, "minuti_servizio": 0.0, "minuti_attesa": 0.0}
 
     coordinate = [origine]
     for _, row in pendenti.iterrows():
@@ -440,10 +515,10 @@ def calcola_metriche_giro_campo(df_giro, df_db):
         coordinate.append(coord)
     coordinate.append(COORDINATE_DEPOSITO_VANGO)
 
-    distanze, durate = _richiedi_matrice_osrm(coordinate)
-    ordine = list(range(len(coordinate)))
-    km, secondi = _percorso_da_indici(ordine, distanze, durate)
-    return {"km": km / 1000.0, "minuti": secondi / 60.0}
+    try:
+        return _calcola_tempo_residuo_live(pendenti, df_db, coordinate)
+    except Exception:
+        return None
 
 
 def calcola_metriche_giro_corrente(df_giro, df_db):
@@ -572,11 +647,7 @@ def _calcola_previsione_cumulativa_giro(df_giro, df_db):
         return df, None
 
     usa_orari = _metodo_previsione_usa_orari()
-    # Prima di INIZIA GIRO usiamo solo un riferimento di pianificazione
-    # per le aperture, non una partenza reale. La partenza reale resta None.
     ora_partenza = _ora_partenza_reale_minuti()
-    if ora_partenza is None:
-        ora_partenza = 300.0  # 05:00: riferimento di pianificazione ORARI
     tempo_cumulativo = float(base_cumulativa)
 
     for pos, idx in enumerate(pendenti_idx, start=1):
@@ -1365,39 +1436,39 @@ def _formatta_durata_hm(minuti):
     return f"{ore}h {minuti_restanti:02d}m" if ore > 0 else f"{minuti_restanti}m"
 
 
-def _ora_partenza_reale_minuti():
-    """Restituisce l'ora di partenza REALE solo dopo INIZIA GIRO.
+def _timestamp_oggi_alle_0520():
+    """Timestamp locale Europe/Rome di oggi alle 05:20, usato come fallback."""
+    try:
+        tz = ZoneInfo("Europe/Rome") if ZoneInfo is not None else None
+        adesso = datetime.now(tz) if tz else datetime.now()
+        dt = adesso.replace(hour=5, minute=20, second=0, microsecond=0)
+        return dt.timestamp()
+    except Exception:
+        adesso = datetime.now()
+        return adesso.replace(hour=5, minute=20, second=0, microsecond=0).timestamp()
 
-    Prima di INIZIA GIRO restituisce None: non esiste alcuna partenza
-    automatica o implicita.
+
+def _ora_partenza_reale_minuti():
+    """Restituisce l'ora di partenza effettiva in minuti dalla mezzanotte.
+
+    Se INIZIA GIRO e' stato premuto, usa il timestamp registrato.
+    Altrimenti usa il fallback operativo delle 05:20.
     """
     timestamp = st.session_state.get("inizio_giro_reale")
     if timestamp is None:
-        return None
+        timestamp = _timestamp_oggi_alle_0520()
     try:
         tz = ZoneInfo("Europe/Rome") if ZoneInfo is not None else None
         dt = datetime.fromtimestamp(float(timestamp), tz) if tz else datetime.fromtimestamp(float(timestamp))
         return dt.hour * 60 + dt.minute + dt.second / 60.0
     except Exception:
-        return None
-
-
-def _ora_corrente_minuti():
-    """Ora corrente usata SOLO come riferimento di pianificazione ORARI.
-
-    Non rappresenta mai l'inizio reale del giro.
-    """
-    try:
-        tz = ZoneInfo("Europe/Rome") if ZoneInfo is not None else None
-        dt = datetime.now(tz) if tz else datetime.now()
-        return dt.hour * 60 + dt.minute + dt.second / 60.0
-    except Exception:
-        return 0.0
+        return 320.0
 
 
 def _formatta_ora_partenza_reale():
     minuti = _ora_partenza_reale_minuti()
-    return "--:--" if minuti is None else _formatta_ora_minuti(round(minuti))
+    return _formatta_ora_minuti(round(minuti))
+
 
 def _assicura_colonne_colli(df):
     """Garantisce le colonne operative dei colli senza alterare Q.ta."""
@@ -1444,29 +1515,133 @@ def _minuti_trascorsi_da_inizio_giro():
         return 0.0
     return max(0.0, trascorsi - _minuti_fermo_totali())
 
+
 def _stato_avanzamento_giro(fermate_completate, fermate_totali, previsto_totale_min):
-    """Confronta il tempo reale con il valore cumulativo dell'ultima fermata gestita."""
+    """Confronta ETA prevista e ETA live della prossima fermata.
+
+    V2 ETA OSRM: l'origine e' l'ultima consegna gestita (FATTO/PARZIALE/
+    RESPINTO); OSRM calcola la tratta stradale fino alla prima fermata ancora
+    da consegnare nell'ordine corrente. Il GPS non viene usato per questo
+    calcolo. L'ETA live parte dall'ora attuale e viene corretta per l'eventuale
+    attesa dovuta all'orario di apertura della prossima fermata.
+
+    Il giro non viene mai riordinato e non viene riottimizzato.
+    """
     if not fermate_totali or not fermate_completate:
         return None
+
     df = st.session_state.get("giro_corrente")
-    if df is None or df.empty or "MIN_PREVISTI_CUMULATIVI" not in df.columns:
+    if df is None or df.empty:
         return None
+
     stati_gestiti = [STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO]
-    stati = df.get("STATO", pd.Series([STATO_DA_FARE] * len(df))).fillna("").astype(str).str.strip()
+    stati = df.get(
+        "STATO", pd.Series([STATO_DA_FARE] * len(df), index=df.index)
+    ).fillna("").astype(str).str.strip()
     gestiti = df[stati.isin(stati_gestiti)]
-    if gestiti.empty:
+    pendenti = df[~stati.isin(stati_gestiti)]
+    if gestiti.empty or pendenti.empty:
         return None
-    previsto_arrivo = _numero_minuti_cumulativi(gestiti.iloc[-1].get("MIN_PREVISTI_CUMULATIVI"))
+
+    ultima_gestita = gestiti.iloc[-1]
+    prossima = pendenti.iloc[0]
+
+    # Coordinate: ultima consegna -> prossima consegna. Mai GPS.
+    df_db = st.session_state.get("db_clienti")
+    origine = _trova_coordinate_nel_db(ultima_gestita, df_db)
+    destinazione = _trova_coordinate_nel_db(prossima, df_db)
+    if origine is None or destinazione is None:
+        return None
+
+    # Il valore previsto della prossima fermata e' il cumulativo gia'
+    # calcolato sul giro. E' un tempo relativo all'inizio del giro.
+    previsto_arrivo = _numero_minuti_cumulativi(
+        prossima.get("MIN_PREVISTI_CUMULATIVI")
+    )
     if previsto_arrivo is None:
         return None
-    tempo_reale = _minuti_trascorsi_da_inizio_giro()
-    scarto = previsto_arrivo - tempo_reale
+
+    try:
+        tz = ZoneInfo("Europe/Rome") if ZoneInfo is not None else None
+        adesso = datetime.now(tz) if tz else datetime.now()
+        ora_attuale = (
+            adesso.hour * 60 + adesso.minute + adesso.second / 60.0
+        )
+    except Exception:
+        ora_attuale = _ora_partenza_reale_minuti()
+
+    # Cache breve: evita di interrogare il server OSRM piu' volte durante
+    # lo stesso minuto/rerun, ma permette di aggiornare la stima durante il giro.
+    cache = st.session_state.get("eta_osrm_prossima") or {}
+    firma = (
+        str(ultima_gestita.get("CLIENTE", "")),
+        str(prossima.get("CLIENTE", "")),
+        str(ultima_gestita.get("VIA", "")),
+        str(prossima.get("VIA", "")),
+    )
+    adesso_ts = time.time()
+    durata_strada_min = None
+    if cache.get("firma") == firma and adesso_ts - float(cache.get("timestamp", 0) or 0) < 60:
+        try:
+            durata_strada_min = float(cache.get("minuti_strada"))
+        except Exception:
+            durata_strada_min = None
+
+    if durata_strada_min is None:
+        try:
+            distanze, durate = _richiedi_matrice_osrm([origine, destinazione])
+            durata = durate[0][1]
+            if durata is None:
+                return None
+            durata_strada_min = max(0.0, float(durata) / 60.0)
+            st.session_state.eta_osrm_prossima = {
+                "firma": firma,
+                "timestamp": adesso_ts,
+                "minuti_strada": durata_strada_min,
+            }
+        except Exception:
+            return None
+
+    eta_live = ora_attuale + durata_strada_min
+
+    # Se la prossima consegna ha un orario di apertura noto, l'ETA non puo'
+    # essere precedente all'apertura. Il valore 01:00 resta sconosciuto.
+    apertura = _parse_orario_apertura(prossima.get("ORA", ""))
+    if apertura is not None:
+        eta_live = max(eta_live, float(apertura))
+
+    # L'ETA prevista assoluta nasce dall'orario di partenza previsto/reale
+    # usato per costruire i cumulativi.
+    ora_partenza = _ora_partenza_reale_minuti()
+    previsto_assoluto = float(ora_partenza) + float(previsto_arrivo)
+
+    scarto = previsto_assoluto - eta_live
     SOGLIA_IN_LINEA_MIN = 5
+
+    previsto_txt = _formatta_ora_minuti(round(previsto_assoluto))
+    stimato_txt = _formatta_ora_minuti(round(eta_live))
+    dettaglio_base = f"Prossima: {prossima.get('CLIENTE', 'cliente')} · previsto {previsto_txt} · stimato {stimato_txt}"
+
     if abs(scarto) < SOGLIA_IN_LINEA_MIN:
-        return {"emoji":"🟡","colore":"#F59E0B","testo":"In linea con la previsione","dettaglio":f"scarto di {_formatta_durata_hm(abs(scarto))}"}
+        return {
+            "emoji": "🟡",
+            "colore": "#F59E0B",
+            "testo": "In linea con la previsione",
+            "dettaglio": f"{dettaglio_base} · scarto di {_formatta_durata_hm(abs(scarto))}",
+        }
     if scarto > 0:
-        return {"emoji":"🟢","colore":"#22C55E","testo":f"In anticipo di {_formatta_durata_hm(scarto)}","dettaglio":"rispetto all'arrivo previsto"}
-    return {"emoji":"🔴","colore":"#EF4444","testo":f"In ritardo di {_formatta_durata_hm(abs(scarto))}","dettaglio":"rispetto all'arrivo previsto"}
+        return {
+            "emoji": "🟢",
+            "colore": "#22C55E",
+            "testo": f"In anticipo di {_formatta_durata_hm(scarto)}",
+            "dettaglio": f"{dettaglio_base} · rispetto all'arrivo previsto",
+        }
+    return {
+        "emoji": "🔴",
+        "colore": "#EF4444",
+        "testo": f"In ritardo di {_formatta_durata_hm(abs(scarto))}",
+        "dettaglio": f"{dettaglio_base} · rispetto all'arrivo previsto",
+    }
 
 
 def _simula_tempo_percorso_orari(ordine, durate, orari_apertura, ora_partenza_minuti=300, minuti_servizio=MINUTI_SERVIZIO_PER_FERMATA):
@@ -1809,17 +1984,12 @@ SOGLIA_MATCH_VERDE = 0.55  # sopra: abbinamento proposto come affidabile (verde)
 # Due formati supportati:
 # 1) tabella completa: CODICE  TRATTA  CLIENTE ... COLLI
 # 2) lista semplice: CLIENTE  COLLI (es. "RILOCA GELATERIA CAFFETTE 5,00")
-# Le quantita' possono arrivare dall'OCR in formati diversi:
-#   5 / 5,0 / 5.0 / 5,00 / 5.00
-# Il vecchio parser accettava SOLO il formato con due decimali
-# (es. 5,00), quindi una tabella come "IL LATO DOLCE ... 5"
-# veniva letta dall'OCR ma poi scartata completamente.
 RIGA_OCR_PATTERN = __import__("re").compile(
-    r"^\D*(\d{6,12})\s+([A-Z0-9\-]{2,15})\s+(.+?)\s+(\d{1,4})(?:[.,](\d{1,2}))?\s*$",
+    r"^\D*(\d{6,12})\s+([A-Z0-9\-]{2,15})\s+(.+?)\s+(\d{1,4})[.,](\d{2})\s*$",
     __import__("re").IGNORECASE,
 )
 RIGA_OCR_SEMPLICE_PATTERN = __import__("re").compile(
-    r"^(.+?)\s+(\d{1,4})(?:[.,](\d{1,2}))?\s*$",
+    r"^(.+?)\s+(\d{1,4})[.,](\d{2})\s*$",
     __import__("re").IGNORECASE,
 )
 
@@ -1941,11 +2111,8 @@ def _righe_grezze_da_testo_ocr(testo):
         if m:
             codice, tratta, testo_grezzo, colli_int, colli_dec = m.groups()
             try:
-                colli = float(
-                    colli_int if not colli_dec
-                    else f"{colli_int}.{colli_dec}"
-                )
-            except (TypeError, ValueError):
+                colli = float(f"{colli_int}.{colli_dec}")
+            except ValueError:
                 colli = None
             righe.append({
                 "codice": codice,
@@ -1969,11 +2136,8 @@ def _righe_grezze_da_testo_ocr(testo):
                 continue
 
             try:
-                colli = float(
-                    colli_int if not colli_dec
-                    else f"{colli_int}.{colli_dec}"
-                )
-            except (TypeError, ValueError):
+                colli = float(f"{colli_int}.{colli_dec}")
+            except ValueError:
                 colli = None
 
             righe.append({
@@ -2193,7 +2357,7 @@ def init_google_sheets():
 # Connessione al foglio Google e alle relative schede
 try:
     client_gs = init_google_sheets()
-    sh = client_gs.open("VanGo Database")
+    sh = client_gs.open_by_key(VANGO_SPREADSHEET_ID)
     
     try:
         sheet_db = sh.worksheet("Foglio1")
@@ -2646,6 +2810,197 @@ def salva_giro_utente_su_sheets(nome_utente, df_nuovo_giro):
     return False
 
 
+# ============================================================
+# GPS LIVE SMARTPHONE - V10.5.1 TEST
+# ============================================================
+GPS_UTENTE_PREFIX = "__VANGO_GPS__::"
+GPS_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
+
+
+def _gps_utente(nome_utente):
+    return f"{GPS_UTENTE_PREFIX}{str(nome_utente).strip()}"
+
+
+def salva_posizione_gps_su_sheets(nome_utente, posizione):
+    """Salva SOLO l'ultima posizione GPS del conducente in GiroAttivo.
+
+    La posizione viene mantenuta in una riga tecnica separata e non viene mai
+    interpretata come cliente del giro. In produzione questa parte potra'
+    essere spostata su un backend dedicato senza cambiare l'interfaccia GPS.
+    """
+    if not sheet_giro or not nome_utente or not posizione:
+        return False
+    try:
+        import json as _json
+        payload = _json.dumps(_json_sicuro(posizione), ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        utente_gps = _gps_utente(nome_utente)
+        cols = ['UTENTE', 'POSIZIONE', 'CLIENTE', 'COMUNE', 'VIA', 'ORA', 'Q.ta',
+                'COLLI_CONSEGNATI', 'COLLI_RIFIUTATI', 'COLLI_DA_RENDERE', 'STATO',
+                'MIN_TRATTA_PREVISTA', 'MIN_PREVISTI_CUMULATIVI', 'TIPO_RIGA', 'BACKUP_JSON']
+        valori = sheet_giro.get_all_values()
+        if not valori:
+            sheet_giro.append_row(cols, value_input_option="USER_ENTERED")
+            valori = [cols]
+        header = [str(x).strip() for x in valori[0]]
+        # Se il foglio non ha ancora tutte le colonne tecniche, non tocchiamo
+        # la struttura: la posizione verra' salvata solo se le colonne esistono.
+        if not all(c in header for c in cols):
+            return False
+        indice_utente = header.index('UTENTE')
+        riga_esistente = None
+        for n, riga in enumerate(valori[1:], start=2):
+            if len(riga) > indice_utente and str(riga[indice_utente]).strip().lower() == utente_gps.lower():
+                riga_esistente = n
+                break
+        nuova = {c: '' for c in cols}
+        # Salviamo anche l'indirizzo leggibile ottenuto dal reverse geocoding.
+        # In GiroAttivo: VIA = strada (+ numero civico), COMUNE = paese/citta'.
+        nuova.update({
+            'UTENTE': utente_gps,
+            'POSIZIONE': str(posizione.get('timestamp_iso', '')),
+            'CLIENTE': 'GPS LIVE',
+            'COMUNE': str(posizione.get('comune', '') or ''),
+            'VIA': str(posizione.get('via', '') or ''),
+            'TIPO_RIGA': 'GPS_LIVE',
+            'BACKUP_JSON': payload,
+        })
+        valori_riga = [nuova[c] for c in cols]
+        if riga_esistente is None:
+            sheet_giro.append_row(valori_riga, value_input_option="USER_ENTERED")
+        else:
+            ultima_col = chr(64 + len(cols)) if len(cols) <= 26 else 'O'
+            sheet_giro.update(f"A{riga_esistente}:{ultima_col}{riga_esistente}", [valori_riga])
+        return True
+    except Exception:
+        return False
+
+
+def _acquisisci_gps_e_salva():
+    """Acquisisce la posizione corrente dal browser e salva l'ultima lettura."""
+    if get_geolocation is None:
+        st.session_state.gps_errore = "Modulo GPS non installato."
+        return False
+    try:
+        # Usiamo una chiave COMPONENTE diversa ad ogni acquisizione.
+        # get_geolocation() e' una chiamata singola del browser: con la stessa
+        # chiave il componente puo' restituire il risultato precedente.
+        # Una nuova chiave forza invece una nuova richiesta al GPS del telefono.
+        contatore = int(st.session_state.get("gps_component_counter", 0)) + 1
+        st.session_state.gps_component_counter = contatore
+        component_key = f"GPS_LIVE_{contatore}"
+        loc = get_geolocation(component_key=component_key)
+        if not loc:
+            st.session_state.gps_errore = 'Il telefono non ha ancora restituito la posizione GPS. Verifica il permesso di posizione del browser e attendi qualche secondo.'
+            return False
+        if 'error' in loc:
+            err = loc.get('error', {})
+            st.session_state.gps_errore = str(err.get('message', 'Posizione non disponibile.'))
+            return False
+        coords = loc.get('coords', loc)
+        lat = coords.get('latitude')
+        lon = coords.get('longitude')
+        if lat is None or lon is None:
+            st.session_state.gps_errore = "Il browser non ha restituito coordinate valide."
+            return False
+        accuracy = coords.get('accuracy')
+        timestamp = loc.get('timestamp') or time.time() * 1000
+        timestamp_sec = float(timestamp) / 1000.0 if float(timestamp) > 10000000000 else float(timestamp)
+        posizione = {
+            'latitude': float(lat),
+            'longitude': float(lon),
+            'accuracy_m': float(accuracy) if accuracy is not None else None,
+            'timestamp': timestamp_sec,
+            'timestamp_iso': datetime.fromtimestamp(timestamp_sec).isoformat(timespec='seconds'),
+            'via': '',
+            'comune': '',
+        }
+
+        # Reverse geocoding gratuito: trasformiamo le coordinate GPS in
+        # indirizzo leggibile da mostrare nel riquadro POSIZIONE ATTUALE.
+        try:
+            headers = {'User-Agent': 'VanGo-GPS/1.0'}
+            risposta = requests.get(
+                GPS_REVERSE_URL,
+                params={
+                    'lat': posizione['latitude'],
+                    'lon': posizione['longitude'],
+                    'format': 'jsonv2',
+                    'zoom': 18,
+                    'addressdetails': 1,
+                    'accept-language': 'it',
+                },
+                headers=headers,
+                timeout=8,
+            )
+            if risposta.status_code == 200:
+                dati_reverse = risposta.json() or {}
+                indirizzo = dati_reverse.get('address', {}) or {}
+                via = (indirizzo.get('road') or indirizzo.get('pedestrian')
+                       or indirizzo.get('footway') or indirizzo.get('path') or '')
+                numero = indirizzo.get('house_number') or ''
+                # Nominatim puo' restituire il comune in campi diversi a seconda
+                # della zona. Li proviamo in ordine dal piu' preciso al piu' generale.
+                comune = (indirizzo.get('city') or indirizzo.get('town')
+                          or indirizzo.get('village') or indirizzo.get('municipality')
+                          or indirizzo.get('city_district') or indirizzo.get('suburb') or '')
+                posizione['via'] = f"{via} {numero}".strip() if via else ''
+                posizione['comune'] = str(comune).strip()
+                posizione['display_name'] = dati_reverse.get('display_name', '')
+        except Exception:
+            pass
+        st.session_state.gps_latitudine = posizione['latitude']
+        st.session_state.gps_longitudine = posizione['longitude']
+        st.session_state.gps_accuracy = posizione['accuracy_m']
+        st.session_state.gps_timestamp = posizione['timestamp']
+        st.session_state.gps_errore = None
+        st.session_state.gps_via = posizione.get('via', '')
+        st.session_state.gps_comune = posizione.get('comune', '')
+        # Il nuovo punto GPS rende obsolete le metriche CAMPO precedenti.
+        # Al rerun successivo OSRM riparte dalla posizione appena letta.
+        st.session_state.metriche_giro_campo = None
+        st.session_state.firma_metriche_giro_campo = None
+        salva_posizione_gps_su_sheets(st.session_state.utente_corrente, posizione)
+        return True
+    except Exception as e:
+        st.session_state.gps_errore = str(e)
+        return False
+
+
+if hasattr(st, 'fragment'):
+    @st.fragment(run_every="60s")
+    def _gps_live_refresh():
+        """Aggiorna il GPS ogni 60 secondi e poi ricarica tutta la pagina.
+
+        Il fragment da solo ridisegna soltanto la propria area. Siccome
+        POSIZIONE ATTUALE e mappa sono nel corpo principale della CAMPO,
+        dopo una nuova lettura GPS facciamo un rerun dell'intera app: in questo
+        modo coordinate, mappa e riquadro scritto vengono aggiornati insieme.
+
+        Dopo il rerun completo evitiamo una seconda acquisizione immediata
+        usando un piccolo intervallo di protezione. Il prossimo tentativo
+        avverra' quindi con il normale intervallo di 60 secondi.
+        """
+        if (st.session_state.get('gps_attivo', False)
+                and not st.session_state.get('giro_terminato', False)):
+            adesso = time.time()
+            ultimo_tentativo = float(st.session_state.get('gps_ultimo_tentativo', 0) or 0)
+
+            # Evita una doppia acquisizione durante il rerun completo
+            # generato subito dopo una lettura GPS riuscita.
+            if adesso - ultimo_tentativo < 5:
+                return
+
+            st.session_state.gps_ultimo_tentativo = adesso
+            aggiornato = _acquisisci_gps_e_salva()
+
+            if aggiornato:
+                # Aggiorna anche gli elementi che stanno fuori dal fragment:
+                # mappa GPS e riquadro POSIZIONE ATTUALE.
+                st.rerun()
+else:
+    def _gps_live_refresh():
+        pass
+
 BACKUP_UTENTE_PREFIX = "__VANGO_BACKUP__::"
 GIRO_META_PREFIX = "__VANGO_META__::"
 
@@ -2822,6 +3177,10 @@ def salva_stato_consegna(idx, stato, colli_consegnati=None):
     df.at[idx, 'COLLI_RIFIUTATI'] = float(rifiutati)
     df.at[idx, 'COLLI_DA_RENDERE'] = float(rifiutati)
     st.session_state.giro_corrente = df
+    # Una consegna appena gestita cambia l'origine reale e quindi richiede
+    # una nuova chiamata OSRM per KM/tempo residui e ETA della prossima fermata.
+    st.session_state.metriche_giro_campo = None
+    st.session_state.firma_metriche_giro_campo = None
     st.session_state.fine_giro_reale = None
     st.session_state.giro_terminato = False
     salva_stato_giro_persistente(st.session_state.utente_corrente)
@@ -2933,17 +3292,7 @@ def sposta_cliente_pendente_nella_posizione(idx_reale, nuova_posizione):
     st.session_state.metriche_tempo_orari_corrente = None
     st.session_state.giro_ottimizzato_proposto = None
     st.session_state.metriche_ottimizzazione = None
-    # L'ordine e' cambiato: OSRM deve ricalcolare subito le tratte e i cumulativi.
-    try:
-        _assicura_previsione_cumulativa_giro(salva=False)
-    except Exception:
-        pass
-    salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
-    if st.session_state.get("utente_corrente"):
-        try:
-            salva_stato_giro_persistente(st.session_state.utente_corrente)
-        except Exception:
-            pass
+    salva_giro_utente_su_sheets(st.session_state.utente_corrente, df_nuovo)
     return True
 
 
@@ -2962,12 +3311,7 @@ def elimina_cliente_dal_giro(idx):
     st.session_state.giro_ottimizzato_proposto = None
     st.session_state.metriche_ottimizzazione = None
     st.session_state.conferma_eliminazione_idx = None
-    # Anche la rimozione di una fermata cambia le tratte: ricalcolo OSRM.
-    try:
-        _assicura_previsione_cumulativa_giro(salva=False)
-    except Exception:
-        pass
-    salva_giro_utente_su_sheets(st.session_state.utente_corrente, st.session_state.giro_corrente)
+    salva_giro_utente_su_sheets(st.session_state.utente_corrente, df)
     st.session_state.cliente_eliminato_messaggio = f"🗑️ {cliente} eliminato dal giro."
     st.rerun()
 
@@ -3292,6 +3636,20 @@ if 'minuti_fermo_mezzo' not in st.session_state:
     st.session_state.minuti_fermo_mezzo = 0.0
 if 'campo_parziale_idx' not in st.session_state:
     st.session_state.campo_parziale_idx = None
+
+# GPS live: stato della posizione dell'autista sul dispositivo corrente.
+if 'gps_attivo' not in st.session_state:
+    st.session_state.gps_attivo = False
+if 'gps_latitudine' not in st.session_state:
+    st.session_state.gps_latitudine = None
+if 'gps_longitudine' not in st.session_state:
+    st.session_state.gps_longitudine = None
+if 'gps_accuracy' not in st.session_state:
+    st.session_state.gps_accuracy = None
+if 'gps_timestamp' not in st.session_state:
+    st.session_state.gps_timestamp = None
+if 'gps_errore' not in st.session_state:
+    st.session_state.gps_errore = None
 
 if 'forza_gruppamento_zona' not in st.session_state:
     st.session_state.forza_gruppamento_zona = 50
@@ -4214,34 +4572,18 @@ else:
         # In CAMPO il tempo totale residuo rappresenta il lavoro che resta:
         # strada + servizio delle sole consegne pendenti + eventuali attese residue.
         if st.session_state.vista_giro == "CAMPO":
-            previsione_residua = st.session_state.get("previsione_giro") or {}
-            previsto_totale = previsione_residua.get("minuti")
-            residuo_da_previsione = None
-            if previsto_totale is not None:
-                try:
-                    df_tmp = _assicura_colonne_colli(st.session_state.giro_corrente.copy())
-                    stati_tmp = df_tmp["STATO"].fillna("").astype(str)
-                    gestiti_tmp = df_tmp[stati_tmp.isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO])]
-                    if gestiti_tmp.empty:
-                        residuo_da_previsione = float(previsto_totale)
-                    else:
-                        ultimo_cum = _numero_minuti_cumulativi(gestiti_tmp.iloc[-1].get("MIN_PREVISTI_CUMULATIVI"))
-                        if ultimo_cum is not None:
-                            # Il cumulativo si ferma all'arrivo: il servizio del cliente
-                            # appena completato e' gia' stato svolto e quindi va escluso.
-                            residuo_da_previsione = max(0.0, float(previsto_totale) - float(ultimo_cum) - float(MINUTI_SERVIZIO_PER_FERMATA))
-                except Exception:
-                    residuo_da_previsione = None
-            tempo_reale_corrente = residuo_da_previsione if residuo_da_previsione is not None else (viaggio_corrente + attesa_corrente + servizio_corrente)
+            # V10.5.8: il tempo residuo non usa piu' un cumulativo storico
+            # congelato. Viene ricalcolato da OSRM dalla posizione corrente,
+            # mantenendo l'ordine del giro e sommando servizio/attese.
+            tempo_reale_corrente = viaggio_corrente + attesa_corrente + servizio_corrente
+            metriche_live = st.session_state.get("metriche_giro_campo") or {}
+            if metriche_live:
+                tempo_reale_corrente = float(metriche_live.get("minuti", tempo_reale_corrente) or 0)
+                attesa_corrente = float(metriche_live.get("minuti_attesa", attesa_corrente) or 0)
+                servizio_corrente = float(metriche_live.get("minuti_servizio", servizio_corrente) or 0)
+            minuti_visualizzati = tempo_reale_corrente
         else:
             tempo_reale_corrente = viaggio_corrente + attesa_corrente + servizio_corrente
-
-        # In CAMPO la metrica "TEMPO RESIDUO" deve rappresentare il lavoro reale
-        # ancora necessario, non il solo tempo di strada. Usa quindi il residuo
-        # della previsione cumulativa: strada + servizio residuo + eventuali attese
-        # + rientro in sede. Il motore di previsione non viene modificato.
-        if st.session_state.vista_giro == "CAMPO":
-            minuti_visualizzati = tempo_reale_corrente
 
         if st.session_state.vista_giro != "CAMPO":
             st.markdown("**Dettaglio tempi reali del giro**")
@@ -4251,6 +4593,17 @@ else:
             d3.metric("🕐 Tempo totale reale giro", _formatta_durata_hm(tempo_reale_corrente))
 
             st.markdown("---")
+
+        def _timestamp_oggi_alle_0520():
+            """Timestamp locale Europe/Rome di oggi alle 05:20, usato come partenza implicita."""
+            try:
+                tz = ZoneInfo("Europe/Rome") if ZoneInfo is not None else None
+                adesso = datetime.now(tz) if tz else datetime.now()
+                dt = adesso.replace(hour=5, minute=20, second=0, microsecond=0)
+                return dt.timestamp()
+            except Exception:
+                adesso = datetime.now()
+                return adesso.replace(hour=5, minute=20, second=0, microsecond=0).timestamp()
 
         # V10.2.17: le consegne possono essere tutte gestite, ma il giro non e'
         # realmente terminato finche' il mezzo non rientra in sede e l'utente
@@ -4300,10 +4653,13 @@ else:
                 except Exception:
                     previsto = previsto
 
-            # Il confronto finale esiste solo se il giro e' stato realmente avviato.
-            # Nessuna partenza implicita: se INIZIA GIRO non e' mai stato premuto,
-            # non inventiamo un orario di partenza.
-            if giro_terminato and previsto is not None and inizio is not None:
+            # Se l'utente non ha premuto INIZIA GIRO, al momento di TERMINA GIRO
+            # usiamo come partenza implicita le 05:20 locali.
+            if giro_terminato and previsto is not None:
+                if inizio is None:
+                    inizio = _timestamp_oggi_alle_0520()
+                    st.session_state.inizio_giro_reale = inizio
+                    salva_stato_giro_persistente(st.session_state.utente_corrente)
                 if fine is not None:
                     effettivo = max(0.0, (float(fine) - float(inizio)) / 60.0)
                     differenza = float(effettivo) - float(previsto)
@@ -4319,7 +4675,7 @@ else:
                 else:
                     st.info("Tempo effettivo non disponibile.")
             elif not giro_terminato and previsto is not None:
-                st.info("La stima è pronta. Il tempo effettivo inizierà esclusivamente quando premi INIZIA GIRO.")
+                st.info("La stima verrà confrontata con il tempo effettivo quando premi TERMINA GIRO. Se non premi INIZIA GIRO, verranno usate le 05:20 come partenza.")
 
             # Il rientro e' gia' rappresentato dalle metriche superiori della CAMPO
             # (KM Rimanenti / Tempo rimanente), quindi non lo ripetiamo qui.
@@ -4329,6 +4685,8 @@ else:
                 if tutte_gestite and not giro_terminato:
                     st.info("Tutte le consegne sono gestite. Rientra in sede e premi TERMINA GIRO.")
                     if st.button("🏁 TERMINA GIRO", use_container_width=True, type="primary", key="btn_termina_giro"):
+                        if st.session_state.get("inizio_giro_reale") is None:
+                            st.session_state.inizio_giro_reale = _timestamp_oggi_alle_0520()
                         st.session_state.fine_giro_reale = time.time()
                         st.session_state.giro_terminato = True
                         salva_stato_giro_persistente(st.session_state.utente_corrente)
@@ -4630,6 +4988,8 @@ else:
                 with a3:
                     if tutte_gestite and not st.session_state.get("giro_terminato", False):
                         if st.button("🏁  TERMINA GIRO", use_container_width=True, type="secondary", key="btn_termina_giro_dashboard"):
+                            if st.session_state.get("inizio_giro_reale") is None:
+                                st.session_state.inizio_giro_reale = _timestamp_oggi_alle_0520()
                             st.session_state.fine_giro_reale = time.time()
                             st.session_state.giro_terminato = True
                             salva_stato_giro_persistente(st.session_state.utente_corrente)
@@ -4644,7 +5004,7 @@ else:
                         termina_fermo_mezzo()
                         st.rerun()
                     st.warning(f"⏸️ FERMO MEZZO attivo — tempo escluso dal ritardo: {_formatta_durata_hm(_minuti_fermo_totali())}")
-                elif not st.session_state.get("giro_terminato", False) and st.session_state.get("inizio_giro_reale") is not None:
+                elif not st.session_state.get("giro_terminato", False):
                     if st.button("⏸️  FERMO MEZZO", use_container_width=True, key="btn_fermo_mezzo"):
                         avvia_fermo_mezzo()
                         st.rerun()
@@ -4652,24 +5012,79 @@ else:
                         st.caption(f"⏸️ Tempo totale di fermo registrato: {_formatta_durata_hm(_minuti_fermo_totali())}")
 
                 if not st.session_state.get("giro_terminato", False) and st.session_state.get("inizio_giro_reale") is None:
-                    st.caption("🕐 Il tempo reale parte esclusivamente quando premi INIZIA GIRO.")
+                    st.caption("🕐 Se non premi INIZIA GIRO, per il calcolo effettivo verranno usate le 05:20.")
                 elif st.session_state.get("inizio_giro_reale") is not None and not st.session_state.get("giro_terminato", False):
                     st.caption(f"🕐 Giro iniziato alle {_formatta_ora_partenza_reale()}: il tempo effettivo viene calcolato fino a TERMINA GIRO.")
 
-                # Ultima posizione conosciuta = ultima consegna gestita; altrimenti deposito.
+                # ------------------------------------------------------------
+                # GPS LIVE - V10.5.7
+                # Il GPS puo' essere attivato gia' dalla schermata CAMPO,
+                # anche prima di premere INIZIA GIRO.
+                #
+                # Ogni ciclo usa una nuova chiave del componente GPS, cosi' il
+                # browser esegue una nuova richiesta di posizione. Dopo una
+                # lettura riuscita viene fatto un rerun completo dell'app: in
+                # questo modo si aggiornano insieme mappa e POSIZIONE ATTUALE.
+                # Il normale intervallo resta di 60 secondi.
+
+                if not st.session_state.get('giro_terminato', False):
+                    g1, g2 = st.columns([2, 1], gap="small")
+                    with g1:
+                        if not st.session_state.get('gps_attivo', False):
+                            if st.button("📍  ATTIVA GPS DEL TELEFONO", use_container_width=True, key="btn_attiva_gps"):
+                                st.session_state.gps_attivo = True
+                                st.session_state.gps_errore = None
+                                st.rerun()
+                        else:
+                            st.success("📍 GPS LIVE attivo — aggiornamento automatico ogni 60 secondi")
+                            if st.session_state.get('gps_errore'):
+                                st.warning(f"⚠️ GPS: {st.session_state.gps_errore}")
+                            _gps_live_refresh()
+                    with g2:
+                        if st.session_state.get('gps_latitudine') is not None:
+                            acc = st.session_state.get('gps_accuracy')
+                            acc_txt = f"±{acc:.0f} m" if isinstance(acc, (int, float)) else "accuratezza n/d"
+                            ora_gps = datetime.fromtimestamp(float(st.session_state.gps_timestamp)).strftime('%H:%M:%S') if st.session_state.get('gps_timestamp') else "--:--:--"
+                            st.metric("Ultima posizione", ora_gps, acc_txt)
+                    if st.session_state.get('gps_latitudine') is not None and st.session_state.get('gps_longitudine') is not None:
+                        gps_df = pd.DataFrame([{
+                            'lat': st.session_state.gps_latitudine,
+                            'lon': st.session_state.gps_longitudine,
+                        }])
+                        st.map(gps_df, latitude='lat', longitude='lon', zoom=15, height=220)
+                    if st.session_state.get('gps_errore'):
+                        st.warning(f"📍 GPS: {st.session_state.gps_errore}")
+                    st.caption("FASE TEST: la posizione viene salvata come ultima posizione GPS del conducente. Mappa e POSIZIONE ATTUALE si aggiornano a ogni nuova lettura. Il tracking continua finche' questa pagina resta aperta.")
+
+                # POSIZIONE ATTUALE: se il GPS e' attivo usiamo la posizione
+                # reale del telefono; in assenza di GPS manteniamo il comportamento
+                # precedente basato sull'ultima consegna gestita/deposito.
+                # Il dataframe usato dalle metriche deve essere disponibile
+                # indipendentemente dal fatto che il GPS sia attivo o meno.
+                # In precedenza veniva creato solo nel ramo senza GPS, causando
+                # un NameError quando il GPS forniva correttamente la posizione.
                 df_pos = st.session_state.giro_corrente.copy()
                 if "STATO" not in df_pos.columns:
                     df_pos["STATO"] = STATO_DA_FARE
-                stati_pos = df_pos["STATO"].fillna("").astype(str).str.upper()
-                mask_gestiti_pos = stati_pos.str.contains("FATTO|PARZIALE|RESPINTO", regex=True)
-                gestiti_pos = df_pos[mask_gestiti_pos]
-                if not gestiti_pos.empty:
-                    ultima = gestiti_pos.iloc[-1]
-                    posizione_label = str(ultima.get("VIA", "")).strip() or "Ultima consegna"
-                    posizione_comune = str(ultima.get("COMUNE", "")).strip()
+
+                gps_via = str(st.session_state.get('gps_via', '') or '').strip()
+                gps_comune = str(st.session_state.get('gps_comune', '') or '').strip()
+                if st.session_state.get('gps_attivo', False) and (gps_via or gps_comune):
+                    # Mostra sempre l'indirizzo su due righe:
+                    # Via + civico / Comune (es. Via Daniele Manin / Vimercate).
+                    posizione_label = gps_via or "Posizione GPS"
+                    posizione_comune = gps_comune or "Posizione rilevata dal telefono"
                 else:
-                    posizione_label = DEPOSITO_VANGO
-                    posizione_comune = "Punto di partenza"
+                    stati_pos = df_pos["STATO"].fillna("").astype(str).str.upper()
+                    mask_gestiti_pos = stati_pos.str.contains("FATTO|PARZIALE|RESPINTO", regex=True)
+                    gestiti_pos = df_pos[mask_gestiti_pos]
+                    if not gestiti_pos.empty:
+                        ultima = gestiti_pos.iloc[-1]
+                        posizione_label = str(ultima.get("VIA", "")).strip() or "Ultima consegna"
+                        posizione_comune = str(ultima.get("COMUNE", "")).strip()
+                    else:
+                        posizione_label = DEPOSITO_VANGO
+                        posizione_comune = "Punto di partenza"
 
                 df_metriche_campo = df_pos[~df_pos["STATO"].fillna("").astype(str).isin([STATO_FATTO, STATO_PARZIALE, STATO_RESPINTO])].copy()
                 residui_campo = len(df_metriche_campo)
@@ -4699,8 +5114,8 @@ else:
 
                 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
-                # V10.4.1: confronto live con la previsione cumulativa
-                # specifica dell'ultima fermata realmente gestita.
+                # V10.5.8: confronto live ETA OSRM della prossima fermata
+                # contro l'orario previsto, senza riottimizzare il giro.
                 previsione_avanzamento = st.session_state.get("previsione_giro") or {}
                 stato_avanzamento = _stato_avanzamento_giro(
                     gestiti_campo, len(df_pos), previsione_avanzamento.get("minuti")
@@ -4712,8 +5127,10 @@ else:
                         <span style="font-size:12px; color:#94A3B8;">{stato_avanzamento['dettaglio']}</span>
                     </div>
                     """, unsafe_allow_html=True)
-                elif gestiti_campo == 0:
-                    st.caption("ℹ️ Il confronto con la previsione apparirà dopo la prima consegna gestita.")
+                elif st.session_state.get("inizio_giro_reale") is None:
+                    st.caption("ℹ️ Premi INIZIA GIRO per attivare il confronto live con OSRM.")
+                else:
+                    st.caption("ℹ️ In attesa della previsione/posizione GPS della prossima fermata.")
 
                 st.markdown("<div style='font-size:16px; font-weight:800; color:#FFFFFF; margin:0 0 8px 4px;'>📍 PROSSIMA CONSEGNA</div>", unsafe_allow_html=True)
 
