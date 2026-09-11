@@ -4817,16 +4817,15 @@ else:
                     st.caption(f"🕐 Giro iniziato alle {_formatta_ora_partenza_reale()}: il tempo effettivo viene calcolato fino a TERMINA GIRO.")
 
                 # ------------------------------------------------------------
-                # GPS LIVE - V10.5.5 TEST
+                # GPS LIVE - V10.5.2 TEST
                 # Il GPS puo' essere attivato gia' dalla schermata CAMPO,
                 # anche prima di premere INIZIA GIRO.
-                #
-                # IMPORTANTE: get_geolocation() viene eseguito UNA SOLA VOLTA
-                # per ogni ciclo del GPS. In precedenza veniva chiamato sia qui
-                # sia dentro _gps_live_refresh(), creando due componenti con la
-                # stessa chiave interna getLocation() e mostrando l'avviso giallo.
-                # Il refresh a 60 secondi e' ora l'unico punto che acquisisce
-                # realmente la posizione.
+                # ------------------------------------------------------------
+                # get_geolocation non viene chiamato dentro st.button(): il componente
+                # streamlit-js-eval ha limitazioni quando viene usato in un callback/branch.
+                if (st.session_state.get('gps_attivo', False)
+                        and not st.session_state.get('giro_terminato', False)):
+                    _acquisisci_gps_e_salva()
 
                 if not st.session_state.get('giro_terminato', False):
                     g1, g2 = st.columns([2, 1], gap="small")
