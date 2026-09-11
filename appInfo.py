@@ -2712,6 +2712,7 @@ def _acquisisci_gps_e_salva():
     try:
         loc = get_geolocation()
         if not loc:
+            st.session_state.gps_errore = 'Il telefono non ha ancora restituito la posizione GPS. Verifica il permesso di posizione del browser e attendi qualche secondo.'
             return False
         if 'error' in loc:
             err = loc.get('error', {})
@@ -4820,6 +4821,12 @@ else:
                 # Il GPS puo' essere attivato gia' dalla schermata CAMPO,
                 # anche prima di premere INIZIA GIRO.
                 # ------------------------------------------------------------
+                # get_geolocation non viene chiamato dentro st.button(): il componente
+                # streamlit-js-eval ha limitazioni quando viene usato in un callback/branch.
+                if (st.session_state.get('gps_attivo', False)
+                        and not st.session_state.get('giro_terminato', False)):
+                    _acquisisci_gps_e_salva()
+
                 if not st.session_state.get('giro_terminato', False):
                     g1, g2 = st.columns([2, 1], gap="small")
                     with g1:
@@ -4827,10 +4834,11 @@ else:
                             if st.button("📍  ATTIVA GPS DEL TELEFONO", use_container_width=True, key="btn_attiva_gps"):
                                 st.session_state.gps_attivo = True
                                 st.session_state.gps_errore = None
-                                _acquisisci_gps_e_salva()
                                 st.rerun()
                         else:
                             st.success("📍 GPS LIVE attivo — aggiornamento automatico ogni 60 secondi")
+                            if st.session_state.get('gps_errore'):
+                                st.warning(f"⚠️ GPS: {st.session_state.gps_errore}")
                             _gps_live_refresh()
                     with g2:
                         if st.session_state.get('gps_latitudine') is not None:
@@ -4851,15 +4859,20 @@ else:
                 # POSIZIONE ATTUALE: se il GPS e' attivo usiamo la posizione
                 # reale del telefono; in assenza di GPS manteniamo il comportamento
                 # precedente basato sull'ultima consegna gestita/deposito.
+                # Il dataframe usato dalle metriche deve essere disponibile
+                # indipendentemente dal fatto che il GPS sia attivo o meno.
+                # In precedenza veniva creato solo nel ramo senza GPS, causando
+                # un NameError quando il GPS forniva correttamente la posizione.
+                df_pos = st.session_state.giro_corrente.copy()
+                if "STATO" not in df_pos.columns:
+                    df_pos["STATO"] = STATO_DA_FARE
+
                 gps_via = str(st.session_state.get('gps_via', '') or '').strip()
                 gps_comune = str(st.session_state.get('gps_comune', '') or '').strip()
                 if st.session_state.get('gps_attivo', False) and (gps_via or gps_comune):
                     posizione_label = gps_via or "Posizione GPS"
                     posizione_comune = gps_comune or "Posizione rilevata dal telefono"
                 else:
-                    df_pos = st.session_state.giro_corrente.copy()
-                    if "STATO" not in df_pos.columns:
-                        df_pos["STATO"] = STATO_DA_FARE
                     stati_pos = df_pos["STATO"].fillna("").astype(str).str.upper()
                     mask_gestiti_pos = stati_pos.str.contains("FATTO|PARZIALE|RESPINTO", regex=True)
                     gestiti_pos = df_pos[mask_gestiti_pos]
