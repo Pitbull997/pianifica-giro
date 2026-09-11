@@ -2803,12 +2803,18 @@ def salva_posizione_gps_su_sheets(nome_utente, posizione):
 
 
 def _acquisisci_gps_e_salva():
-    """Acquisisce la posizione corrente dal browser e salva l'ultima lettura."""
+    """Acquisisce la posizione corrente dal browser e salva l'ultima lettura.
+
+    Il componente streamlit-js-eval usa una chiave fissa e dedicata al GPS.
+    In questo modo non vengono create piu' istanze di getLocation() durante
+    i rerun/refresh del fragment e il browser mantiene una sola richiesta
+    di geolocalizzazione attiva.
+    """
     if get_geolocation is None:
         st.session_state.gps_errore = "Modulo GPS non installato."
         return False
     try:
-        loc = get_geolocation()
+        loc = get_geolocation(component_key='vango_gps_live')
         if not loc:
             st.session_state.gps_errore = 'Il telefono non ha ancora restituito la posizione GPS. Verifica il permesso di posizione del browser e attendi qualche secondo.'
             return False
@@ -2881,12 +2887,17 @@ def _acquisisci_gps_e_salva():
 if hasattr(st, 'fragment'):
     @st.fragment(run_every="60s")
     def _gps_live_refresh():
+        # Il fragment viene richiamato una sola volta dalla pagina CAMPO.
+        # La chiave del componente GPS resta stabile, evitando il warning
+        # "multiple elements with the same key='getLocation()'".
         if (st.session_state.get('gps_attivo', False)
                 and not st.session_state.get('giro_terminato', False)):
             _acquisisci_gps_e_salva()
 else:
     def _gps_live_refresh():
-        pass
+        if (st.session_state.get('gps_attivo', False)
+                and not st.session_state.get('giro_terminato', False)):
+            _acquisisci_gps_e_salva()
 
 BACKUP_UTENTE_PREFIX = "__VANGO_BACKUP__::"
 GIRO_META_PREFIX = "__VANGO_META__::"
@@ -3889,11 +3900,12 @@ else:
             _mostra_comando_gps("btn_gps_campo_header")
             st.markdown('<div style="height:5px"></div>', unsafe_allow_html=True)
 
-            # GPS: acquisizione principale come nella V10.5.4 verificata funzionante.
-            # La chiamata al componente resta fuori dal callback del pulsante.
-            if (st.session_state.get("gps_attivo", False)
-                    and not st.session_state.get("giro_terminato", False)):
-                _gps_live_refresh()
+            # GPS LIVE: una sola istanza del componente getLocation().
+            # Il fragment gestisce la prima lettura e gli aggiornamenti ogni 60s.
+            # Non viene piu' effettuata una seconda chiamata diretta qui,
+            # evitando duplicazioni del componente e mantenendo la mappa nella
+            # normale esecuzione della pagina CAMPO.
+            _gps_live_refresh()
             if st.button("↩️ TORNA A VISTA RIEPILOGO", use_container_width=True, key="btn_torna_riepilogo_campo"):
                 st.session_state.vista_giro = "RIEPILOGO"
                 st.rerun()
